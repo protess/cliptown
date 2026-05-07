@@ -36,6 +36,7 @@ cliptown-world = { path = ".", features = ["test_det"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-tungstenite = "0.24"
 proptest = "1"
+criterion = "0.5"
 
 [features]
 _ts_export = []
@@ -47,3 +48,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "cliptown-world"
 path = "src/main.rs"
+
+[[bench]]
+name = "world_bench"
+harness = false
