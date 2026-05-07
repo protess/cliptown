@@ -2,7 +2,7 @@
   "name": "cliptown",
   "private": true,
   "scripts": {
-    "build:rust": "cargo build --workspace",
+    "build:rust": "cargo build --workspace && cargo test -p cliptown-world --lib -- --ignored ts_rs_export",
     "build:ts": "pnpm -r --filter '!@cliptown/frontend' build && pnpm --filter @cliptown/frontend build",
     "build": "pnpm build:rust && pnpm build:ts",
     "test:rust": "cargo test --workspace",

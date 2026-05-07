@@ -3,4 +3,6 @@
 //! #[ts(export, export_to = "../../packages/protocol/dist/")].
 
 mod schema_version;
+mod ws_messages;
 pub use schema_version::SchemaVersion;
+pub use ws_messages::*;

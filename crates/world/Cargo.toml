@@ -23,6 +23,9 @@ ts-rs.workspace = true
 [dev-dependencies]
 tempfile = "3"
 
+[features]
+_ts_export = []
+
 [lib]
 path = "src/lib.rs"
 

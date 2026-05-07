@@ -1,2 +1,22 @@
 pub mod protocol;
 pub mod storage;
+
+#[cfg(test)]
+mod ts_export {
+    /// Forces the ts-rs export side-effect on `cargo test`. Ignored in normal runs;
+    /// run via `cargo ts-export` from package.json's `build:rust` script.
+    /// Calls `export_all()` so this works under the `--ignored ts_rs_export`
+    /// filter (which suppresses the auto-generated `export_bindings_*` tests).
+    #[test]
+    #[ignore]
+    fn ts_rs_export() {
+        use crate::protocol::*;
+        use ts_rs::TS;
+        let _ = SchemaVersion::CURRENT;
+        SchemaVersion::export_all().expect("export SchemaVersion");
+        WorkerInbound::export_all().expect("export WorkerInbound");
+        WorkerOutbound::export_all().expect("export WorkerOutbound");
+        ConsoleInbound::export_all().expect("export ConsoleInbound");
+        ConsoleOutbound::export_all().expect("export ConsoleOutbound");
+    }
+}
