@@ -1,17 +1,19 @@
 /**
  * TopBar: wordmark, rolling 1-line system event marquee, "+ New Startup"
- * stub, History modal trigger, and a settings menu with Recheck Backends.
+ * trigger, History modal trigger, and a settings menu with Recheck Backends.
  *
- * Phase 0 / M4.3 — the "+ New Startup" button is a stub; M4.7 wires the
- * actual modal. Recheck POSTs to the world's /api/backend-catalog/recheck
- * (plumbed in M0/M1.4); failures are swallowed since the world surfaces
- * follow-up state via system_event ConsoleOutbound messages.
+ * Phase 0 / M4.3 + M4.7 — the "+ New Startup" button now opens the
+ * NewStartupModal (M4.7). Recheck POSTs to the world's
+ * /api/backend-catalog/recheck (plumbed in M0/M1.4); failures are swallowed
+ * since the world surfaces follow-up state via system_event ConsoleOutbound
+ * messages.
  */
 
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 import { HistoryModal } from "./HistoryModal.js";
+import { NewStartupModal } from "./NewStartupModal.js";
 
 const ROTATE_MS = 3_000;
 const RECHECK_URL =
@@ -24,6 +26,7 @@ export function TopBar() {
   const [tickIdx, setTickIdx] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [newStartupOpen, setNewStartupOpen] = useState(false);
   const [recheckBusy, setRecheckBusy] = useState(false);
 
   useEffect(() => {
@@ -51,11 +54,7 @@ export function TopBar() {
     }
   };
 
-  const newStartup = () => {
-    // M4.7 wires the actual modal. For now, emit a hint.
-    // eslint-disable-next-line no-console
-    console.log("[topbar] + New Startup clicked (modal lands in M4.7)");
-  };
+  const newStartup = () => setNewStartupOpen(true);
 
   const ev = recent[tickIdx];
 
@@ -146,6 +145,10 @@ export function TopBar() {
           events={state.systemEvents}
           onClose={() => setHistoryOpen(false)}
         />
+      )}
+
+      {newStartupOpen && (
+        <NewStartupModal onClose={() => setNewStartupOpen(false)} />
       )}
     </div>
   );
