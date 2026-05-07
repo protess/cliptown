@@ -90,4 +90,35 @@ describe("worker WS hello + auth", () => {
       }),
     ).rejects.toThrow(/hello_ack_timeout|ws_closed_before_ack/);
   });
+
+  it("fires onClose when the server closes the socket post-handshake", async () => {
+    let serverWs: import("ws").WebSocket | null = null;
+    server.on("connection", (ws) => {
+      serverWs = ws;
+      ws.on("message", () => {
+        ws.send(JSON.stringify({ type: "ok", kind: "hello" }));
+      });
+    });
+
+    const closed = new Promise<void>((resolve) => {
+      void connect({
+        url: `ws://127.0.0.1:${port}`,
+        agentId: "a1",
+        startupId: "s1",
+        secret: "x",
+        onClose: () => resolve(),
+      }).then(() => {
+        // After handshake completes, simulate a world-side disconnect.
+        serverWs?.close();
+      });
+    });
+
+    // If onClose never fires, this test will time out. 1s is generous.
+    await Promise.race([
+      closed,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("onClose did not fire")), 1_000),
+      ),
+    ]);
+  });
 });

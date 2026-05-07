@@ -574,6 +574,29 @@ async fn delete_releases_suite_in_world_view() {
     let res = router(state.clone()).oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
+    // Dissolved startup's avatars must be removed from the world view.
+    // Without this, console snapshots, proximity, and the scheduler keep
+    // seeing ghost agents until process restart. Poll briefly so the
+    // ReleaseSuite cmd has time to drain.
+    let mut still_present = usize::MAX;
+    for _ in 0..50 {
+        let view = state.handle.view_rx.borrow().clone();
+        still_present = view
+            .avatars
+            .values()
+            .filter(|a| a.startup_id == startup_id)
+            .count();
+        if still_present == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        still_present, 0,
+        "expected 0 avatars for dissolved startup; got {}",
+        still_present
+    );
+
     // Insert a foreign avatar in the lobby — it must now be allowed into the
     // freed suite.
     sqlx::query(

@@ -8,7 +8,7 @@ describe("LLMMock fixture replay", () => {
     m.setPrompt("ANY-PROMPT");
     expect(m.remaining()).toBe(6);
     expect(m.next()).toMatchObject({ kind: "mcp", tool: "hypothesis_state" });
-    expect(m.next()).toMatchObject({ kind: "writeFile", path: "spec.md" });
+    expect(m.next()).toMatchObject({ kind: "writeFile", path: "artifacts/T1.md" });
     expect(m.next()).toMatchObject({ kind: "mcp", tool: "verify" });
     expect(m.next()).toMatchObject({ kind: "mcp", tool: "test_record" });
     expect(m.next()).toMatchObject({ kind: "mcp", tool: "hypothesis_resolve" });

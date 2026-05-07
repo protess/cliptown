@@ -24,6 +24,12 @@ export interface ConnectOpts {
   secret: string;
   /** ms; defaults to 5000 */
   helloTimeoutMs?: number;
+  /**
+   * Fired ONCE after a successful handshake when the underlying WS closes
+   * (world disconnected, network drop, etc.). Pre-ack closes still reject the
+   * `connect()` promise with `ws_closed_before_ack` and do NOT fire `onClose`.
+   */
+  onClose?: () => void;
 }
 
 /**
@@ -89,6 +95,19 @@ export async function connect(opts: ConnectOpts): Promise<WorkerHandle> {
     ws.on("close", onClose);
     ws.send(JSON.stringify(hello));
   });
+
+  // Post-handshake close handler — surface the disconnect to the caller via
+  // `opts.onClose` so `main()` can resolve its keep-alive promise and let the
+  // supervisor see an exit code. We register only AFTER the hello-ack path has
+  // already cleaned up its own pre-ack `onClose`, so this fires at most once.
+  if (opts.onClose) {
+    let fired = false;
+    ws.on("close", () => {
+      if (fired) return;
+      fired = true;
+      opts.onClose?.();
+    });
+  }
 
   return {
     send(msg) {

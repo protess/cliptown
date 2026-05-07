@@ -42,10 +42,13 @@ pub enum Cmd {
         claim_suite: Option<(String, String)>,
     },
     /// Release any suites owned by `startup_id` in the in-memory layout (set
-    /// `private_to_startup_id = None`). Mirrors `delete_startup`'s SQL
+    /// `private_to_startup_id = None`) and drop all avatars belonging to that
+    /// startup from the in-memory world view. Mirrors `delete_startup`'s SQL
     /// `UPDATE rooms SET private_to_startup_id = NULL WHERE
-    /// private_to_startup_id = ?` so the freed suite immediately stops
-    /// rejecting other startups in `move_sys::can_enter_layout_room`.
+    /// private_to_startup_id = ?` plus the agent cleanup so the freed suite
+    /// immediately stops rejecting other startups in
+    /// `move_sys::can_enter_layout_room` AND the dissolved startup's avatars
+    /// disappear from console snapshots, proximity, and the scheduler.
     ReleaseSuite {
         startup_id: String,
     },
@@ -153,6 +156,13 @@ pub fn spawn_with_layout(
                             room.private_to_startup_id = None;
                         }
                     }
+                    // Drop avatars belonging to the dissolved startup so console
+                    // snapshots, proximity, and the scheduler stop seeing ghost
+                    // agents. Without this, `DELETE /api/startups/:id` only
+                    // freed the suite — the dissolved startup's avatars
+                    // lingered in `w.avatars` until process restart.
+                    w.avatars.retain(|_, a| a.startup_id != startup_id);
+                    let _ = view_tx.send(w.clone());
                 }
                 Cmd::Shutdown => break,
             }

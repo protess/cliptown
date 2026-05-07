@@ -56,11 +56,39 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
   };
 }
 
+/**
+ * Recursively replace `__STARTUP_ID__` in any string field of an mcp args
+ * object with the worker's actual startup id. The fixture format is
+ * generic (it doesn't know which startup it'll run under at emit-time), so
+ * paths like `workspaces/__STARTUP_ID__/artifacts/T1.md` are rewritten here
+ * before they reach `mcp_dispatch::handle_task_done`'s canonical-path check.
+ *
+ * Walks nested objects but treats arrays as opaque (no current fixture uses
+ * arrays of strings as args). Non-string scalars pass through unchanged.
+ */
+export function substitutePlaceholders(
+  args: Record<string, unknown>,
+  startupId: string,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (typeof v === "string") {
+      out[k] = v.replace(/__STARTUP_ID__/g, startupId);
+    } else if (v && typeof v === "object" && !Array.isArray(v)) {
+      out[k] = substitutePlaceholders(v as Record<string, unknown>, startupId);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 /** Run a single tool_use against the MCP proxy or local fs (writeFile). */
-async function runToolUse(
+export async function runToolUse(
   tu: ToolUse,
   proxy: McpProxy,
   workspaceRoot: string,
+  startupId: string,
 ): Promise<void> {
   switch (tu.kind) {
     case "mcp": {
@@ -68,7 +96,7 @@ async function runToolUse(
         throw new Error(`unknown MCP tool: ${tu.tool}`);
       }
       const fn = (proxy as unknown as Record<string, (a: Record<string, unknown>) => Promise<unknown>>)[tu.tool];
-      await fn(tu.args);
+      await fn(substitutePlaceholders(tu.args, startupId));
       return;
     }
     case "writeFile": {
@@ -86,11 +114,23 @@ async function main(): Promise<void> {
   const args = parseWorkerArgs(process.argv.slice(2));
   console.log(`[worker] connecting to ${args.worldUrl} as ${args.agentId} (startup=${args.startupId})`);
 
+  // Resolve once when the WS closes (e.g. world disconnected). Without this
+  // the worker would keep running orphaned and the supervisor would never
+  // observe an exit code.
+  let resolveOnClose: (() => void) | null = null;
+  const closedPromise = new Promise<void>((r) => {
+    resolveOnClose = r;
+  });
+
   const handle: WorkerHandle = await connect({
     url:       args.worldUrl,
     agentId:   args.agentId,
     startupId: args.startupId,
     secret:    args.secret,
+    onClose: () => {
+      console.log(`[worker] WS closed by world; exiting`);
+      resolveOnClose?.();
+    },
   });
   console.log(`[worker] connected; waiting for task_assigned`);
 
@@ -115,7 +155,7 @@ async function main(): Promise<void> {
       const tu = mock.next();
       if (tu === null) break;
       try {
-        await runToolUse(tu, proxy, workspaceRoot);
+        await runToolUse(tu, proxy, workspaceRoot, args.startupId);
       } catch (e) {
         console.error(`[worker] tool_use failed:`, e);
         break;
@@ -124,7 +164,7 @@ async function main(): Promise<void> {
     console.log(`[worker] mock sequence complete; idling for inbound frames`);
   }
 
-  // Stay alive for inbound frames until SIGINT or WS close.
+  // Stay alive until SIGINT, SIGTERM, OR the world closes the WS.
   await new Promise<void>((resolve) => {
     process.once("SIGINT", () => {
       console.log(`[worker] SIGINT — closing`);
@@ -135,13 +175,20 @@ async function main(): Promise<void> {
       handle.close();
       resolve();
     });
+    closedPromise.then(() => resolve());
   });
 }
 
 // Only run main when invoked directly (not when imported by tests).
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => {
-    console.error(`[worker] fatal:`, e);
-    process.exit(1);
-  });
+  main()
+    .then(() => {
+      // Ensure node exits cleanly so the supervisor sees the exit code
+      // instead of the process lingering on stray timers/listeners.
+      process.exit(0);
+    })
+    .catch((e) => {
+      console.error(`[worker] fatal:`, e);
+      process.exit(1);
+    });
 }
