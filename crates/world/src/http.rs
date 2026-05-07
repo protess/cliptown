@@ -34,9 +34,13 @@ async fn api_catalog(State(s): State<Arc<AppState>>) -> Json<serde_json::Value> 
 
 async fn api_recheck(State(s): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let new_cat = crate::backend_catalog::probe_all().await;
-    *s.catalog.write().await = new_cat.clone();
-    let _ = s.handle.tx.send(Cmd::BackendCatalogUpdated(new_cat.clone())).await;
-    Json(serde_json::json!({"ok": true, "entries": new_cat}))
+    let new_json: std::collections::HashMap<_, _> = new_cat
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap()))
+        .collect();
+    *s.catalog.write().await = new_json.clone();
+    let _ = s.handle.tx.send(Cmd::BackendCatalogUpdated(new_json.clone())).await;
+    Json(serde_json::json!({"ok": true, "entries": new_json}))
 }
 
 async fn ws_console(ws: WebSocketUpgrade, State(s): State<Arc<AppState>>) -> Response {

@@ -17,6 +17,7 @@ mod ts_export {
     #[test]
     #[ignore]
     fn ts_rs_export() {
+        use crate::backend_catalog::BackendInfo;
         use crate::protocol::*;
         use crate::state::*;
         use ts_rs::TS;
@@ -28,5 +29,6 @@ mod ts_export {
         ConsoleOutbound::export_all().expect("export ConsoleOutbound");
         WorldView::export_all().expect("export WorldView");
         AvatarView::export_all().expect("export AvatarView");
+        BackendInfo::export_all().expect("export BackendInfo");
     }
 }

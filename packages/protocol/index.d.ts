@@ -7,3 +7,4 @@ export type { ConsoleInbound } from "./dist/ConsoleInbound";
 export type { ConsoleOutbound } from "./dist/ConsoleOutbound";
 export type { WorldView } from "./dist/WorldView";
 export type { AvatarView } from "./dist/AvatarView";
+export type { BackendInfo } from "./dist/BackendInfo";
