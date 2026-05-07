@@ -1,3 +1,5 @@
+pub mod auth;
+pub mod backend_catalog;
 pub mod config;
 pub mod det;
 pub mod http;

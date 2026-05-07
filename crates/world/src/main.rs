@@ -1,5 +1,5 @@
 use anyhow::Result;
-use cliptown_world::{config, http, storage};
+use cliptown_world::{config, http, loop_, state::WorldView, storage};
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
@@ -16,9 +16,12 @@ async fn main() -> Result<()> {
     let db_path = std::env::var("CLIPTOWN_DB").unwrap_or_else(|_| "cliptown.db".into());
     let pool = storage::open(&db_path).await?;
     tracing::info!(component = "world", event = "storage_ready", db = %db_path);
-    drop(pool); // pool will be wired into AppState in M1.3; for now just verify it opens
 
-    let app = http::router_minimal();
+    let handle = loop_::spawn(WorldView::default());
+    let catalog = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+    tracing::info!(component = "world", event = "loop_started");
+
+    let app = http::router(http::AppState { pool, handle, catalog });
     let addr = std::env::var("CLIPTOWN_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let bound = listener.local_addr()?;

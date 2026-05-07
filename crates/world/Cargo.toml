@@ -30,6 +30,8 @@ ts-rs.workspace = true
 tempfile = "3"
 cliptown-world = { path = ".", features = ["test_det"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
 
 [features]
 _ts_export = []
