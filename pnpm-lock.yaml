@@ -61,6 +61,9 @@ importers:
 
   packages/worker:
     dependencies:
+      '@cliptown/adapter-claude-code':
+        specifier: workspace:*
+        version: link:../adapters/claude-code
       '@cliptown/adapter-core':
         specifier: workspace:*
         version: link:../adapters/core
