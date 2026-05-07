@@ -229,6 +229,137 @@ async fn rejected_create_leaves_no_orphan_rows() {
 }
 
 #[tokio::test]
+async fn delete_marks_dissolved_and_frees_suite() {
+    let state = fixture().await;
+    let app = router(state.clone());
+
+    // Create one startup.
+    let body = serde_json::json!({
+        "name": "alpha", "goal_text": "x", "budget_cap_usd": 5.0,
+        "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+    });
+    let req = Request::builder().method("POST").uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string())).unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let resp_bytes = to_bytes(res.into_body(), 8192).await.unwrap();
+    let resp_json: serde_json::Value = serde_json::from_slice(&resp_bytes).unwrap();
+    let startup_id = resp_json["id"].as_str().unwrap().to_string();
+    let workspace: (String,) = sqlx::query_as("SELECT workspace_path FROM startups WHERE id = ?")
+        .bind(&startup_id).fetch_one(&state.pool).await.unwrap();
+
+    // Verify suite claimed.
+    let claimed: (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM rooms WHERE private_to_startup_id = ?"
+    ).bind(&startup_id).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(claimed.0, 1);
+
+    // DELETE.
+    let req = Request::builder()
+        .method("DELETE").uri(format!("/api/startups/{}", startup_id))
+        .body(Body::empty()).unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Status: dissolved.
+    let row: (String,) = sqlx::query_as("SELECT status FROM startups WHERE id = ?")
+        .bind(&startup_id).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(row.0, "dissolved");
+
+    // Suite freed.
+    let claimed: (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM rooms WHERE private_to_startup_id = ?"
+    ).bind(&startup_id).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(claimed.0, 0);
+
+    // system_events alert.
+    let count: (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM system_events WHERE kind = 'startup_dissolved'"
+    ).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(count.0, 1);
+
+    // Cleanup workspace dir.
+    let _ = std::fs::remove_dir_all(&workspace.0);
+}
+
+#[tokio::test]
+async fn delete_then_create_succeeds_after_exhaustion() {
+    let state = fixture().await;
+
+    // Fill all 4 suites.
+    let mut ids = Vec::new();
+    let mut workspaces = Vec::new();
+    for i in 0..4 {
+        let body = serde_json::json!({
+            "name": format!("s-{}", i), "goal_text": "x", "budget_cap_usd": 5.0,
+            "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+        });
+        let req = Request::builder().method("POST").uri("/api/startups")
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string())).unwrap();
+        let res = router(state.clone()).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bs = to_bytes(res.into_body(), 8192).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bs).unwrap();
+        let id = j["id"].as_str().unwrap().to_string();
+        let ws: (String,) = sqlx::query_as("SELECT workspace_path FROM startups WHERE id = ?")
+            .bind(&id).fetch_one(&state.pool).await.unwrap();
+        workspaces.push(ws.0);
+        ids.push(id);
+    }
+
+    // 5th: 409.
+    let body = serde_json::json!({
+        "name": "fifth", "goal_text": "x", "budget_cap_usd": 5.0,
+        "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+    });
+    let req = Request::builder().method("POST").uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string())).unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // DELETE the first.
+    let req = Request::builder().method("DELETE").uri(format!("/api/startups/{}", ids[0]))
+        .body(Body::empty()).unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 5th retry: now succeeds.
+    let body = serde_json::json!({
+        "name": "fifth", "goal_text": "x", "budget_cap_usd": 5.0,
+        "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+    });
+    let req = Request::builder().method("POST").uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string())).unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bs = to_bytes(res.into_body(), 8192).await.unwrap();
+    let j: serde_json::Value = serde_json::from_slice(&bs).unwrap();
+    let fifth_id = j["id"].as_str().unwrap().to_string();
+    let ws: (String,) = sqlx::query_as("SELECT workspace_path FROM startups WHERE id = ?")
+        .bind(&fifth_id).fetch_one(&state.pool).await.unwrap();
+    workspaces.push(ws.0);
+
+    // Cleanup workspace dirs.
+    for ws in workspaces {
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+}
+
+#[tokio::test]
+async fn delete_unknown_returns_404() {
+    let state = fixture().await;
+    let app = router(state.clone());
+    let req = Request::builder().method("DELETE").uri("/api/startups/does-not-exist")
+        .body(Body::empty()).unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn post_400_on_invalid_backend() {
     let state = fixture().await;
     let app = router(state.clone());

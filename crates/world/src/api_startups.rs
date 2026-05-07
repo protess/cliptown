@@ -19,7 +19,7 @@
 use crate::agent_supervisor::SpawnConfig;
 use crate::http::AppState;
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
@@ -244,4 +244,85 @@ pub async fn create_startup(
 
 fn reply_err(code: StatusCode, message: &str) -> Response {
     (code, Json(json!({"error": message}))).into_response()
+}
+
+/// `DELETE /api/startups/:id` — dissolve a startup.
+///
+/// Phase 0 semantics:
+/// - Mark the startup row `status = 'dissolved'` (row stays so foreign keys
+///   from `tasks`/`budget_events`/`system_events`/`agents` keep referential
+///   integrity, and so audit history remains queryable).
+/// - Free the suite by clearing `rooms.private_to_startup_id` so the slot is
+///   reusable by a subsequent POST.
+/// - Fire-and-forget worker shutdown via M3.5's supervisor: SIGTERM, 5s grace,
+///   SIGKILL. The DB transitions are committed *before* signalling so the
+///   freed slot is observable immediately by the next create attempt — tests
+///   don't have to wait for the kill grace window to elapse.
+/// - `audit_trail` (JSON column on tasks), `budget_events`, and existing
+///   `system_events` rows are intentionally untouched. We *append* a new
+///   `startup_dissolved` system_event row at severity `warn`.
+///
+/// Idempotency note: calling this on a startup whose workers have already
+/// exited (e.g. a re-issued DELETE, or a startup whose agents crashed past
+/// their backoff budget) is safe — `dissolve_startup` snapshots the current
+/// supervisor map and quietly does nothing for an empty match set.
+pub async fn delete_startup(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    // Verify startup exists. We do this outside the tx so a 404 doesn't
+    // require a rollback — and the lookup matches what callers expect for
+    // unknown ids.
+    let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM startups WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&s.pool)
+        .await
+        .ok()
+        .flatten();
+    if exists.is_none() {
+        return reply_err(StatusCode::NOT_FOUND, "startup not found");
+    }
+
+    // Transaction: mark dissolved + free suite. Audit history (audit_trail
+    // JSON on tasks, budget_events rows, system_events rows) is left intact.
+    let mut tx = match s.pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return reply_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if let Err(e) = sqlx::query("UPDATE startups SET status = 'dissolved' WHERE id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+    {
+        return reply_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+    if let Err(e) =
+        sqlx::query("UPDATE rooms SET private_to_startup_id = NULL WHERE private_to_startup_id = ?")
+            .bind(&id)
+            .execute(&mut *tx)
+            .await
+    {
+        return reply_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+    if let Err(e) = tx.commit().await {
+        return reply_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+
+    // Kill workers via M3.5 supervisor (SIGTERM → 5s grace → SIGKILL handled
+    // inside). Idempotent: a no-op when no workers match this startup_id.
+    s.supervisor.dissolve_startup(&id).await;
+
+    // Audit trail: emit a system_events row at `warn`. Best-effort; a logging
+    // failure shouldn't fail the user-facing DELETE since the dissolve is
+    // already committed.
+    let _ = crate::persist::record_system_event(
+        &s.pool,
+        Some(&id),
+        "startup_dissolved",
+        &json!({"startup_id": id}).to_string(),
+        "warn",
+    )
+    .await;
+
+    Json(json!({"ok": true, "id": id, "status": "dissolved"})).into_response()
 }

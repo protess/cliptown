@@ -27,7 +27,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/backend-catalog", get(api_catalog))
         .route("/api/backend-catalog/recheck", post(api_recheck))
         .route("/api/startups", post(crate::api_startups::create_startup))
-        .route("/api/startups/:id", patch(patch_startup))
+        .route(
+            "/api/startups/:id",
+            patch(patch_startup).delete(crate::api_startups::delete_startup),
+        )
         .route("/ws/console", get(ws_console))
         .route("/ws/worker", get(ws_worker))
         .with_state(Arc::new(state))
