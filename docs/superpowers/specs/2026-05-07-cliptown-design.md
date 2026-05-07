@@ -30,9 +30,10 @@ The product *cliptown* is inspired by paperclip (AI company orchestration) and G
 ### Out of scope (deferred to later phases)
 
 - External integrations (GitHub repo, email, Slack) → Phase 1
-- Map editor, multi-building, sprite art → Phase 2
-- Docker per-startup, TLS, observability → Phase 3
-- Multi-user auth, cloud deployment → Phase 4
+- Skill registry, per-task comment threads, semantic memory (pgvector / sqlite-vss) → Phase 2
+- Map editor, multi-building, sprite art → Phase 3
+- Docker per-startup, TLS, observability → Phase 4
+- Multi-user auth, cloud deployment → Phase 5
 - Idle wander, time-of-day, scheduled events
 - Cross-task agent memory (each task = its own context)
 - Multi-startup market dynamics (only isolation invariant is exercised)
@@ -154,6 +155,7 @@ Single binary, single SQLite file. Owns the world's truth.
   - Both paths use the same JSON line framing and `v: 1` schema versioning, but the message types are non-overlapping. The implementation may not collapse them into one handler.
 - **MCP surface (logical)**: the world is the single source of truth for the domain tools (move, speak, task lifecycle, hypothesis/test, observe). It does **not** speak MCP directly to CLIs. Instead, each Worker hosts an in-process MCP proxy server that the spawned CLI connects to over stdio (§3.2); the proxy translates each MCP tool call into a typed WS message on `/ws/worker` and waits for the world's reply before returning. This keeps the world's only inbound surface area a WebSocket and preserves the "world stays alive, workers may die freely" invariant — a crashed worker takes its own MCP proxy down without affecting the world or other workers.
 - **World tick**: 1 Hz. Advances avatar positions, evaluates proximity events, processes task scheduler.
+- **CLI capability probe at boot**. On world startup, a one-time probe shells out to detect which Phase 0 backends are available on `PATH`: `claude --version`, `codex --version`, `opencode --version` (each gated by a 2 s timeout). Results are cached in memory as `BackendCatalog { id → { available: bool, version: string?, last_checked: ts } }` and exposed via `GET /api/backend-catalog` plus the initial `world_view_snapshot` to `/ws/console`. Backends absent from `PATH` are surfaced as **disabled with a one-line install hint** in the `+ New Startup` modal (e.g., "Codex CLI not found — install with `npm i -g @openai/codex`"). The probe re-runs on `SIGHUP` and on a 5-minute timer; manual `Recheck backends` action available from /console settings. Without this, the operator's first symptom of a missing CLI is a worker spawn failure five minutes into a session.
 - **Concurrency model — single-threaded event loop with mpsc inbox**. The world owns one tokio task that exclusively mutates the in-memory state (`positions`, `tasks`, `messages`, `budget`). Every input — incoming WS messages from `/ws/console` and `/ws/worker`, MCP-derived requests from worker proxies, the tick timer — arrives as a typed message on a single `tokio::sync::mpsc` channel. The loop drains the channel one message at a time and applies its effect. Outbound responses are sent through reply channels carried in the request. Read-only paths (e.g., gossiping `world_view` deltas to `/ws/console` clients) are served from a `tokio::sync::watch` snapshot updated at the end of each loop iteration, so frontend reads never block writes. Multi-core utilization is **explicitly out of scope for Phase 0** — the loop is the bottleneck-free design until measurable contention appears, and sharding is a Phase 4+ concern. The benefit is that all multi-tenant invariants reduce to "does this single function preserve them?", which proptest can exhaust mechanically.
 - **Supervisor**: per agent, ensures one worker (and therefore one CLI session) is healthy. Exponential backoff respawn.
 - **Persistence writes**: only the world writes to SQLite.
@@ -195,8 +197,9 @@ Layout: **top bar + left sidebar + main area**. Linear / Vercel dashboard family
 
 - **Top bar** (~32 px tall): cliptown wordmark on the left, compact global system-event feed in the middle (1-line scroll showing last 1–3 events; clicking expands a history modal), `+ New Startup` button on the right.
 - **Left sidebar** (~160 px wide): "Startups" header followed by a list of currently active startups (Phase 0 supports up to M = 4). Each row carries a hue accent on its left edge encoding startup identity, the startup short name, and the first ~30 characters of its goal. The selected row inverts to a white background; others remain muted. **Order**: most recent `system_event.ts` first; the list re-sorts on tick with a soft animation (~150 ms FLIP) so an erupting startup floats to the top without yanking the eye. **Empty state** (zero startups): the sidebar shows a centered prompt — "No startups yet" plus a small arrow indicator pointing to the `+ New Startup` button in the top bar.
-- **Main area**: detail view of the selected startup. Shows the full goal, budget bar with `$spent / $cap` in monospace, agent count (active / total), task counts (`in_progress · awaiting_review · done · failed`), last system-event timestamp, and an "Open town →" CTA. With no startup selected, the main area shows a welcome card containing a one-line positioning sentence and the same `+ New Startup` CTA.
+- **Main area**: detail view of the selected startup. **Header band**: full goal, budget bar with `$spent / $cap` in monospace, agent count (active / total), last system-event timestamp, "Open town →" CTA. **Body — kanban**: five columns titled `proposed`, `queued`, `in_progress`, `awaiting_review`, `done` (failed tasks tucked in a collapsed footer drawer). Each column shows up to 12 task cards sorted newest-first, each card is a chip with title, assignee monogram in startup hue, review-round dot if > 0, and an `↓` chevron that drops to the agent's town location when clicked. Drag-drop is **read-only in Phase 0** — the columns reflect state, the operator drives change via possess/directive, not by dragging cards. With no startup selected, the main area shows a welcome card containing a one-line positioning sentence and the same `+ New Startup` CTA.
 - **First-run main area** (operator has never created a startup): replaces the empty welcome with a **gallery of 3–4 templated example startups** ("Build a docs site for the SDK", "Run market research on competitors", "Automate first-line customer support", "Draft a launch announcement"). Each card is a one-click claim that pre-fills the goal field; a `Start blank` card sits alongside them. Choosing any card immediately spawns the startup and redirects to its `/town/:id` so the first emotional beat is watching agents walk into the suite.
+- **`+ New Startup` modal — backend selector** drives off the `BackendCatalog` (§3.1). Available backends are radio-selectable per-agent-role with a default suggestion (founder = `claude_code`, engineer = whatever's first available, designer = same). Disabled backends show with a strikethrough and an inline install hint copied from the catalog. Operator may not advance the modal if any required role has no available backend.
 
 #### `/town/:startupId` — Town view
 
@@ -352,7 +355,7 @@ SQLite tables (Phase 0). Every domain row outside `towns` and `rooms` is multi-t
 | `fs_audit` | `id, startup_id, agent_id, op, path, bytes, ok, error?, ts` | Every write/read attempt by CLI tools |
 | `system_events` | `id, kind, payload jsonb, severity, ts` | Operator alerts |
 
-**Task status state machine**: `queued → in_progress → awaiting_review ⇄ changes_requested → done` (or `failed` / `escalated`). `review_round` increments on each `task_request_changes`.
+**Task status state machine**: `proposed → queued → in_progress → awaiting_review ⇄ changes_requested → done` (or `failed` / `escalated`). `review_round` increments on each `task_request_changes`. The `proposed` state exists when a non-manager agent suggests a sub-task it sees from its current work; the manager either promotes it to `queued` (assigning an `assignee_agent_id`) or rejects it (transitions to `failed` with reason `proposal_rejected`). Manager-direct calls skip `proposed` and start at `queued`.
 
 **Position storage**: hot path is in-memory in the world process; persisted as snapshot every 60 ticks and on graceful shutdown. Crash rewind ≤ 60 s is acceptable in Phase 0.
 
@@ -373,7 +376,7 @@ The building has **M fixed private suite slots** plus three common rooms. Phase 
 | Cafe | 1 | social | null | Cross-startup proximity zone (serendipity primary site) |
 | Library | 1 | focus | null | `required_room` for research-class tasks |
 
-Total rooms in Phase 0 = M + 3 = 7. The map JSON is hardcoded — adding more suite slots in the future requires editing the map (or, in Phase 2, using the in-app editor). Doors connect each suite to the Lobby and the Lobby to the Cafe and the Library. No suite-to-suite doors (intentional).
+Total rooms in Phase 0 = M + 3 = 7. The map JSON is hardcoded — adding more suite slots in the future requires editing the map (or, in Phase 3, using the in-app editor). Doors connect each suite to the Lobby and the Lobby to the Cafe and the Library. No suite-to-suite doors (intentional).
 
 ### 5.2 Movement and pathfinding
 
@@ -415,6 +418,8 @@ This is the literal implementation of "fixed org lines = graph; serendipity = sp
 |---|---|---|
 | `world_state` | bounded snapshot: own position + room, own current task, peers in **same room only** (capped at 16), last **20** messages of own startup, current `epistemic_log` head pointer | On worker connect; oversized payload is split into a series of `world_state_chunk` frames terminated by `world_state_end` |
 | `task_assigned` | `{ task_id, title, description, required_room?, parent_id? }` | Scheduler routes a queued task |
+| `subtask_proposed` | `{ parent_id, proposed_task_id, proposer_agent_id, title, description, suggested_assignee_role? }` | Fires only on the manager's worker when a non-manager direct report calls `subtask_create` |
+| `subtask_done` | `{ parent_id, child_id, artifact_path, review_round }` | Fires only on the manager's worker when a child task transitions to `awaiting_review` |
 | `directive` | `{ from_agent_id, body, in_response_to_task? }` | Manager or operator |
 | `proximity_tick` | `{ room_id, members: [{ agent_id, name, role, startup_id }] }` | Each tick where ≥ 2 avatars share a room |
 | `chat_received` | `{ from_agent_id, body, room_id }` | Same-room utterance |
@@ -445,8 +450,10 @@ Each spawned CLI gets a stdio MCP connection to the world, scoped to that one ag
 | `speak` | `{ body, kind: "chat"\|"directive", to_agent_id? }` | `chat` = current room. `directive` = direct report only. |
 | `task_done` | `{ task_id, artifact_path }` | Assignee only. World re-validates path. |
 | `task_failed` | `{ task_id, reason }` | Assignee only. |
-| `subtask_create` | `{ parent_id, title, description, assignee_agent_id, required_room? }` | Manager only. |
-| `task_accept` | `{ task_id }` | Manager of that task. |
+| `subtask_create` | `{ parent_id, title, description, assignee_agent_id, required_room? }` | **Any agent**. If caller is the manager of `parent_id`, the new task starts at `queued`. If caller is a non-manager, the new task starts at `proposed`, `assignee_agent_id` is ignored (set to `null`), and the manager receives a `subtask_proposed` event. |
+| `accept_proposal` | `{ task_id, assignee_agent_id, required_room? }` | Manager only. Transitions `proposed → queued` and assigns. |
+| `reject_proposal` | `{ task_id, reason }` | Manager only. Transitions `proposed → failed { reason: "proposal_rejected", note: <reason> }`. |
+| `task_accept` | `{ task_id }` | Manager of that task. Transitions `awaiting_review → done`. |
 | `task_request_changes` | `{ task_id, feedback, in_response_to_round }` | Manager of that task. |
 | `hypothesis_state` | `{ task_id, id, claim, rationale }` | Assignee. Appended to `epistemic_log`. |
 | `test_record` | `{ task_id, hypothesis_id, id, method, params, expected, observed, outcome }` | Assignee. Appended to `epistemic_log`. |
@@ -762,9 +769,10 @@ The Phase 0 work decomposes into mostly-parallel lanes thanks to clean process b
 |---|---|---|
 | 0 (this spec) | Walking skeleton | — |
 | 1 | Real artifact integration + design system | GitHub repo per startup, secrets vault, email and Slack outbound as MCP tools, full `DESIGN.md` via `/design-consultation` (type scale, spacing, motion language, iconography, voice / tone) |
-| 2 | Map / multi-town | In-app map editor, multiple buildings, sprite art, idle wander |
-| 3 | Operations | Docker per startup, TLS / WSS, observability dashboards, automated backup |
-| 4 | Multi-user / cloud | Authentication, deployment infrastructure, horizontal scaling |
+| 2 | Memory + collaboration depth | **Skill registry** (verified hypotheses + artifacts harvested into reusable capability templates, queryable by next-task agents), **per-task comment threads** (structured discussion separate from chat / directive / epistemic_log), **pgvector or sqlite-vss** for semantic skill retrieval and cross-task agent memory |
+| 3 | Map / multi-town + adapter expansion | In-app map editor, multiple buildings, sprite art, idle wander; additional CLI adapters (copilot, gemini, cursor, kimi, kiro — multica's wider catalog) |
+| 4 | Operations | Docker per startup, TLS / WSS, observability dashboards, automated backup |
+| 5 | Multi-user / cloud | Authentication, deployment infrastructure, horizontal scaling |
 
 Each phase gets its own design spec, plan, and implementation cycle.
 
@@ -793,6 +801,7 @@ Mockups were produced as HTML wireframes via the Visual Companion (the gstack de
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | not run |
 | Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | not run |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (PLAN) | 16 issues, 0 critical gaps; 2 architectural decisions (MCP proxy in Worker, single-thread event loop), 11 batch edits (SQLite WAL, pragmas, sqlx-cli migrations, repo layout, ts-rs codegen, cliptown.toml, structured logging, audit_trail vs epistemic_log boundary, adapter interface signatures, sandbox path-escape battery, regression rule, adapter contract test, determinism contract, performance budget, parallelization plan) |
+| External survey (multica) | manual | Cross-pollination | 1 | INTEGRATED | 4 patterns adopted: CLI capability probe at boot (Phase 0), kanban tab in /console main (Phase 0), proposed-task state with manager approval gate (Phase 0); skill registry + comment threads + semantic memory queued as Phase 2 |
 | Design Review | `/plan-design-review` | UI/UX gaps | 1 | CLEAR (FULL) | score: 3/10 → 9/10, 7 decisions added (sidebar IA, sidebar ordering, state matrix + tier surfacing, first-run cards, design tokens, keyboard primitives, Possess transition) |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | not run |
 
