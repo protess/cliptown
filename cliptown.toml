@@ -1,0 +1,28 @@
+[world]
+tick_hz = 1
+position_snapshot_every_ticks = 60
+
+[task]
+max_review_rounds = 3
+max_llm_turns_per_task = 20
+
+[epistemic]
+max_hypotheses_per_task = 8
+max_tests_per_hypothesis = 5
+non_trivial_description_token_threshold = 60
+
+[budget]
+warn_pct = 80
+no_new_task_pct = 95
+pause_all_pct = 100
+
+[supervisor]
+worker_respawn_backoff_seconds = [1, 5, 30]
+worker_respawn_max_attempts = 3
+
+[possess]
+operator_keepalive_timeout_seconds = 30
+
+[kanban]
+stuck_warn_minutes = 5
+stuck_alert_minutes = 30
