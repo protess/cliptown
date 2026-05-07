@@ -37,6 +37,86 @@ The product *cliptown* is inspired by paperclip (AI company orchestration) and G
 - Cross-task agent memory (each task = its own context)
 - Multi-startup market dynamics (only isolation invariant is exercised)
 
+### Cross-language schema (single source of truth)
+
+Every WS message type and every MCP tool argument/return shape is defined **once in Rust** under `crates/world/src/protocol/`. The TypeScript types consumed by `packages/worker/`, `packages/frontend/`, and the three adapters are **generated** with `ts-rs` (`#[derive(TS)]`) on `cargo build`. The build script writes the generated `.d.ts` into `packages/protocol/dist/` and pnpm packages depend on `@cliptown/protocol` as a workspace package.
+
+This eliminates schema drift at compile time: a Rust struct change either propagates to the consuming TS or breaks the TS build, never silently desynchronizes. JSON over the wire is plain — there's no codegen of serializers, just type definitions.
+
+The same approach covers JSONB column shapes (`audit_trail`, `epistemic_log`) — the Rust enums are the contract, TS reads via the generated types.
+
+### Configuration (`cliptown.toml`)
+
+A single TOML file at the repo root holds tunable defaults; per-startup overrides live in the `startups` table as a `config_overrides` JSON column. The implementer may not hardcode magic numbers in code paths the operator could plausibly want to change.
+
+```toml
+# cliptown.toml — Phase 0 defaults
+[world]
+tick_hz = 1
+position_snapshot_every_ticks = 60
+
+[task]
+max_review_rounds = 3
+max_llm_turns_per_task = 20
+
+[epistemic]
+max_hypotheses_per_task = 8
+max_tests_per_hypothesis = 5
+non_trivial_description_token_threshold = 60   # below this, Stop hook does not block on missing hypotheses
+
+[budget]
+warn_pct = 80
+no_new_task_pct = 95
+pause_all_pct = 100
+
+[supervisor]
+worker_respawn_backoff_seconds = [1, 5, 30]
+worker_respawn_max_attempts = 3
+
+[possess]
+operator_keepalive_timeout_seconds = 30
+```
+
+### Logging
+
+Both runtimes emit **JSON-line structured logs** to stdout. The world uses `tracing` + `tracing-subscriber` with the `json` formatter; workers use `pino`. Required fields on every line: `ts`, `level`, `component` (`world` / `worker:<agent_id>` / `adapter:<id>`), `event`, plus event-specific payload. Levels: `error` (fault), `warn` (degradation), `info` (state transitions, lifecycle), `debug` (per-tool, per-tick — off by default), `trace` (off by default; opt-in for proptest reproductions).
+
+### Audit trail vs epistemic log
+
+Both are JSONB columns on `tasks`. The boundary is **discipline of action**:
+
+- **`audit_trail`**: ops events. `task_assigned`, `move_intent`, `move_complete`, `tool_call_pre`, `tool_call_post`, `report_fs_op`, `report_budget`, `task_request_changes`, `task_accept`, `task_failed`. One entry per ops event, append-only, used by `/console` event feed and post-mortem replay.
+- **`epistemic_log`**: reasoning events. `hypothesis_state`, `test_record`, `hypothesis_resolve`. Authored by the agent itself via MCP. Used by managers during review and shown in the agent popover's epistemic tab.
+
+A given task action may write to neither, one, or both — but never to the wrong one. Schema enforces this via separate Rust enums (`AuditEntry`, `EpistemicEntry`); ts-rs propagates.
+
+### Repository layout (Phase 0)
+
+The project is a single repo with a Cargo workspace for Rust and a pnpm workspace for TypeScript. The implementer may not invent a different structure.
+
+```
+cliptown/
+├── Cargo.toml                 # Rust workspace root
+├── pnpm-workspace.yaml        # pnpm workspace root
+├── crates/
+│   └── world/                 # Rust World Server (single binary)
+│       ├── Cargo.toml
+│       ├── migrations/        # sqlx-cli migrations (v1 = initial)
+│       └── src/
+├── packages/
+│   ├── frontend/              # Vite + React + Pixi SPA
+│   ├── worker/                # TS Agent Worker (Node 20+)
+│   └── adapters/              # backend adapters
+│       ├── claude-code/
+│       ├── codex/
+│       └── opencode/
+├── workspaces/                # per-startup sandbox roots (gitignored)
+│   └── <startup_id>/
+└── docs/superpowers/specs/    # this file lives here
+```
+
+`make dev` (or equivalently `pnpm dev` after `cargo build` warms the world binary) starts the world process plus a Vite dev server. Worker processes are spawned by the world, not by the dev script.
+
 ### Hard assumptions
 
 - Single operator on a single workstation (Rust 1.75+, Node 20+).
@@ -68,9 +148,13 @@ Three process types. The world is the single source of truth; everything else is
 Single binary, single SQLite file. Owns the world's truth.
 
 - **HTTP API**: startup CRUD, map fetch, operator controls. Used by Founder Console.
-- **WebSocket hub**: bi-directional with frontend (presence·chat·move) and with workers (supervise·audit channel).
-- **MCP server**: exposes domain tools (move, speak, task lifecycle, hypothesis/test, observe) to CLI agents inside workers. Stdio MCP per spawned CLI, scoped to one agent's identity.
+- **WebSocket hub**: bi-directional, **two distinct paths with different schemas**:
+  - `/ws/console` — frontend ↔ world. Auth: operator session token. Carries `world_view` deltas (avatars moved, chat received, system_event), operator inputs (move click, possess toggle, directive submit), and an initial `world_view_snapshot` on connect.
+  - `/ws/worker` — worker ↔ world. Auth: per-agent secret from `hello`. Carries the supervise-and-audit message set defined in §6.1.
+  - Both paths use the same JSON line framing and `v: 1` schema versioning, but the message types are non-overlapping. The implementation may not collapse them into one handler.
+- **MCP surface (logical)**: the world is the single source of truth for the domain tools (move, speak, task lifecycle, hypothesis/test, observe). It does **not** speak MCP directly to CLIs. Instead, each Worker hosts an in-process MCP proxy server that the spawned CLI connects to over stdio (§3.2); the proxy translates each MCP tool call into a typed WS message on `/ws/worker` and waits for the world's reply before returning. This keeps the world's only inbound surface area a WebSocket and preserves the "world stays alive, workers may die freely" invariant — a crashed worker takes its own MCP proxy down without affecting the world or other workers.
 - **World tick**: 1 Hz. Advances avatar positions, evaluates proximity events, processes task scheduler.
+- **Concurrency model — single-threaded event loop with mpsc inbox**. The world owns one tokio task that exclusively mutates the in-memory state (`positions`, `tasks`, `messages`, `budget`). Every input — incoming WS messages from `/ws/console` and `/ws/worker`, MCP-derived requests from worker proxies, the tick timer — arrives as a typed message on a single `tokio::sync::mpsc` channel. The loop drains the channel one message at a time and applies its effect. Outbound responses are sent through reply channels carried in the request. Read-only paths (e.g., gossiping `world_view` deltas to `/ws/console` clients) are served from a `tokio::sync::watch` snapshot updated at the end of each loop iteration, so frontend reads never block writes. Multi-core utilization is **explicitly out of scope for Phase 0** — the loop is the bottleneck-free design until measurable contention appears, and sharding is a Phase 4+ concern. The benefit is that all multi-tenant invariants reduce to "does this single function preserve them?", which proptest can exhaust mechanically.
 - **Supervisor**: per agent, ensures one worker (and therefore one CLI session) is healthy. Exponential backoff respawn.
 - **Persistence writes**: only the world writes to SQLite.
 
@@ -80,6 +164,11 @@ One Node process per agent. Spawned and killed by the world. Its job is **infras
 
 Responsibilities:
 - WS connect to world; handle `hello`, `world_state`, `task_assigned`, `directive`, `proximity_tick`, `chat_received`, `pause`, `shutdown`.
+- **Host an in-process MCP proxy server** scoped to this one agent's identity. The proxy:
+  - Accepts the spawned CLI's stdio MCP connection.
+  - For each MCP tool call from the CLI, builds a typed WS request, sends it on `/ws/worker` with a correlation id, awaits the matching response (or a timeout), and returns the result through MCP.
+  - Enforces tool-level permissions (e.g., reject `subtask_create` if this agent is not a manager) **before** the WS hop, so policy violations never reach the world.
+  - Goes down with the worker process; the CLI's stdio EOFs cleanly, which is the CLI's signal to exit.
 - Determine the CLI to spawn from the agent's `backend` field and dispatch through the corresponding **backend adapter** (§3.4). Adapters configure:
   - `cwd` = `<repo>/workspaces/<startup_id>/`
   - Restricted env (the LLM provider key for that backend and an `MCP_WORLD_URL` pointing at the per-agent MCP socket)
@@ -89,7 +178,7 @@ Responsibilities:
 - Wire **normalized hook events** through the adapter (the adapter maps each CLI's native hook surface to a common event vocabulary):
   - `pre_tool` → sandbox policy enforcement (deny path-escape, deny shell, deny non-allowlisted tools), audit log entry, and budget gate (deny LLM-using tools when the startup's budget is at 100 % of cap)
   - `post_tool` → audit log, `report_fs_op` to world for write-class tools
-  - `session_stop` → final state collection; **block-and-feedback** if the task is non-trivial (any task whose `description` exceeds N tokens, configurable) and zero hypotheses are recorded — adapters that cannot block at session-stop fall back to post-hoc rejection (the world refuses `task_done` and re-emits `directive` with the same feedback)
+  - `session_stop` → final state collection; **block-and-feedback** if the task is non-trivial (any task whose `description` exceeds N tokens, configurable) and zero hypotheses are recorded. Adapters that cannot block at session-stop fall back to **post-hoc rejection**: the world refuses the `task_done` MCP call (returns an MCP error tagged `policy_block: missing_hypothesis`), the worker captures the rejection, and on the **next** scheduled CLI session for that task the worker prepends a synthetic `directive { from: 'system', body: <hypothesis-required feedback> }` to the prompt. The author of the post-hoc directive is `'system'`, not the manager — the worker treats it as a self-injected reminder, never an org-graph message.
   - `session_error` → escalate as `cli_session_ended { exit_code }` plus a `system_events` row
 - Translate CLI lifecycle → world IPC: `cli_session_started`, `cli_session_ended`, `task_progress`, `report_budget`, `report_fs_op`.
 - Inject mid-conversation context when async events arrive (`proximity_tick`, `chat_received`) — adapters expose a `inject_context` capability where supported; otherwise the worker queues the message for the next CLI session.
@@ -194,13 +283,35 @@ interface BackendAdapter {
 }
 
 interface SpawnOpts {
-  cwd: string                 // sandbox dir
-  env: Record<string, string> // LLM provider key + MCP_WORLD_URL only
-  prompt: string              // system + task framing
-  mcp_url: string             // stdio MCP endpoint exposed by the worker
-  allowed_tools_policy: ToolPolicy
-  hook_handlers: HookHandlers // worker callbacks for normalized events
-  network_egress_allowlist: string[]
+  cwd: string                       // absolute path to workspaces/<startup_id>/
+  env: Record<string, string>       // exactly: LLM provider key for this backend + MCP_WORLD_FD (stdio handle for the MCP proxy)
+  prompt: string                    // system framing + current task or directive
+  allowed_tools_policy: ToolPolicy  // see below
+  hook_handlers: HookHandlers       // see below
+  network_egress_allowlist: string[] // backend-declared endpoints; OS-level allowlist enforced by worker
+  signal: AbortSignal               // worker-driven cancellation (pause, shutdown, budget cap reached)
+}
+
+interface ToolPolicy {
+  // Per-tool gate. The adapter MUST translate this into the strongest enforcement
+  // the underlying CLI offers (allowedTools config, permission prompts, etc.).
+  // The worker's MCP proxy and PreToolUse hook also enforce, defense in depth.
+  shell: 'deny'                     // hard rule for Phase 0 across all adapters
+  fs_read_outside_cwd: 'deny'
+  fs_write_outside_cwd: 'deny'
+  network: 'allowlist'              // see network_egress_allowlist
+}
+
+interface HookHandlers {
+  on_pre_tool?: (event: { tool: string; args: unknown }) => Promise<{ allow: boolean; reason?: string }>
+  on_post_tool?: (event: { tool: string; args: unknown; result: unknown; ok: boolean }) => Promise<void>
+  on_session_stop?: (event: { exit_code: number; final_message?: string }) => Promise<{ block?: { feedback: string } } | void>
+  on_session_error?: (event: { reason: string; stderr?: string }) => Promise<void>
+}
+
+interface SessionHandle {
+  readonly pid: number
+  wait(): Promise<{ exit_code: number; signal?: string }>
 }
 ```
 
@@ -245,6 +356,10 @@ SQLite tables (Phase 0). Every domain row outside `towns` and `rooms` is multi-t
 
 **Position storage**: hot path is in-memory in the world process; persisted as snapshot every 60 ticks and on graceful shutdown. Crash rewind ≤ 60 s is acceptable in Phase 0.
 
+**SQLite pragmas (mandatory)**: `journal_mode = WAL`, `synchronous = NORMAL`, `foreign_keys = ON`, `busy_timeout = 5000`. WAL is non-optional — without it the audit-heavy write load (per-tool `fs_audit`, per-LLM-call `budget_events`, per-tick `messages`) thrashes the rollback journal under any meaningful load.
+
+**Migrations**: `sqlx-cli` (matches the Rust ecosystem chosen for the world). One initial migration captures the v1 schema. CI runs `sqlx migrate run` against an ephemeral file; production-style migration testing is OOS for Phase 0.
+
 ## 5. Spatial model — WeWork building
 
 ### 5.1 Map (hardcoded JSON)
@@ -262,7 +377,7 @@ Total rooms in Phase 0 = M + 3 = 7. The map JSON is hardcoded — adding more su
 
 ### 5.2 Movement and pathfinding
 
-- Tile-based positions; world tick advances `current_pos` toward `target_pos` by one tile per tick.
+- Tile-based positions; world tick advances `current_pos` toward `target_pos` by one tile per tick. The frontend renders at 60 fps and **interpolates linearly** between the most recent two tick snapshots (`prev_pos` → `current_pos` over the 1 s tick interval). World publishes `tick_seq` with each `world_view` delta so the frontend can detect dropped frames and clamp to the latest known position. No interpolation on the world side — the world only knows tile-grid positions.
 - A* on the room-graph + tile grid. Doors are required passage points.
 - Movement triggers (Phase 0):
   1. Task assignment with `required_room` → world auto-pathfinds the assignee.
@@ -298,7 +413,7 @@ This is the literal implementation of "fixed org lines = graph; serendipity = sp
 
 | Type | Payload | Trigger |
 |---|---|---|
-| `world_state` | snapshot: position, current room, current task, peers, recent messages | On worker connect |
+| `world_state` | bounded snapshot: own position + room, own current task, peers in **same room only** (capped at 16), last **20** messages of own startup, current `epistemic_log` head pointer | On worker connect; oversized payload is split into a series of `world_state_chunk` frames terminated by `world_state_end` |
 | `task_assigned` | `{ task_id, title, description, required_room?, parent_id? }` | Scheduler routes a queued task |
 | `directive` | `{ from_agent_id, body, in_response_to_task? }` | Manager or operator |
 | `proximity_tick` | `{ room_id, members: [{ agent_id, name, role, startup_id }] }` | Each tick where ≥ 2 avatars share a room |
@@ -498,6 +613,112 @@ Design principle: **the world only dies when it dies; workers die freely**. All 
 - Default: deterministic LLM mock (no real API calls).
 - Real-LLM E2E only on `E2E_LLM=real` opt-in jobs, with a per-run budget cap (e.g. $0.50). Exceeding the cap fails the run.
 
+### Coverage diagram (Phase 0 plan-stage)
+
+```
+RUST WORLD                                              CONFIDENCE
+  ├── tick() — position advance, proximity grouping     [→ Unit + Property: 90%+]
+  ├── pathfind() — A* on room graph + tile grid         [→ Unit: edge cases (no path, doors closed)]
+  ├── task state machine (queued→...→done|failed)       [→ Unit + Property: every transition + invalid)
+  ├── permissions (suite entry, directive routing)      [→ Property: cross-startup never crosses]
+  ├── budget math (in/out tokens → cost → tier crossing)[→ Unit: 80/95/100 boundaries]
+  ├── world_state + world_state_chunk serialization     [→ Unit: ts-rs round-trip + size cap]
+  ├── /ws/console handler (frontend protocol)           [→ Integration: fake frontend client]
+  ├── /ws/worker handler (worker IPC)                   [→ Integration: fake worker client]
+  └── SQLite rehydrate from snapshot                    [→ Integration: cold start, partial state]
+
+TS WORKER                                               CONFIDENCE
+  ├── MCP proxy (CLI tool call → WS round-trip)         [→ Contract: replay golden trace]
+  ├── sandbox path resolver                             [→ Unit: path-escape fixture battery]
+  ├── prompt template builder                           [→ Unit: snapshot test per backend]
+  ├── normalized hook event vocabulary                  [→ Adapter contract: all 3 backends emit identical events for identical CLI behavior]
+  ├── epistemic_log shape validation                    [→ Unit: schema conformance]
+  ├── deterministic LLM mock                            [→ Used by all adapter tests]
+  └── supervisor backoff + respawn                      [→ Unit: time mocked, retry counter]
+
+TS FRONTEND (React + Pixi)                              CONFIDENCE
+  ├── Sidebar render (recency sort, FLIP animation)     [→ Component test: vitest]
+  ├── Avatar render (color × monogram × ring style)     [→ Component test: visual snapshot OK]
+  ├── Chat panel (room scope, cross-startup tag)        [→ Component test: state-driven]
+  ├── State overlays (LLM-call glow, offline, paused)   [→ Component test]
+  ├── Possess transition (camera ease, fade)            [→ Component test: timing assertions]
+  ├── /console boot + state matrix                      [→ Component + E2E]
+  └── /town/:id boot + state matrix                     [→ Component + E2E]
+
+E2E (Playwright) — automates the 9 ship-gate invariants
+  ├── inv-1: 3+ startups spawn, all 3 adapters connected   [→E2E, real LLM gated]
+  ├── inv-2: directive → subtask_create → task_assigned    [→E2E mock]
+  ├── inv-3: required_room → A* walk → arrival             [→E2E mock]
+  ├── inv-4: artifact at exact path, world re-validates    [→E2E mock]
+  ├── inv-5: epistemic_log contains verified hypothesis    [→E2E mock + EVAL]
+  ├── inv-6: request_changes → round++ → re-submit         [→E2E mock]
+  ├── inv-7: cross-startup proximity chat in cafe          [→E2E mock]
+  ├── inv-8: directive never crosses startup boundary      [→E2E mock + Property]
+  └── inv-9: each adapter completes ≥1 task                [→E2E real LLM, opt-in]
+
+LLM eval suites (gated on `EVAL=true`)
+  └── prompt-template eval: assert hypothesis emission rate ≥ 80% on a 10-task fixture
+
+Total paths: ~30 unit + ~12 integration + 9 invariants + 1 eval
+Phase 0 ship gate requires: all unit + integration green, all 9 invariants green (E2E_LLM=real for inv-1, inv-9; mock for the rest), eval baseline established.
+```
+
+### Sandbox path-escape fixture battery (mandatory)
+
+The path resolver is the single most security-sensitive code path. Phase 0 ships these fixtures at minimum; each must reject:
+
+- `../etc/passwd`, `../../etc/passwd`, `././../etc/passwd`
+- absolute paths: `/etc/passwd`, `C:\\Windows\\System32`
+- symlinks pointing outside `cwd` (created in test setup)
+- NUL byte in path: `artifacts/foo\x00.md`
+- Unicode normalization attacks: `..‮/etc/passwd` (RTL override), composed vs decomposed forms
+- Long paths > 4096 bytes
+- Trailing-dot Windows-style: `artifacts/foo.` (legacy fs quirks)
+- Hard links to outside files (created in test setup; resolver must `realpath` and re-check)
+
+Each fixture lives in `crates/world/tests/sandbox/` and is replayed by both Rust (for the world's path re-validation on `task_done`) and TS (for the worker's `pre_tool` hook).
+
+### Regression discipline (IRON RULE)
+
+Any future change that modifies an existing code path AND ships without a regression test for the change is **blocked from merge** by `/plan-eng-review` rerun. Regressions are silent failures masquerading as features; the cost of catching them in CI is two orders of magnitude lower than catching them in production.
+
+### Adapter contract test (mandatory)
+
+Each of the three Phase 0 adapters runs the **same** contract suite against a fixture CLI binary that emulates Claude-Code-like behavior:
+
+```
+fixture-cli emit_pre_tool --tool=writeFile --args='{"path":"artifacts/T1.md","content":"hello"}'
+fixture-cli emit_post_tool --tool=writeFile --result='{"ok":true}'
+fixture-cli call_mcp --tool=task_done --args='{"task_id":"T1","artifact_path":"artifacts/T1.md"}'
+fixture-cli exit 0
+```
+
+The adapter is correct iff the worker observes the normalized hook events in the right order with the right payload shape, regardless of which adapter is loaded. Divergence between adapters is therefore mechanically detected.
+
+### Determinism contract
+
+For tests to be reliable, the following must be deterministic in test mode (`CLIPTOWN_TEST=1`):
+- `tokio::time::sleep` is mocked via `tokio::time::pause()`.
+- World tick fires only when test code calls `world.advance_tick()`.
+- A* tie-breaking is left-to-right then top-to-bottom (no random shuffling).
+- LLM mock returns canned responses keyed by prompt hash.
+- UUID generation uses a seeded source.
+
+The world declares this in code via a `clock` and `randomness` pair of traits with prod and test impls.
+
+## 10.5 Performance budget (Phase 0)
+
+Phase 0 is local-dev, single workstation. Targets are calibrated to "feels instant on a 2024-class laptop with 4 startups × 2 agents × Claude Code adapter":
+
+- **`/ws/worker` mpsc channel buffer**: 1024 messages. Drop policy: if full, the world logs `warn` and **blocks the sender** (backpressure). Workers never lose messages — they slow down. The world's loop is the bottleneck-free reference point.
+- **`/ws/console` watch snapshot fan-out**: lossy by design. Each frontend client reads the latest snapshot on its render tick; missed intermediate snapshots are acceptable because positions are interpolated.
+- **SQLite write rate ceiling**: ~500 writes/sec in WAL mode is the soft cap. Above this, the world batches `audit_trail` and `fs_audit` inserts in 100 ms windows (single transaction per window). `budget_events` and `system_events` remain unbatched for prompt visibility.
+- **Pixi rendering**: 60 fps target. 5 rooms × ≤ 32 sprites is well under any reasonable budget; no LOD or culling needed in Phase 0.
+- **Chat panel message virtualization**: a startup-scoped ring buffer caps in-memory messages at **500 per startup** (roughly 30 minutes at the design tick rate); older messages are evicted from the React state but remain in SQLite. The user can request "Load earlier" to page in older windows.
+- **First contentful render budget**: `/console` lands within 300 ms of WS open on cold state; `/town/:id` within 500 ms (Pixi init + map render).
+
+These numbers are starting points, not invariants. The benchmark suite (`packages/frontend/bench/`) measures them on each PR; regressions over 20 % fail the run.
+
 ## 11. Ship gate — 9 invariants
 
 Phase 0 is complete when all nine pass simultaneously:
@@ -513,6 +734,27 @@ Phase 0 is complete when all nine pass simultaneously:
 9. **All Phase 0 adapters exercised**: at least one Claude-Code-backed agent, one Codex-backed agent, and one opencode-backed agent each independently complete a task end-to-end (`task_assigned` → `task_done` accepted by manager) within the same E2E run.
 
 (7) and (8) are the soul of cliptown — they are the architectural claims about hybrid space and multi-tenancy. (9) is the soul of the adapter abstraction — without it, "Phase 0 supports three adapters" is unverified.
+
+## 11.5 Implementation parallelization (worktree strategy)
+
+The Phase 0 work decomposes into mostly-parallel lanes thanks to clean process boundaries.
+
+| Lane | Workstream | Modules touched | Depends on |
+|---|---|---|---|
+| A | World server core | `crates/world/src/{world,protocol,storage}` | — |
+| B | Frontend SPA | `packages/frontend/` | A's `/ws/console` schema (frozen first) |
+| C | Worker + MCP proxy | `packages/worker/` + `packages/protocol/` (consumed) | A's `/ws/worker` schema (frozen first) |
+| D | Adapters (Claude Code, Codex, opencode) | `packages/adapters/{claude-code,codex,opencode}` | C's adapter contract (`SpawnOpts`, `HookHandlers`) |
+| E | E2E + benchmarks | `e2e/`, `packages/frontend/bench/` | A+B+C+D minimal end-to-end |
+
+**Execution order:**
+
+1. **Lane A first, week 0**: freeze the protocol crate (Rust types + ts-rs export). Once `cargo build -p protocol` produces stable `.d.ts`, the rest can branch.
+2. **Lanes B + C in parallel** as separate worktrees. They share `@cliptown/protocol` but otherwise touch disjoint modules.
+3. **Lane D** opens three sub-worktrees, one per adapter, after C's contract is frozen. The three adapters each compile against the same fixture-CLI test, so their PRs can land independently.
+4. **Lane E** integrates everything. Runs sequentially after a vertical-slice merge.
+
+**Conflict flags:** Lanes B and C both consume `@cliptown/protocol`, but they read it; only A writes. No cross-lane write conflicts expected unless a schema change reverberates — in that case the schema PR is its own ordered step (Lane A bumps version, B and C consume on the next cycle).
 
 ## 12. Phase roadmap
 
@@ -550,12 +792,12 @@ Mockups were produced as HTML wireframes via the Visual Companion (the gstack de
 |---|---|---|---|---|---|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | not run |
 | Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | not run |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | — | not run |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (PLAN) | 16 issues, 0 critical gaps; 2 architectural decisions (MCP proxy in Worker, single-thread event loop), 11 batch edits (SQLite WAL, pragmas, sqlx-cli migrations, repo layout, ts-rs codegen, cliptown.toml, structured logging, audit_trail vs epistemic_log boundary, adapter interface signatures, sandbox path-escape battery, regression rule, adapter contract test, determinism contract, performance budget, parallelization plan) |
 | Design Review | `/plan-design-review` | UI/UX gaps | 1 | CLEAR (FULL) | score: 3/10 → 9/10, 7 decisions added (sidebar IA, sidebar ordering, state matrix + tier surfacing, first-run cards, design tokens, keyboard primitives, Possess transition) |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | not run |
 
 **UNRESOLVED:** 0
-**VERDICT:** DESIGN CLEARED — eng review still required before implementation.
+**VERDICT:** DESIGN + ENG CLEARED — ready for /writing-plans.
 
 ## 15. Glossary
 
