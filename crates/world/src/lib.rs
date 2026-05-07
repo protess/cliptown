@@ -1,10 +1,12 @@
 pub mod auth;
 pub mod backend_catalog;
 pub mod cmd_console;
+pub mod cmd_worker;
 pub mod config;
 pub mod det;
 pub mod http;
 pub mod loop_;
+pub mod move_sys;
 pub mod path;
 pub mod permissions;
 pub mod persist;

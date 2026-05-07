@@ -1,13 +1,31 @@
+use crate::move_sys::{self, MoveEvent, PathStore};
+use crate::path::RoomGraph;
+use crate::seed::TownLayout;
 use crate::state::WorldView;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot, watch};
 
 #[derive(Debug)]
 pub enum Cmd {
     Tick,
-    HandleConsoleMsg { msg: serde_json::Value, reply: oneshot::Sender<serde_json::Value> },
-    HandleWorkerMsg { agent_id: String, msg: serde_json::Value, reply: oneshot::Sender<serde_json::Value> },
-    BackendCatalogUpdated(std::collections::HashMap<String, serde_json::Value>),
+    HandleConsoleMsg {
+        msg: serde_json::Value,
+        reply: oneshot::Sender<serde_json::Value>,
+    },
+    HandleWorkerMsg {
+        agent_id: String,
+        msg: serde_json::Value,
+        reply: oneshot::Sender<serde_json::Value>,
+    },
+    RegisterWorker {
+        agent_id: String,
+        tx: mpsc::Sender<serde_json::Value>,
+    },
+    UnregisterWorker {
+        agent_id: String,
+    },
+    BackendCatalogUpdated(HashMap<String, serde_json::Value>),
     Shutdown,
 }
 
@@ -18,15 +36,40 @@ pub struct Handle {
 }
 
 pub fn spawn(initial: WorldView, pool: SqlitePool) -> Handle {
+    let layout = TownLayout::default_town();
+    let graph = move_sys::graph_from_layout(&layout);
+    spawn_with_layout(initial, pool, layout, graph)
+}
+
+pub fn spawn_with_layout(
+    initial: WorldView,
+    pool: SqlitePool,
+    layout: TownLayout,
+    graph: RoomGraph,
+) -> Handle {
     let (tx, mut rx) = mpsc::channel::<Cmd>(1024);
     let (view_tx, view_rx) = watch::channel(initial.clone());
     let mut w = initial;
+    let mut paths: PathStore = HashMap::new();
+    let mut out_bus: HashMap<String, mpsc::Sender<serde_json::Value>> = HashMap::new();
 
     tokio::spawn(async move {
         while let Some(cmd) = rx.recv().await {
             match cmd {
                 Cmd::Tick => {
                     w.tick_seq = w.tick_seq.wrapping_add(1);
+                    let events = move_sys::step_all(&mut w, &mut paths, &layout);
+                    for e in events {
+                        match e {
+                            MoveEvent::Complete { agent_id, room_id } => {
+                                if let Some(tx) = out_bus.get(&agent_id) {
+                                    let _ = tx.try_send(serde_json::json!({
+                                        "type":"move_complete","v":1,"room_id":room_id
+                                    }));
+                                }
+                            }
+                        }
+                    }
                     let _ = view_tx.send(w.clone());
                 }
                 Cmd::HandleConsoleMsg { msg, reply } => {
@@ -34,9 +77,19 @@ pub fn spawn(initial: WorldView, pool: SqlitePool) -> Handle {
                     let _ = view_tx.send(w.clone());
                     let _ = reply.send(result);
                 }
-                Cmd::HandleWorkerMsg { agent_id: _, msg: _, reply } => {
-                    // M1.13+ wires real worker dispatch.
-                    let _ = reply.send(serde_json::json!({"ok": true}));
+                Cmd::HandleWorkerMsg { agent_id, msg, reply } => {
+                    let result = crate::cmd_worker::dispatch(
+                        &mut w, &mut paths, &layout, &graph, &out_bus, &agent_id, msg,
+                    )
+                    .await;
+                    let _ = view_tx.send(w.clone());
+                    let _ = reply.send(result);
+                }
+                Cmd::RegisterWorker { agent_id, tx: out_tx } => {
+                    out_bus.insert(agent_id, out_tx);
+                }
+                Cmd::UnregisterWorker { agent_id } => {
+                    out_bus.remove(&agent_id);
                 }
                 Cmd::BackendCatalogUpdated(c) => {
                     w.backend_catalog = c;
@@ -52,7 +105,9 @@ pub fn spawn(initial: WorldView, pool: SqlitePool) -> Handle {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             interval.tick().await;
-            if timer_tx.send(Cmd::Tick).await.is_err() { break; }
+            if timer_tx.send(Cmd::Tick).await.is_err() {
+                break;
+            }
         }
     });
 

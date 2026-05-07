@@ -12,6 +12,7 @@ pub enum WorkerInbound {
     CliSessionStarted { v: u8, task_id: Option<String>, prompt_hash: String },
     CliSessionEnded { v: u8, task_id: Option<String>, exit_code: i32, summary: Option<String> },
     TaskProgress { v: u8, task_id: String, note: String },
+    MoveIntent { v: u8, target_room: String, target_x: i32, target_y: i32 },
 }
 
 #[derive(Debug, Serialize, Deserialize, TS, Clone)]

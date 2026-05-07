@@ -47,8 +47,12 @@ async fn worker_accepts_valid_secret() {
     let url = format!("ws://{addr}/ws/worker");
     let (mut s, _) = tokio_tungstenite::connect_async(url).await.unwrap();
     s.send(Message::Text(r#"{"type":"hello","agent_id":"a1","secret":"dev-secret"}"#.into())).await.unwrap();
-    // After auth, send a no-op message and expect an {"ok":true} echo (M1.2 stub reply)
-    s.send(Message::Text(r#"{"type":"ping"}"#.into())).await.unwrap();
+    // After auth, send a second hello (now parsed by cmd_worker since M1.13)
+    // and expect the dispatch's `ok` reply.
+    s.send(Message::Text(
+        r#"{"type":"hello","v":1,"agent_id":"a1","startup_id":"s","secret":"dev-secret"}"#.into()
+    )).await.unwrap();
     let reply = s.next().await.unwrap().unwrap().into_text().unwrap();
-    assert!(reply.contains(r#""ok":true"#), "expected ok:true echo, got {reply}");
+    assert!(reply.contains(r#""type":"ok""#), "expected ok type, got {reply}");
+    assert!(reply.contains(r#""kind":"hello""#), "expected kind:hello, got {reply}");
 }

@@ -4,10 +4,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::sync::Arc;
 use sqlx::SqlitePool;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use crate::loop_::{Cmd, Handle};
 
 #[derive(Clone)]
@@ -70,6 +71,7 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
 }
 
 async fn handle_worker(mut socket: WebSocket, state: Arc<AppState>) {
+    // Phase 1: hello + auth (still on the unsplit socket).
     let Some(Ok(Message::Text(first))) = socket.recv().await else { return; };
     let parsed: serde_json::Value = match serde_json::from_str(&first) { Ok(v) => v, Err(_) => return };
     if parsed.get("type") != Some(&serde_json::Value::String("hello".into())) { return; }
@@ -79,12 +81,45 @@ async fn handle_worker(mut socket: WebSocket, state: Arc<AppState>) {
         let _ = socket.send(Message::Text(r#"{"type":"auth_error"}"#.into())).await;
         return;
     }
-    while let Some(Ok(Message::Text(txt))) = socket.recv().await {
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) else { continue; };
-        let (tx, rx) = oneshot::channel();
-        let _ = state.handle.tx.send(Cmd::HandleWorkerMsg { agent_id: agent_id.clone(), msg, reply: tx }).await;
-        if let Ok(reply) = rx.await {
-            let _ = socket.send(Message::Text(reply.to_string().into())).await;
+
+    // Phase 2: split + register out_bus, then drive a select!() loop that
+    // races inbound WS frames against outbound messages pushed by the world
+    // loop (e.g. move_complete / move_failed).
+    let (mut sender, mut receiver) = socket.split();
+    let (out_tx, mut out_rx) = mpsc::channel::<serde_json::Value>(64);
+    let _ = state.handle.tx.send(Cmd::RegisterWorker {
+        agent_id: agent_id.clone(),
+        tx: out_tx,
+    }).await;
+
+    loop {
+        tokio::select! {
+            inbound = receiver.next() => {
+                match inbound {
+                    Some(Ok(Message::Text(txt))) => {
+                        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) else { continue; };
+                        let (tx, rx) = oneshot::channel();
+                        let _ = state.handle.tx.send(Cmd::HandleWorkerMsg {
+                            agent_id: agent_id.clone(), msg, reply: tx
+                        }).await;
+                        if let Ok(reply) = rx.await {
+                            if sender.send(Message::Text(reply.to_string().into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(_)) => { /* ignore non-text frames */ }
+                    _ => break,
+                }
+            }
+            Some(out_msg) = out_rx.recv() => {
+                if sender.send(Message::Text(out_msg.to_string().into())).await.is_err() {
+                    break;
+                }
+            }
+            else => break,
         }
     }
+
+    let _ = state.handle.tx.send(Cmd::UnregisterWorker { agent_id }).await;
 }

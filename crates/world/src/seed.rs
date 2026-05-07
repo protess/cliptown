@@ -3,9 +3,76 @@
 
 use anyhow::Result;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 
 const TOWN_ID: &str = "town_default";
 const TOWN_MAP_JSON: &str = include_str!("../seed/town_default.json");
+
+/// In-memory typed representation of the seeded town used by movement,
+/// permissions, and pathfinding. Mirrors what `seed_if_empty` writes to SQLite,
+/// kept in sync as the single source of truth for layout constants.
+#[derive(Debug, Clone)]
+pub struct TownLayout {
+    pub town_id: String,
+    pub rooms: Vec<RoomDef>,
+    pub doors: Vec<DoorDef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoomDef {
+    pub id: String,
+    /// (x, y, w, h) — inclusive of `(x..x+w, y..y+h)`.
+    pub bounds: (i32, i32, i32, i32),
+    /// `None` => common (anyone can enter); `Some(s)` => private to startup `s`.
+    pub private_to_startup_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DoorDef {
+    pub id: String,
+    pub a_room: String,
+    pub b_room: String,
+    pub tile: (i32, i32),
+}
+
+impl TownLayout {
+    /// Build the default town layout (matches `seed_if_empty`).
+    /// Suite ownership defaults to `None` (matching the seeded NULL); ownership
+    /// is later set when a startup is provisioned.
+    pub fn default_town() -> Self {
+        let rooms = vec![
+            RoomDef { id: "suite_1".into(), bounds: (0, 0, 7, 6),  private_to_startup_id: None },
+            RoomDef { id: "suite_2".into(), bounds: (0, 6, 7, 6),  private_to_startup_id: None },
+            RoomDef { id: "suite_3".into(), bounds: (33, 0, 7, 6), private_to_startup_id: None },
+            RoomDef { id: "suite_4".into(), bounds: (33, 6, 7, 6), private_to_startup_id: None },
+            RoomDef { id: "lobby".into(),   bounds: (7, 4, 26, 4), private_to_startup_id: None },
+            RoomDef { id: "cafe".into(),    bounds: (7, 0, 26, 4), private_to_startup_id: None },
+            RoomDef { id: "library".into(), bounds: (7, 8, 26, 4), private_to_startup_id: None },
+        ];
+        let doors = vec![
+            DoorDef { id: "door_s1_lobby".into(),      a_room: "suite_1".into(), b_room: "lobby".into(),   tile: (7, 4) },
+            DoorDef { id: "door_s2_lobby".into(),      a_room: "suite_2".into(), b_room: "lobby".into(),   tile: (7, 7) },
+            DoorDef { id: "door_s3_lobby".into(),      a_room: "suite_3".into(), b_room: "lobby".into(),   tile: (33, 4) },
+            DoorDef { id: "door_s4_lobby".into(),      a_room: "suite_4".into(), b_room: "lobby".into(),   tile: (33, 7) },
+            DoorDef { id: "door_lobby_cafe".into(),    a_room: "lobby".into(),   b_room: "cafe".into(),    tile: (20, 4) },
+            DoorDef { id: "door_lobby_library".into(), a_room: "lobby".into(),   b_room: "library".into(), tile: (20, 8) },
+        ];
+        Self { town_id: TOWN_ID.into(), rooms, doors }
+    }
+
+    /// Returns a map of room_id -> bounds, ready to pass to `path::full_route`.
+    pub fn room_bounds_map(&self) -> HashMap<String, (i32, i32, i32, i32)> {
+        self.rooms.iter().map(|r| (r.id.clone(), r.bounds)).collect()
+    }
+
+    pub fn room(&self, id: &str) -> Option<&RoomDef> {
+        self.rooms.iter().find(|r| r.id == id)
+    }
+
+    pub fn door_at(&self, tile: (i32, i32)) -> Option<&DoorDef> {
+        self.doors.iter().find(|d| d.tile == tile)
+    }
+}
 
 pub async fn seed_if_empty(pool: &SqlitePool) -> Result<()> {
     let count: (i64,) = sqlx::query_as("SELECT count(*) FROM towns")
