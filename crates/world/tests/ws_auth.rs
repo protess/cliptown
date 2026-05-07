@@ -47,6 +47,11 @@ async fn worker_accepts_valid_secret() {
     let url = format!("ws://{addr}/ws/worker");
     let (mut s, _) = tokio_tungstenite::connect_async(url).await.unwrap();
     s.send(Message::Text(r#"{"type":"hello","agent_id":"a1","secret":"dev-secret"}"#.into())).await.unwrap();
+    // M2.1: server now emits an explicit `{type:"ok",kind:"hello"}` ack
+    // immediately after auth so the worker client's `connect()` can resolve.
+    let ack = s.next().await.unwrap().unwrap().into_text().unwrap();
+    assert!(ack.contains(r#""type":"ok""#), "expected ok type in ack, got {ack}");
+    assert!(ack.contains(r#""kind":"hello""#), "expected kind:hello in ack, got {ack}");
     // After auth, send a second hello (now parsed by cmd_worker since M1.13)
     // and expect the dispatch's `ok` reply.
     s.send(Message::Text(

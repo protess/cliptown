@@ -134,6 +134,13 @@ async fn handle_worker(mut socket: WebSocket, state: Arc<AppState>) {
         return;
     }
 
+    // Ack the hello so the worker client (`packages/worker/src/ws.ts::connect`)
+    // can resolve its `await` instead of timing out. Contract: `{type:"ok",
+    // kind:"hello"}` — see `crates/world/tests/ws_auth.rs` and
+    // `packages/worker/test/ws_hello.test.ts`.
+    let ack = serde_json::json!({"type":"ok","kind":"hello"});
+    let _ = socket.send(Message::Text(ack.to_string().into())).await;
+
     // Phase 2: split + register out_bus, then drive a select!() loop that
     // races inbound WS frames against outbound messages pushed by the world
     // loop (e.g. move_complete / move_failed).
