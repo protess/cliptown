@@ -8,7 +8,7 @@
     "test:rust": "cargo test --workspace",
     "test:ts": "pnpm -r test",
     "test": "pnpm build:rust && pnpm build:ts && pnpm test:rust && pnpm test:ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "pnpm --filter @cliptown/frontend e2e",
     "dev": "concurrently -n world,frontend 'cargo run -p cliptown-world' 'pnpm --filter @cliptown/frontend dev'"
   },
   "devDependencies": { "concurrently": "^9", "playwright": "^1" },

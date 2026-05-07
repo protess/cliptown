@@ -251,6 +251,63 @@ async fn task_done_assignee_only_and_emits_subtask_done() {
     assert!(evts.iter().any(|e| e["type"] == "subtask_done"), "{evts:?}");
 }
 
+/// Codex round-2 P1#2: scheduler flips `status = "working"` on dispatch but
+/// `task_done` previously didn't unwind it, so each agent ran exactly one
+/// task. Pre-flip the avatar to `working`, call task_done, and assert the
+/// status snaps back to `idle`.
+#[tokio::test]
+async fn task_done_resets_avatar_to_idle() {
+    let mut fx = fixture().await;
+    let ws = std::path::PathBuf::from("workspaces/s1/artifacts");
+    let _ = std::fs::create_dir_all(&ws);
+    let _ = std::fs::write(ws.join("T1.md"), "ok");
+    fx.world
+        .avatars
+        .get_mut("e1")
+        .expect("e1 in fixture")
+        .status = "working".to_string();
+
+    let r = fx
+        .call(
+            "e1",
+            "task_done",
+            json!({"task_id":"T1","artifact_path":"workspaces/s1/artifacts/T1.md"}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_reply", "{r}");
+    assert_eq!(
+        fx.world.avatars.get("e1").unwrap().status,
+        "idle",
+        "task_done must reset avatar status"
+    );
+}
+
+/// Codex round-2 P1#2 sibling — same idle-reset for `task_failed` since the
+/// scheduler's working-flip is symmetric across both completion paths.
+#[tokio::test]
+async fn task_failed_resets_avatar_to_idle() {
+    let mut fx = fixture().await;
+    fx.world
+        .avatars
+        .get_mut("e1")
+        .expect("e1 in fixture")
+        .status = "working".to_string();
+
+    let r = fx
+        .call(
+            "e1",
+            "task_failed",
+            json!({"task_id":"T1","reason":"nope"}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_reply", "{r}");
+    assert_eq!(
+        fx.world.avatars.get("e1").unwrap().status,
+        "idle",
+        "task_failed must reset avatar status"
+    );
+}
+
 #[tokio::test]
 async fn task_failed_assignee_only() {
     let mut fx = fixture().await;

@@ -30,10 +30,15 @@ pub struct SpawnConfig {
 
 #[derive(Clone)]
 pub struct SupervisorConfig {
-    /// Path to the worker binary command. Phase 0 default: `node`.
+    /// Path to the worker binary command. Phase 0 default points at the
+    /// self-contained `packages/worker/bin/worker` shell shim, which `exec`s
+    /// `tsx src/main.ts` so we never rely on a built `dist/` (the worker's
+    /// `build` script is a no-op and `dist/` is gitignored). Override with the
+    /// `CLIPTOWN_WORKER_BIN` env var for tests / alternate runtimes.
     pub worker_bin: String,
-    /// Args prepended before --agent-id, etc. Phase 0 default:
-    /// ["packages/worker/dist/index.js"].
+    /// Args prepended before `--agent-id`, etc. The default `bin/worker` shim
+    /// is self-contained, so this is empty in the production path. Tests that
+    /// drive `/bin/sh <fixture>` set this explicitly.
     pub worker_args: Vec<String>,
     pub backoff_ms: Vec<u64>,
     pub dissolve_grace_ms: u64,
@@ -41,15 +46,14 @@ pub struct SupervisorConfig {
 
 impl Default for SupervisorConfig {
     fn default() -> Self {
-        let bin = std::env::var("CLIPTOWN_WORKER_BIN").unwrap_or_else(|_| "node".to_string());
-        let args = if bin == "node" {
-            vec!["packages/worker/dist/index.js".to_string()]
-        } else {
-            vec![]
-        };
+        let bin = std::env::var("CLIPTOWN_WORKER_BIN")
+            .unwrap_or_else(|_| "packages/worker/bin/worker".to_string());
         Self {
             worker_bin: bin,
-            worker_args: args,
+            // The shim already points at `tsx src/main.ts`; no extra args
+            // required before the supervisor-supplied `--agent-id`/`--secret`
+            // flags. Tests using a different `worker_bin` override this.
+            worker_args: vec![],
             backoff_ms: DEFAULT_BACKOFF_MS.to_vec(),
             dissolve_grace_ms: DISSOLVE_GRACE_MS,
         }

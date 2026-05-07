@@ -58,6 +58,7 @@ async fn post_creates_startup_and_3_agents() {
         .method("POST")
         .uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string()))
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
@@ -124,6 +125,7 @@ async fn post_409_when_no_free_suite() {
     let req = Request::builder()
         .method("POST").uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string())).unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::CONFLICT);
@@ -146,6 +148,7 @@ async fn fifth_post_returns_409_after_4_succeed() {
             .method("POST")
             .uri("/api/startups")
             .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer dev-token")
             .body(Body::from(body.to_string()))
             .unwrap();
         let res = app.oneshot(req).await.unwrap();
@@ -171,6 +174,7 @@ async fn fifth_post_returns_409_after_4_succeed() {
         .method("POST")
         .uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string()))
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
@@ -214,6 +218,7 @@ async fn rejected_create_leaves_no_orphan_rows() {
         .method("POST")
         .uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string()))
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
@@ -240,6 +245,7 @@ async fn delete_marks_dissolved_and_frees_suite() {
     });
     let req = Request::builder().method("POST").uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string())).unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -298,6 +304,7 @@ async fn delete_then_create_succeeds_after_exhaustion() {
         });
         let req = Request::builder().method("POST").uri("/api/startups")
             .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer dev-token")
             .body(Body::from(body.to_string())).unwrap();
         let res = router(state.clone()).oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -317,6 +324,7 @@ async fn delete_then_create_succeeds_after_exhaustion() {
     });
     let req = Request::builder().method("POST").uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string())).unwrap();
     let res = router(state.clone()).oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::CONFLICT);
@@ -335,6 +343,7 @@ async fn delete_then_create_succeeds_after_exhaustion() {
     });
     let req = Request::builder().method("POST").uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string())).unwrap();
     let res = router(state.clone()).oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -376,6 +385,7 @@ async fn delete_without_auth_returns_401() {
     });
     let req = Request::builder().method("POST").uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string())).unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -421,6 +431,7 @@ async fn post_inserts_avatars_and_claims_suite_in_world_view() {
     });
     let req = Request::builder().method("POST").uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string())).unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -536,6 +547,7 @@ async fn delete_releases_suite_in_world_view() {
     });
     let req = Request::builder().method("POST").uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string())).unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -629,7 +641,51 @@ async fn post_400_on_invalid_backend() {
     let req = Request::builder()
         .method("POST").uri("/api/startups")
         .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::from(body.to_string())).unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+/// `POST /api/startups` must require an operator token. Without one (or with
+/// the wrong token), the call is rejected at 401 BEFORE any DB writes — so an
+/// unauthenticated probe can't claim a suite slot, leak a startup id, or
+/// burn a backend allocation.
+#[tokio::test]
+async fn post_without_auth_returns_401_and_writes_nothing() {
+    let state = fixture().await;
+    let body = serde_json::json!({
+        "name": "alpha", "goal_text": "x", "budget_cap_usd": 5.0,
+        "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+    });
+
+    // No Authorization header at all.
+    let req = Request::builder()
+        .method("POST").uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string())).unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Wrong token.
+    let req = Request::builder()
+        .method("POST").uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer WRONG")
+        .body(Body::from(body.to_string())).unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // No partial DB writes — startups + agents tables remain empty, and no
+    // suite has been claimed (so the next authenticated POST can pick suite_1).
+    let s_count: (i64,) = sqlx::query_as("SELECT count(*) FROM startups")
+        .fetch_one(&state.pool).await.unwrap();
+    assert_eq!(s_count.0, 0);
+    let a_count: (i64,) = sqlx::query_as("SELECT count(*) FROM agents")
+        .fetch_one(&state.pool).await.unwrap();
+    assert_eq!(a_count.0, 0);
+    let claimed: (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM rooms WHERE type = 'office' AND private_to_startup_id IS NOT NULL"
+    ).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(claimed.0, 0);
 }

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Production worker entrypoint. Resolves to the TypeScript main via tsx so the
+# spawned child finds source even though `packages/worker/dist/` is gitignored
+# (the worker package's `build` is currently a no-op). Mirrors `fixture-cli`.
+exec "$(dirname "$0")/../node_modules/.bin/tsx" "$(dirname "$0")/../src/main.ts" "$@"

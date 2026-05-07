@@ -85,8 +85,17 @@ const ALLOWED_BACKENDS: &[&str] = &["claude_code", "codex", "opencode"];
 
 pub async fn create_startup(
     State(s): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<CreateStartupRequest>,
 ) -> Response {
+    // Operator auth — same shape as `delete_startup` / `http::patch_startup`.
+    // Validate BEFORE the budget/backend checks so unauthenticated callers
+    // can't probe for which fields the server happens to validate first
+    // (and so a missing token never costs a suite slot or DB write).
+    let tok = extract_operator_token(&headers);
+    if crate::auth::validate_operator_token(&s.pool, tok).await.is_err() {
+        return reply_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
     // Validate budget. Mirrors the bounds used by `patch_startup` so the
     // create/update paths agree on what's acceptable.
     if !(req.budget_cap_usd.is_finite() && req.budget_cap_usd >= 0.0 && req.budget_cap_usd < 1_000_000.0) {

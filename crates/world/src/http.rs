@@ -110,6 +110,8 @@ async fn ws_worker(ws: WebSocketUpgrade, State(s): State<Arc<AppState>>) -> Resp
 }
 
 async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
+    // Phase 1: hello + auth on the unsplit socket so we can early-return
+    // before splitting (no split needs to be undone on auth failure).
     let Some(Ok(Message::Text(first))) = socket.recv().await else { return; };
     let parsed: serde_json::Value = match serde_json::from_str(&first) { Ok(v) => v, Err(_) => return };
     if parsed.get("type") != Some(&serde_json::Value::String("hello".into())) { return; }
@@ -118,12 +120,66 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
         let _ = socket.send(Message::Text(r#"{"type":"auth_error"}"#.into())).await;
         return;
     }
-    while let Some(Ok(Message::Text(txt))) = socket.recv().await {
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) else { continue; };
-        let (tx, rx) = oneshot::channel();
-        let _ = state.handle.tx.send(Cmd::HandleConsoleMsg { msg, reply: tx }).await;
-        if let Ok(reply) = rx.await {
-            let _ = socket.send(Message::Text(reply.to_string().into())).await;
+
+    // Subscribe to the world view watcher BEFORE sending the initial snapshot
+    // so we don't miss a tick that fires between the borrow + the subsequent
+    // `changed()` await.
+    let mut view_rx = state.handle.view_rx.clone();
+    // Mark the current value as "seen" so the first `changed()` below only
+    // fires on a fresh write (otherwise it returns immediately and we'd push
+    // a duplicate of the initial snapshot).
+    view_rx.borrow_and_update();
+
+    // Send the initial snapshot. Phase 0 worlds are small enough that we
+    // skip the `chunk_snapshot` transport (M1.11) — TODO M11+: route through
+    // chunk_snapshot when the serialized payload exceeds the 256 KiB threshold
+    // already enforced for worker view fans.
+    {
+        let snapshot = state.handle.view_rx.borrow().clone();
+        let frame = serde_json::json!({
+            "type": "world_view_snapshot",
+            "v": 1,
+            "snapshot": snapshot,
+        });
+        if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
+            return;
+        }
+    }
+
+    // Phase 2: split + select! loop. Inbound frames go to the world via
+    // `Cmd::HandleConsoleMsg`; world-view changes are pushed back as fresh
+    // snapshots. Mirrors the structure used by `handle_worker`.
+    let (mut sender, mut receiver) = socket.split();
+    loop {
+        tokio::select! {
+            inbound = receiver.next() => {
+                match inbound {
+                    Some(Ok(Message::Text(txt))) => {
+                        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) else { continue; };
+                        let (tx, rx) = oneshot::channel();
+                        let _ = state.handle.tx.send(Cmd::HandleConsoleMsg { msg, reply: tx }).await;
+                        if let Ok(reply) = rx.await {
+                            if sender.send(Message::Text(reply.to_string().into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(_)) => { /* ignore non-text frames */ }
+                    _ => break,
+                }
+            }
+            changed = view_rx.changed() => {
+                if changed.is_err() { break; }
+                let snapshot = view_rx.borrow_and_update().clone();
+                let frame = serde_json::json!({
+                    "type": "world_view_snapshot",
+                    "v": 1,
+                    "snapshot": snapshot,
+                });
+                if sender.send(Message::Text(frame.to_string().into())).await.is_err() {
+                    break;
+                }
+            }
         }
     }
 }

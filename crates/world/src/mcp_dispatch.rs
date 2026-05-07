@@ -70,8 +70,8 @@ pub async fn dispatch(
             handle_move_intent(world, paths, layout, graph, pool, &caller, args).await
         }
         "speak" => handle_speak(world, out_bus, pool, &caller, args).await,
-        "task_done" => handle_task_done(out_bus, pool, &caller, args).await,
-        "task_failed" => handle_task_failed(pool, &caller, args).await,
+        "task_done" => handle_task_done(world, out_bus, pool, &caller, args).await,
+        "task_failed" => handle_task_failed(world, pool, &caller, args).await,
         "subtask_create" => handle_subtask_create(out_bus, pool, &caller, args).await,
         "task_accept" => handle_task_accept(out_bus, pool, &caller, args).await,
         "task_request_changes" => handle_task_request_changes(out_bus, pool, &caller, args).await,
@@ -430,6 +430,7 @@ async fn handle_speak(
 }
 
 async fn handle_task_done(
+    world: &mut WorldView,
     out_bus: &HashMap<String, mpsc::Sender<Value>>,
     pool: &SqlitePool,
     caller: &AvatarView,
@@ -489,6 +490,17 @@ async fn handle_task_done(
     )
     .await;
 
+    // Mirror the inverse of `scheduler::tick`'s `idle → working` flip. Without
+    // this, the avatar stays `working` after completion and the scheduler
+    // refuses to dispatch any further queued task to the same agent — so each
+    // agent runs exactly one task in its lifetime. Phase 1 will route status
+    // through the worker's own status_changed event so multi-step internal
+    // work doesn't keep blocking dispatch; Phase 0 ties it directly to
+    // task_done/task_failed.
+    if let Some(av) = world.avatars.get_mut(&caller.agent_id) {
+        av.status = "idle".to_string();
+    }
+
     // Notify the manager via subtask_done (parent's assignee). The plan calls
     // out grand-manager propagation as M3+ work — we log a TODO when the
     // chain depth > 1 and emit only one hop here.
@@ -516,6 +528,7 @@ async fn handle_task_done(
 }
 
 async fn handle_task_failed(
+    world: &mut WorldView,
     pool: &SqlitePool,
     caller: &AvatarView,
     args: Value,
@@ -548,6 +561,12 @@ async fn handle_task_failed(
             .to_string(),
     )
     .await;
+    // Inverse of `scheduler::tick`'s `idle → working` flip. See the parallel
+    // comment in `handle_task_done` for context: without this, the agent stays
+    // `working` forever and never picks up its next queued task.
+    if let Some(av) = world.avatars.get_mut(&caller.agent_id) {
+        av.status = "idle".to_string();
+    }
     Ok(json!({"task_id": task_id, "new_status": status_to_str(new_status)}))
 }
 
