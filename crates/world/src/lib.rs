@@ -10,6 +10,7 @@ pub mod protocol;
 pub mod seed;
 pub mod state;
 pub mod storage;
+pub mod task_sm;
 
 #[cfg(test)]
 mod ts_export {
@@ -23,6 +24,7 @@ mod ts_export {
         use crate::backend_catalog::BackendInfo;
         use crate::protocol::*;
         use crate::state::*;
+        use crate::task_sm::TaskStatus;
         use ts_rs::TS;
         let _ = SchemaVersion::CURRENT;
         SchemaVersion::export_all().expect("export SchemaVersion");
@@ -33,5 +35,6 @@ mod ts_export {
         WorldView::export_all().expect("export WorldView");
         AvatarView::export_all().expect("export AvatarView");
         BackendInfo::export_all().expect("export BackendInfo");
+        TaskStatus::export_all().expect("export TaskStatus");
     }
 }
