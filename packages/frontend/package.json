@@ -3,5 +3,24 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "scripts": { "build": "echo no-op", "test": "echo no-op" }
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "echo no-op"
+  },
+  "dependencies": {
+    "@cliptown/protocol": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "pixi.js": "^8.5.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5",
+    "vite": "^5.4"
+  }
 }

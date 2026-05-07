@@ -1,0 +1,21 @@
+@font-face { font-family: 'IBM Plex Sans'; src: url('/fonts/IBMPlexSans-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'IBM Plex Sans'; src: url('/fonts/IBMPlexSans-Medium.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+@font-face { font-family: 'IBM Plex Sans'; src: url('/fonts/IBMPlexSans-Bold.woff2') format('woff2'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'IBM Plex Mono'; src: url('/fonts/IBMPlexMono-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'IBM Plex Mono'; src: url('/fonts/IBMPlexMono-Medium.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+:root {
+  --bg: #FAFAFA;
+  --fg: #1A1A1A;
+  --fg-secondary: #6B6B6B;
+  --border: #E5E5E5;
+  --raised: #FFFFFF;
+}
+body {
+  margin: 0;
+  font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+code, .mono {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
