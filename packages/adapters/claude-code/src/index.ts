@@ -2,10 +2,11 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  AdapterCapabilities, BackendAdapter, HookEvent, SpawnOpts, SpawnResult,
+import {
+  startHookBridge,
+  type AdapterCapabilities, type BackendAdapter, type HookBridge,
+  type HookEvent, type SpawnOpts, type SpawnResult,
 } from "@cliptown/adapter-core";
-import { startHookBridge, type HookBridge } from "./hook_bridge.js";
 
 /**
  * Claude Code adapter. Spawns the `claude` CLI (or override) configured to:

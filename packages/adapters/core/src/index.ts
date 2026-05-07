@@ -69,3 +69,5 @@ export interface BackendAdapter {
   /** Spawn the CLI subprocess with the given options. */
   spawn(opts: SpawnOpts): Promise<SpawnResult>;
 }
+
+export { startHookBridge, type HookBridge } from "./hook_bridge.js";

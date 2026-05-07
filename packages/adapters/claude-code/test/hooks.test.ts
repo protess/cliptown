@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { startHookBridge } from "../src/hook_bridge.js";
+import { startHookBridge } from "@cliptown/adapter-core";
 import type { HookEvent } from "@cliptown/adapter-core";
 
 async function postJson(port: number, path: string, body: unknown): Promise<{ ok: boolean }> {

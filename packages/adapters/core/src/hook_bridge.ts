@@ -1,14 +1,17 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { HookEvent, HookKind } from "@cliptown/adapter-core";
+import type { HookEvent, HookKind } from "./index.js";
 
 /**
- * HTTP listener that Claude Code's hook scripts POST into.
- * Each spawn() call gets its own bridge bound to a random port; we tell the
- * spawned settings.json to POST to that port.
+ * Adapter-agnostic HTTP listener that LLM CLI hook scripts POST into.
+ * Each spawn() call gets its own bridge bound to a random port; the spawning
+ * adapter wires the CLI's hook config to POST to that port.
  *
  * Endpoint: POST /hook/:kind  (kind ∈ {pre_tool, post_tool, session_stop, session_error})
- * Body: JSON object — adapter normalizes to HookEvent.
+ * Body: JSON object — bridge normalizes to HookEvent and forwards to onHook.
+ *
+ * Lifted from packages/adapters/claude-code/src/hook_bridge.ts in M8.1 so
+ * codex + opencode adapters can share the same normalization path.
  */
 
 export interface HookBridge {
