@@ -22,6 +22,8 @@ export interface McpError extends Error {
 }
 
 let corrCounter = 0;
+// pid+now+counter is sufficient for single-process correlation; corr_ids are
+// never shared across processes, so crypto-grade randomness would be overkill.
 const corrSeed =
   typeof process !== "undefined" && typeof process.pid === "number"
     ? process.pid
@@ -35,7 +37,6 @@ function nextCorrId(): string {
 export interface McpCall {
   tool: string;
   args: Record<string, unknown>;
-  corr_id?: string;
 }
 
 /**
@@ -54,7 +55,7 @@ export async function callOverWS(
   call: McpCall,
   timeoutMs: number = 60_000,
 ): Promise<unknown> {
-  const corr_id = call.corr_id ?? nextCorrId();
+  const corr_id = nextCorrId();
   const frame = {
     type: "mcp_call",
     v: 1,
@@ -225,7 +226,7 @@ export interface McpProxy {
   hypothesis_state(a: HypothesisStateArgs): Promise<unknown>;
   test_record(a: TestRecordArgs): Promise<unknown>;
   hypothesis_resolve(a: HypothesisResolveArgs): Promise<unknown>;
-  verify(a: VerifyArgs): Promise<unknown>;
+  verify(a: VerifyArgs): Promise<{ observed: unknown }>;
   ask_peer(a: AskPeerArgs): Promise<unknown>;
   observe_world(a: ObserveWorldArgs): Promise<unknown>;
   read_artifact(a: ReadArtifactArgs): Promise<unknown>;
@@ -289,7 +290,9 @@ export function createMcpProxy(ws: WorkerHandle): McpProxy {
     hypothesis_resolve: make<HypothesisResolveArgs & Record<string, unknown>>(
       "hypothesis_resolve",
     ),
-    verify: make<VerifyArgs & Record<string, unknown>>("verify"),
+    verify: make<VerifyArgs & Record<string, unknown>>("verify") as (
+      a: VerifyArgs,
+    ) => Promise<{ observed: unknown }>,
     ask_peer: make<AskPeerArgs & Record<string, unknown>>("ask_peer"),
     observe_world: make<ObserveWorldArgs & Record<string, unknown>>(
       "observe_world",
