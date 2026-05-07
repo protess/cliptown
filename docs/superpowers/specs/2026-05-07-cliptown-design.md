@@ -20,7 +20,7 @@ The product *cliptown* is inspired by paperclip (AI company orchestration) and G
 - Single building (one town instance, hardcoded JSON map with M fixed suite slots; Phase 0 uses M = 4)
 - **Multiple concurrent startups** — multi-tenancy is a first-class concern from day 0; CI exercises at least 3 startups
 - Per startup: a founder agent + one direct report (so total agents = 2 × number of active startups)
-- **Two backend adapters**: **Claude Code CLI** and **Codex CLI**, with per-agent backend selection
+- **Three backend adapters**: **Claude Code CLI**, **Codex CLI**, and **opencode CLI**, with per-agent backend selection. Local LLMs are supported in Phase 0 through opencode's provider config (any OpenAI-compatible endpoint).
 - Hybrid spatial model: org graph for directives, proximity for chat
 - Operator: god view + "possess" into any town as avatar
 - Real artifacts: agents write Markdown into a per-startup sandbox dir
@@ -29,11 +29,10 @@ The product *cliptown* is inspired by paperclip (AI company orchestration) and G
 
 ### Out of scope (deferred to later phases)
 
-- Additional adapters (opencode, local-LLM-via-opencode endpoint) → Phase 1
-- External integrations (GitHub repo, email, Slack) → Phase 2
-- Map editor, multi-building, sprite art → Phase 3
-- Docker per-startup, TLS, observability → Phase 4
-- Multi-user auth, cloud deployment → Phase 5
+- External integrations (GitHub repo, email, Slack) → Phase 1
+- Map editor, multi-building, sprite art → Phase 2
+- Docker per-startup, TLS, observability → Phase 3
+- Multi-user auth, cloud deployment → Phase 4
 - Idle wander, time-of-day, scheduled events
 - Cross-task agent memory (each task = its own context)
 - Multi-startup market dynamics (only isolation invariant is exercised)
@@ -41,7 +40,7 @@ The product *cliptown* is inspired by paperclip (AI company orchestration) and G
 ### Hard assumptions
 
 - Single operator on a single workstation (Rust 1.75+, Node 20+).
-- Operator possesses an Anthropic API key (held only in env var, never persisted).
+- Operator possesses LLM provider credentials for each configured backend (e.g., Anthropic API key for `claude_code`, OpenAI API key for `codex`, provider-specific config for `opencode`). All credentials live only in env vars, never persisted to SQLite.
 - Operator trusts agents (trust + audit; **no container isolation in Phase 0**).
 - All artifacts produced live inside the per-startup workspace dir.
 
@@ -50,17 +49,18 @@ The product *cliptown* is inspired by paperclip (AI company orchestration) and G
 Three process types. The world is the single source of truth; everything else is a subscriber.
 
 ```
-┌──────────────────────┐  WS  ┌─────────────────────────────────┐  WS  ┌─────────────────────┐
-│ TS Frontend          │ ⇄    │ Rust World Server               │ ⇄    │ TS Agent Worker × N │
-│ (React + Pixi.js)    │       │ (single binary, single SQLite)  │       │ (thin: spawn + audit)│
-│ /console · /town/:id │       │ + MCP Server                    │       │      │              │
-└──────────────────────┘       │   tools exposed to CLI agents   │       │      ↓ spawn/hooks  │
-                                └─────────────────────────────────┘       │ Claude Code CLI     │
-                                          ↑ MCP                           │ (cwd = sandbox dir) │
-                                          └───────────────────────────────│      │              │
-                                                                          │      ↓ HTTPS         │
-                                                                          │ Anthropic API        │
-                                                                          └─────────────────────┘
+┌──────────────────────┐  WS  ┌─────────────────────────────────┐  WS  ┌─────────────────────────┐
+│ TS Frontend          │ ⇄    │ Rust World Server               │ ⇄    │ TS Agent Worker × N     │
+│ (React + Pixi.js)    │       │ (single binary, single SQLite)  │       │ (thin: spawn + audit)   │
+│ /console · /town/:id │       │ + MCP Server                    │       │     │ via adapter (§3.4)│
+└──────────────────────┘       │   tools exposed to CLI agents   │       │     ↓ spawn/hooks       │
+                                └─────────────────────────────────┘       │ Backend CLI             │
+                                          ↑ MCP                           │ (claude_code/codex/     │
+                                          └───────────────────────────────│  opencode; cwd=sandbox) │
+                                                                          │     │                   │
+                                                                          │     ↓ HTTPS              │
+                                                                          │ LLM provider endpoint    │
+                                                                          └─────────────────────────┘
 ```
 
 ### 3.1 Rust World Server
@@ -105,13 +105,13 @@ Vite + React + Pixi.js, single SPA, single WS channel.
 
 ### 3.4 Backend adapters
 
-Each backend (Claude Code CLI in Phase 0; also Codex CLI in Phase 0) is wrapped by an adapter that exposes a uniform interface to the worker. Adapters live inside the worker process.
+Each Phase 0 backend (Claude Code CLI, Codex CLI, opencode CLI) is wrapped by an adapter that exposes a uniform interface to the worker. Adapters live inside the worker process.
 
 **Adapter interface (TypeScript, conceptual):**
 
 ```ts
 interface BackendAdapter {
-  readonly id: 'claude_code' | 'codex'
+  readonly id: 'claude_code' | 'codex' | 'opencode'
   readonly capabilities: {
     hooks: ('pre_tool' | 'post_tool' | 'session_stop' | 'session_error')[]
     inject_context: boolean   // can a running session receive a new user message?
@@ -133,12 +133,13 @@ interface SpawnOpts {
 
 **Phase 0 adapters and their capability differences:**
 
-| Capability | Claude Code adapter | Codex CLI adapter |
-|---|---|---|
-| `pre_tool` hook | Native | Best-effort (event subscription) |
-| `post_tool` hook | Native | Best-effort |
-| `session_stop` hook | Native, **blocking feedback supported** | Native, **non-blocking** — fallback to post-hoc rejection |
-| `inject_context` mid-session | Yes | Limited — uses a queued context handoff between sessions |
+| Capability | Claude Code adapter | Codex CLI adapter | opencode adapter |
+|---|---|---|---|
+| `pre_tool` hook | Native | Best-effort (event subscription) | Best-effort (permission hooks) |
+| `post_tool` hook | Native | Best-effort | Best-effort |
+| `session_stop` hook | Native, **blocking feedback supported** | Native, **non-blocking** — fallback to post-hoc rejection | Native, **non-blocking** — fallback to post-hoc rejection |
+| `inject_context` mid-session | Yes | Limited — queued handoff between sessions | Yes (resume + new message) |
+| Provider routing | Anthropic only | OpenAI only | Multi-provider (Anthropic, OpenAI, OpenAI-compatible local endpoints) |
 
 The worker code paths above never branch on the backend identity; everything goes through the adapter. Branching, where unavoidable, lives inside each adapter implementation.
 
@@ -160,7 +161,7 @@ SQLite tables (Phase 0). Every domain row outside `towns` and `rooms` is multi-t
 | `rooms` | `id, town_id, name, type, bounds, private_to_startup_id?` | `private_to_startup_id` null = common, set = suite |
 | `room_doors` | `id, town_id, room_a, room_b, tile_x, tile_y` | A* connectivity |
 | `startups` | `id, name, goal_text, budget_cap_usd, budget_spent_usd, town_id, workspace_path, status` | Tenant root |
-| `agents` | `id, startup_id, name, role, backend, model_id, position_json, home_room_id, manager_id?, status` | `manager_id` self-FK; `backend` enum is `claude_code` or `codex` in Phase 0 |
+| `agents` | `id, startup_id, name, role, backend, model_id, position_json, home_room_id, manager_id?, status` | `manager_id` self-FK; `backend` enum is `claude_code`, `codex`, or `opencode` in Phase 0 |
 | `tasks` | `id, startup_id, parent_id?, title, description, assignee_agent_id, required_room?, status, review_round, audit_trail jsonb, epistemic_log jsonb, artifact_path?` | See task state machine below |
 | `messages` | `id, startup_id, room_id?, author_id, body, kind, ts` | `room_id` null for org-graph directives |
 | `budget_events` | `id, startup_id, agent_id, task_id?, in_tokens, out_tokens, cost_usd, model_id, ts` | Append-only |
@@ -184,7 +185,7 @@ The building has **M fixed private suite slots** plus three common rooms. Phase 
 | Cafe | 1 | social | null | Cross-startup proximity zone (serendipity primary site) |
 | Library | 1 | focus | null | `required_room` for research-class tasks |
 
-Total rooms in Phase 0 = M + 3 = 7. The map JSON is hardcoded — adding more suite slots in the future requires editing the map (or, in Phase 3, using the in-app editor). Doors connect each suite to the Lobby and the Lobby to the Cafe and the Library. No suite-to-suite doors (intentional).
+Total rooms in Phase 0 = M + 3 = 7. The map JSON is hardcoded — adding more suite slots in the future requires editing the map (or, in Phase 2, using the in-app editor). Doors connect each suite to the Lobby and the Lobby to the Cafe and the Library. No suite-to-suite doors (intentional).
 
 ### 5.2 Movement and pathfinding
 
@@ -277,7 +278,7 @@ The sandbox **invariants** are uniform across backends; each adapter enforces th
 |---|---|
 | **Filesystem stays within `cwd`** | Adapter restricts the CLI's native Read/Edit/Write to `cwd`; `pre_tool` hook rejects path-escape (post-symlink resolution); MCP `read_artifact` re-validates path |
 | **No shell execution** | Adapter blocks shell tools via tool allowlist; `pre_tool` hook denies any shell-class call; OS-level: child process not given a shell wrapper |
-| **Network egress allowlist** | Adapter env scoped to one LLM endpoint; OS-level egress restriction via the worker spawning the CLI under a network policy (when available); MCP loopback explicitly allowed |
+| **Network egress allowlist** | Adapter declares the endpoint(s) its backend needs (one for `claude_code` / `codex`; whatever provider is configured for `opencode`, including local hosts); OS-level egress restriction via the worker spawning the CLI under a network policy (when available); MCP loopback explicitly allowed |
 | **No secret leakage** | Adapter env contains only the LLM key for that backend and `MCP_WORLD_URL`; the operator's other credentials never reach the CLI |
 
 **In-process verification**: the test methods listed in §6.4 run inside the worker process (or via MCP tools) without spawning a shell, regardless of backend.
@@ -310,7 +311,7 @@ Enforcement:
 
 ### Level 1 — Agentic loop
 
-The CLI's own multi-turn tool-use loop. cliptown does not implement this; it consumes the loop's effects via MCP and hooks. Safety cap is the CLI's own (Claude Code's `--max-turns`-equivalent), plus PreToolUse hook denies tool calls that would exceed budget.
+The CLI's own multi-turn tool-use loop. cliptown does not implement this; it consumes the loop's effects via MCP and the normalized hooks of §3.4. Safety cap is the CLI's own (e.g., Claude Code's `--max-turns`-equivalent), plus the `pre_tool` hook denies LLM-using tool calls when the startup's budget is at 100 % of cap.
 
 ### Level 2 — Manager review cycle
 
@@ -363,7 +364,7 @@ Design principle: **the world only dies when it dies; workers die freely**. All 
 
 Phase 0 is complete when all nine pass simultaneously:
 
-1. **Multiple startups (≥ 3) auto-spawn**, each claiming a free suite slot; their workers connect via WS; each worker spawns the CLI determined by the agent's `backend` field (Claude Code CLI or Codex CLI) bound to its sandbox dir.
+1. **Multiple startups (≥ 3) auto-spawn**, each claiming a free suite slot; their workers connect via WS; each worker spawns the CLI determined by the agent's `backend` field (Claude Code CLI, Codex CLI, or opencode CLI) bound to its sandbox dir.
 2. Operator sends a `directive` to a startup's founder; the founder's CLI emits `subtask_create` (MCP) and the world routes a `task_assigned` to the direct report.
 3. A task with `required_room: library` causes the assignee's avatar to walk from its suite to the Library along the A* path.
 4. The assignee's CLI produces an artifact at exactly `workspaces/<startup_id>/artifacts/<task_id>.md` and emits `task_done` (MCP). World re-validates path before recording.
@@ -371,28 +372,27 @@ Phase 0 is complete when all nine pass simultaneously:
 6. Manager calls `task_request_changes`; world increments `review_round`; the assignee's next CLI session receives the feedback as a directive and re-submits a refined `task_done`.
 7. **Cross-startup serendipity**: when agents from any two distinct startups are both in the Cafe within the same tick, a `proximity_tick` event reaches both workers; if either's CLI emits `speak { kind: "chat" }`, the message is delivered to the other's CLI as `chat_received`.
 8. **Multi-tenant isolation**: a `directive` sent inside one startup's suite is never delivered to any agent of any other startup, regardless of timing, room transitions, or backend type.
-9. **Both adapters exercised**: at least one Claude-Code-backed agent and at least one Codex-backed agent each independently complete a task end-to-end (`task_assigned` → `task_done` accepted by manager) within the same E2E run.
+9. **All Phase 0 adapters exercised**: at least one Claude-Code-backed agent, one Codex-backed agent, and one opencode-backed agent each independently complete a task end-to-end (`task_assigned` → `task_done` accepted by manager) within the same E2E run.
 
-(7) and (8) are the soul of cliptown — they are the architectural claims about hybrid space and multi-tenancy. (9) is the soul of the adapter abstraction — without it, "Phase 0 supports two adapters" is unverified.
+(7) and (8) are the soul of cliptown — they are the architectural claims about hybrid space and multi-tenancy. (9) is the soul of the adapter abstraction — without it, "Phase 0 supports three adapters" is unverified.
 
 ## 12. Phase roadmap
 
 | Phase | Theme | OOS items graduating in |
 |---|---|---|
 | 0 (this spec) | Walking skeleton | — |
-| 1 | Adapter expansion | opencode adapter (including local-OpenAI-compatible endpoint via opencode config) |
-| 2 | Real artifact integration | GitHub repo per startup, secrets vault, email and Slack outbound as MCP tools |
-| 3 | Map / multi-town | In-app map editor, multiple buildings, sprite art, idle wander |
-| 4 | Operations | Docker per startup, TLS / WSS, observability dashboards, automated backup |
-| 5 | Multi-user / cloud | Authentication, deployment infrastructure, horizontal scaling |
+| 1 | Real artifact integration | GitHub repo per startup, secrets vault, email and Slack outbound as MCP tools |
+| 2 | Map / multi-town | In-app map editor, multiple buildings, sprite art, idle wander |
+| 3 | Operations | Docker per startup, TLS / WSS, observability dashboards, automated backup |
+| 4 | Multi-user / cloud | Authentication, deployment infrastructure, horizontal scaling |
 
 Each phase gets its own design spec, plan, and implementation cycle.
 
 ## 13. Open questions / known unknowns
 
 - **MCP transport choice**: stdio per spawned CLI is the default; revisit if a future adapter needs a different transport.
-- **Codex CLI hook parity**: the adapter contract in §3.4 assumes the Codex CLI exposes `pre_tool` / `post_tool` / `session_stop` analogues. Verify the actual surface during the first implementation milestone and, if `session_stop` cannot block, confirm the post-hoc rejection fallback is acceptable in practice.
-- **Mid-session context injection per backend**: Claude Code accepts user-message append mid-session; the Codex adapter falls back to a queued handoff between sessions. Quantify how often this fallback fires for `chat_received` and `proximity_tick` events under realistic loads.
+- **Codex and opencode hook parity**: the adapter contract in §3.4 assumes both CLIs expose `pre_tool` / `post_tool` / `session_stop` analogues to a useful approximation. Verify the actual surfaces during the first implementation milestone; if `session_stop` is non-blocking on either, confirm the post-hoc rejection fallback is acceptable in practice.
+- **Mid-session context injection per backend**: Claude Code accepts user-message append mid-session and opencode supports session resume + new message. The Codex adapter falls back to a queued handoff between sessions. Quantify how often this fallback fires for `chat_received` and `proximity_tick` events under realistic loads, and whether the opencode resume path adds noticeable latency.
 - **`chat_received` injection latency**: how stale can context be before injection feels broken? Likely pick a small queue with last-write-wins.
 - **Artifact format beyond Markdown**: even in Phase 0, agents may produce JSON, code stubs, etc. Validate that `artifact_path` semantics generalize (or restrict to Markdown for the slice).
 - **Suite slot exhaustion behavior**: when all M slots are claimed, startup creation is refused. Decide whether the operator gets a queue, an explicit error, or whether dissolving an inactive startup auto-frees its slot.
@@ -403,7 +403,7 @@ Each phase gets its own design spec, plan, and implementation cycle.
 - **Suite**: a room with `private_to_startup_id` set; only that startup's agents may enter.
 - **Common room**: a room with `private_to_startup_id = null`; all agents and the operator may enter.
 - **Worker**: TS Node process supervising one CLI session for one agent.
-- **CLI agent**: the spawned Claude Code CLI process; the actual "agent" doing the work.
+- **CLI agent**: the spawned backend CLI process (Claude Code, Codex, or opencode in Phase 0); the actual "agent" doing the work.
 - **Possess**: operator switches from god view to avatar embodiment in a specific town.
 - **L0 / L1 / L2 / L3**: the four iteration levels (epistemic / agentic / review / serendipity).
 
