@@ -1,13 +1,23 @@
 import { useParams } from "react-router-dom";
+import { TownTopBar } from "./TownTopBar.js";
 
 export function Town() {
   const { id } = useParams<{ id: string }>();
+  if (!id) return <p style={{ padding: 24 }}>Missing town id.</p>;
   return (
-    <div style={{ padding: 24 }}>
-      <h1 style={{ fontWeight: 700 }}>town/{id}</h1>
-      <p style={{ color: "var(--fg-secondary)" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        minHeight: "100vh",
+      }}
+    >
+      <TownTopBar startupId={id} />
+      <main
+        style={{ flex: 1, padding: 24, color: "var(--fg-secondary)" }}
+      >
         Pixi canvas lands in M4.9.
-      </p>
+      </main>
     </div>
   );
 }
