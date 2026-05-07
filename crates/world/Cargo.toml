@@ -29,6 +29,7 @@ ts-rs.workspace = true
 [dev-dependencies]
 tempfile = "3"
 cliptown-world = { path = ".", features = ["test_det"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 
 [features]
 _ts_export = []
