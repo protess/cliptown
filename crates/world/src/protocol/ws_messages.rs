@@ -33,7 +33,7 @@ pub enum WorkerOutbound {
     MoveComplete { v: u8, room_id: String },
     MoveFailed { v: u8, reason: String },
     BudgetWarning { v: u8, remaining_usd: f64, percent_used: u32 },
-    Pause,
+    Pause { v: u8, reason: String },
     Shutdown,
 }
 

@@ -58,13 +58,31 @@ pub async fn dispatch(
                         {
                             tracing::warn!(error = %e, "record_threshold_event failed");
                         }
-                        if matches!(t, crate::budget::Threshold::Pause100) {
-                            crate::budget::pause_startup(world, out_bus, &startup_id);
+                        match t {
+                            crate::budget::Threshold::Warn80
+                            | crate::budget::Threshold::Warn95 => {
+                                // Spec §6.1: emit `budget_warning` to all
+                                // same-startup workers so they can throttle
+                                // before the 100% pause. The system_events
+                                // row above is the durable console record.
+                                let percent = if cap > 0.0 {
+                                    ((new_spent / cap) * 100.0) as u32
+                                } else {
+                                    0
+                                };
+                                let remaining = (cap - new_spent).max(0.0);
+                                crate::budget::warn_startup(
+                                    world,
+                                    out_bus,
+                                    &startup_id,
+                                    remaining,
+                                    percent,
+                                );
+                            }
+                            crate::budget::Threshold::Pause100 => {
+                                crate::budget::pause_startup(world, out_bus, &startup_id);
+                            }
                         }
-                        // Console toast plumbing for warn80/warn95 lives in M2
-                        // (system_event broadcast). The system_events row above
-                        // is the durable record; the console event feed will
-                        // surface it.
                     }
                     json!({"type":"ok","kind":"report_budget","spent_usd":new_spent,"cap_usd":cap})
                 }

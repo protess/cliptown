@@ -24,6 +24,11 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+/// Reason code embedded in `WorkerOutbound::Pause`. Phase 0 only emits
+/// `budget_exhausted` (from the 100% threshold); future phases may add other
+/// codes (e.g. `dissolving`).
+const PAUSE_REASON_BUDGET: &str = "budget_exhausted";
+
 /// model_id → ($/Mtok input, $/Mtok output). Phase 0 placeholder values; these
 /// are known to need updating against current vendor pricing before a real run.
 pub fn price_per_mtok(model_id: &str) -> Option<(f64, f64)> {
@@ -41,11 +46,18 @@ pub fn price_per_mtok(model_id: &str) -> Option<(f64, f64)> {
     }
 }
 
-/// Compute USD cost for a single report. Unknown models price at $0; the
-/// matching `system_events` row will still fire from `record_threshold_event`
-/// so an unknown model can't silently consume budget.
+/// Compute USD cost for a single report. Unknown models price at $0 (Phase 0
+/// placeholder); since cost is $0, no spend increment occurs and no threshold
+/// transition or `system_events` row is emitted. We log a warning so unknown
+/// models surface in operator logs rather than getting silently zero-billed.
 pub fn cost_usd(model_id: &str, in_tokens: u64, out_tokens: u64) -> f64 {
-    let (in_p, out_p) = price_per_mtok(model_id).unwrap_or((0.0, 0.0));
+    let (in_p, out_p) = match price_per_mtok(model_id) {
+        Some(p) => p,
+        None => {
+            tracing::warn!(model_id = %model_id, "unknown model pricing; treating as $0");
+            (0.0, 0.0)
+        }
+    };
     (in_tokens as f64 / 1_000_000.0) * in_p + (out_tokens as f64 / 1_000_000.0) * out_p
 }
 
@@ -145,7 +157,11 @@ pub fn pause_startup(
     out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
     startup_id: &str,
 ) -> usize {
-    let payload = json!({"type":"pause","v":1,"reason":"budget_exhausted"});
+    let payload = serde_json::to_value(&crate::protocol::WorkerOutbound::Pause {
+        v: 1,
+        reason: PAUSE_REASON_BUDGET.to_string(),
+    })
+    .unwrap_or_else(|_| json!({}));
     let mut sent = 0;
     for (agent_id, avatar) in &world.avatars {
         if avatar.startup_id != startup_id {
@@ -156,6 +172,39 @@ pub fn pause_startup(
                 tx.try_send(payload.clone())
             {
                 tracing::warn!(agent_id = %agent_id, "out_bus full, dropping pause");
+            }
+            sent += 1;
+        }
+    }
+    sent
+}
+
+/// Send a `BudgetWarning` frame to every worker of `startup_id`. Mirrors
+/// `pause_startup` but for the 80% / 95% thresholds. Spec §6.1 requires this
+/// signal so workers can throttle / wrap-up before the 100% pause hits.
+pub fn warn_startup(
+    world: &WorldView,
+    out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
+    startup_id: &str,
+    remaining_usd: f64,
+    percent_used: u32,
+) -> usize {
+    let payload = serde_json::to_value(&crate::protocol::WorkerOutbound::BudgetWarning {
+        v: 1,
+        remaining_usd,
+        percent_used,
+    })
+    .unwrap_or_else(|_| json!({}));
+    let mut sent = 0;
+    for (agent_id, avatar) in &world.avatars {
+        if avatar.startup_id != startup_id {
+            continue;
+        }
+        if let Some(tx) = out_bus.get(agent_id) {
+            if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
+                tx.try_send(payload.clone())
+            {
+                tracing::warn!(agent_id = %agent_id, "out_bus full, dropping budget_warning");
             }
             sent += 1;
         }

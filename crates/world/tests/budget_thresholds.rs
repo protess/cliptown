@@ -183,6 +183,25 @@ async fn cross_100_triggers_pause_all() {
 }
 
 #[tokio::test]
+async fn warn_startup_pushes_budget_warning() {
+    // Spec §6.1: 80%/95% crossings must push a `budget_warning` frame to
+    // every same-startup worker (not just write the system_events row).
+    let (w, _pool, _tmp) = fixture().await;
+    let mut out_bus: HashMap<String, mpsc::Sender<serde_json::Value>> = HashMap::new();
+    let (tx, mut rx) = mpsc::channel::<serde_json::Value>(8);
+    out_bus.insert("a1".to_string(), tx);
+
+    let sent = budget::warn_startup(&w, &out_bus, "s1", 2.0, 80);
+    assert_eq!(sent, 1);
+
+    let msg = rx.try_recv().expect("budget_warning should be queued to a1's out_bus");
+    assert_eq!(msg["type"], "budget_warning");
+    assert_eq!(msg["v"], 1);
+    assert_eq!(msg["remaining_usd"], 2.0);
+    assert_eq!(msg["percent_used"], 80);
+}
+
+#[tokio::test]
 async fn pause_startup_only_targets_matching_workers() {
     // a1 belongs to s1; a2 belongs to s2. Pausing s1 must NOT push to a2.
     let (mut w, pool, _tmp) = fixture().await;
