@@ -53,7 +53,7 @@ async fn patch_startup(
         return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
     }
     let new_cap = match body.get("budget_cap_usd").and_then(|v| v.as_f64()) {
-        Some(v) if v >= 0.0 => v,
+        Some(v) if v.is_finite() && v >= 0.0 && v < 1_000_000.0 => v,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,

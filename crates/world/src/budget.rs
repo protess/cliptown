@@ -29,8 +29,9 @@ use tokio::sync::mpsc;
 /// codes (e.g. `dissolving`).
 const PAUSE_REASON_BUDGET: &str = "budget_exhausted";
 
-/// model_id → ($/Mtok input, $/Mtok output). Phase 0 placeholder values; these
-/// are known to need updating against current vendor pricing before a real run.
+/// model_id → ($/Mtok input, $/Mtok output). Phase 0 placeholders sourced from
+/// anthropic.com/pricing & openai.com/api/pricing as of 2024-vintage data.
+/// Re-verify against current vendor pricing before any non-zero-cost run.
 pub fn price_per_mtok(model_id: &str) -> Option<(f64, f64)> {
     match model_id {
         // Anthropic
