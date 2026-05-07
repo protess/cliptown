@@ -3,6 +3,7 @@ import { TopBar } from "./TopBar.js";
 import { Sidebar } from "./Sidebar.js";
 import { MainHeader } from "./MainHeader.js";
 import { Kanban } from "./Kanban.js";
+import { ChatPanel } from "./ChatPanel.js";
 
 export function Console() {
   const [selected, setSelected] = useState<string | null>(null);
@@ -34,6 +35,7 @@ export function Console() {
           </div>
         </main>
       </div>
+      <ChatPanel />
     </div>
   );
 }

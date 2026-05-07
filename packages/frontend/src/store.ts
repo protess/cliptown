@@ -72,6 +72,27 @@ export interface ModalVM {
   payload: unknown;
 }
 
+/**
+ * Phase 0 stand-in for chat/directive history surfaced in the floating
+ * ChatPanel (M4.10). The world doesn't yet emit dedicated `chat` or
+ * `directive` ConsoleOutbound frames — those messages live in the SQLite
+ * `messages` table written by cmd_console.rs::OperatorDirective and the
+ * cmd_worker speak handler. The reducer below routes any inbound
+ * `{type:"chat"|"directive"}` ConsoleOutbound frame into this array so the
+ * panel populates as soon as the world starts publishing them (tracked for
+ * M5+).
+ */
+export interface MessageVM {
+  id: string;
+  ts: number;
+  startup_id: string;
+  room_id: string | null;
+  author_id: string;
+  body: string;
+  kind: "chat" | "directive";
+  recipient_id: string | null;
+}
+
 export interface WorldState {
   status: ConnectionStatus;
   avatars: Record<string, AvatarVM>;
@@ -81,6 +102,7 @@ export interface WorldState {
   backendCatalog: Record<string, unknown>;
   toasts: ToastVM[];
   modals: ModalVM[];
+  messages: MessageVM[];
 }
 
 const INITIAL: WorldState = {
@@ -92,10 +114,12 @@ const INITIAL: WorldState = {
   backendCatalog: {},
   toasts: [],
   modals: [],
+  messages: [],
 };
 
 const MAX_SYSTEM_EVENTS = 200;
 const MAX_TOASTS = 20;
+const MAX_MESSAGES = 500;
 
 type Msg = Record<string, unknown> & { type?: unknown };
 
@@ -322,6 +346,36 @@ function reducer(state: WorldState, action: Action): WorldState {
         payload: m.payload ?? null,
       };
       return { ...state, modals: [...state.modals, md] };
+    }
+    case "chat":
+    case "directive": {
+      // Phase 0 forward-compat: ConsoleOutbound doesn't define `chat` /
+      // `directive` frame variants today (see packages/protocol/dist/
+      // ConsoleOutbound.ts — only world_view_snapshot, world_view_delta,
+      // system_event, backend_catalog, toast, modal). When the world starts
+      // emitting them (M5+), this reducer appends them to `messages` for the
+      // floating ChatPanel from M4.10. Until then the panel renders empty.
+      const kind = m.type === "directive" ? "directive" : "chat";
+      const id = typeof m.id === "string" || typeof m.id === "number" ? String(m.id) : newId();
+      const recipient =
+        typeof m.to_agent_id === "string"
+          ? m.to_agent_id
+          : typeof m.recipient_id === "string"
+            ? m.recipient_id
+            : null;
+      const msg: MessageVM = {
+        id,
+        ts: typeof m.ts === "number" ? m.ts : Date.now(),
+        startup_id: asString(m.startup_id),
+        room_id: typeof m.room_id === "string" ? m.room_id : null,
+        author_id: asString(m.author_id, asString(m.from)),
+        body: asString(m.body),
+        kind,
+        recipient_id: recipient,
+      };
+      const next = [...state.messages, msg];
+      if (next.length > MAX_MESSAGES) next.splice(0, next.length - MAX_MESSAGES);
+      return { ...state, messages: next };
     }
     default:
       return state;

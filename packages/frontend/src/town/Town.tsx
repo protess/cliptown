@@ -1,6 +1,7 @@
 import { useParams } from "react-router-dom";
 import { TownTopBar } from "./TownTopBar.js";
 import { PixiStage } from "./PixiStage.js";
+import { ChatPanel } from "../console/ChatPanel.js";
 
 export function Town() {
   const { id } = useParams<{ id: string }>();
@@ -25,6 +26,7 @@ export function Town() {
           }}
         />
       </main>
+      <ChatPanel />
     </div>
   );
 }
