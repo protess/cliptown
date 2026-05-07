@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "build": "echo no-op",
-    "test": "vitest run"
+    "test": "vitest run",
+    "start": "tsx ./src/main.ts"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/ws": "^8.18.1",
+    "tsx": "^4.19.2",
     "typescript": "^5.5",
     "vitest": "^2"
   },
