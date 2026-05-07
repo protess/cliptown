@@ -76,6 +76,10 @@ worker_respawn_max_attempts = 3
 
 [possess]
 operator_keepalive_timeout_seconds = 30
+
+[kanban]
+stuck_warn_minutes = 5
+stuck_alert_minutes = 30
 ```
 
 ### Logging
@@ -197,7 +201,18 @@ Layout: **top bar + left sidebar + main area**. Linear / Vercel dashboard family
 
 - **Top bar** (~32 px tall): cliptown wordmark on the left, compact global system-event feed in the middle (1-line scroll showing last 1–3 events; clicking expands a history modal), `+ New Startup` button on the right.
 - **Left sidebar** (~160 px wide): "Startups" header followed by a list of currently active startups (Phase 0 supports up to M = 4). Each row carries a hue accent on its left edge encoding startup identity, the startup short name, and the first ~30 characters of its goal. The selected row inverts to a white background; others remain muted. **Order**: most recent `system_event.ts` first; the list re-sorts on tick with a soft animation (~150 ms FLIP) so an erupting startup floats to the top without yanking the eye. **Empty state** (zero startups): the sidebar shows a centered prompt — "No startups yet" plus a small arrow indicator pointing to the `+ New Startup` button in the top bar.
-- **Main area**: detail view of the selected startup. **Header band**: full goal, budget bar with `$spent / $cap` in monospace, agent count (active / total), last system-event timestamp, "Open town →" CTA. **Body — kanban**: five columns titled `proposed`, `queued`, `in_progress`, `awaiting_review`, `done` (failed tasks tucked in a collapsed footer drawer). Each column shows up to 12 task cards sorted newest-first, each card is a chip with title, assignee monogram in startup hue, review-round dot if > 0, and an `↓` chevron that drops to the agent's town location when clicked. Drag-drop is **read-only in Phase 0** — the columns reflect state, the operator drives change via possess/directive, not by dragging cards. With no startup selected, the main area shows a welcome card containing a one-line positioning sentence and the same `+ New Startup` CTA.
+- **Main area**: detail view of the selected startup. **Header band**: full goal, budget bar with `$spent / $cap` in monospace, agent count (active / total), last system-event timestamp, "Open town →" CTA. **Body — kanban**: five columns titled `proposed`, `queued`, `in_progress`, `awaiting_review`, `done` (failed tasks tucked in a collapsed footer drawer). Each column shows up to 12 task cards sorted newest-first, each card is a chip with title, assignee monogram in startup hue, review-round dot if > 0, and an `↓` chevron that drops to the agent's town location when clicked.
+- **Kanban drag-drop — operator manager-bypass only**. The operator may drag a card to perform exactly these transitions, each of which is recorded in `audit_trail` with `actor = 'operator'`:
+  - `proposed → queued` — equivalent to `accept_proposal`; drop opens a small assignment popover (pick an agent of the relevant role, optional `required_room`).
+  - `proposed → failed` — equivalent to `reject_proposal`; drop opens a one-line reason input.
+  - `awaiting_review → done` — operator force-accept, bypassing the manager's CLI evaluation. Audit row tagged `force_accept`.
+  - `* → failed` — operator force-fail with a required note.
+  Transitions the operator may **not** drag — these stay agent-driven so the spatial / agentic discipline holds:
+  - `queued → in_progress` (assignee picks up via the world scheduler)
+  - `in_progress → awaiting_review` (only the CLI's `task_done` MCP call triggers this; otherwise invariant 5 is bypassable and Phase 0 ship gate is meaningless)
+  Card chevrons remain navigation; drag is the one new gesture.
+- **Kanban — stuck-task indicator**. Each card carries a left edge bar that fills with severity-color over time spent in the current column: amber after 5 minutes, red after 30 minutes (configurable in `cliptown.toml [kanban] stuck_warn_minutes`, `stuck_alert_minutes`). Hovering the card shows "in this column for N minutes". This is the operator's at-a-glance "what is blocked?" without diving into any one startup's town.
+- With no startup selected, the main area shows a welcome card containing a one-line positioning sentence and the same `+ New Startup` CTA.
 - **First-run main area** (operator has never created a startup): replaces the empty welcome with a **gallery of 3–4 templated example startups** ("Build a docs site for the SDK", "Run market research on competitors", "Automate first-line customer support", "Draft a launch announcement"). Each card is a one-click claim that pre-fills the goal field; a `Start blank` card sits alongside them. Choosing any card immediately spawns the startup and redirects to its `/town/:id` so the first emotional beat is watching agents walk into the suite.
 - **`+ New Startup` modal — backend selector** drives off the `BackendCatalog` (§3.1). Available backends are radio-selectable per-agent-role with a default suggestion (founder = `claude_code`, engineer = whatever's first available, designer = same). Disabled backends show with a strikethrough and an inline install hint copied from the catalog. Operator may not advance the modal if any required role has no available backend.
 
@@ -451,8 +466,10 @@ Each spawned CLI gets a stdio MCP connection to the world, scoped to that one ag
 | `task_done` | `{ task_id, artifact_path }` | Assignee only. World re-validates path. |
 | `task_failed` | `{ task_id, reason }` | Assignee only. |
 | `subtask_create` | `{ parent_id, title, description, assignee_agent_id, required_room? }` | **Any agent**. If caller is the manager of `parent_id`, the new task starts at `queued`. If caller is a non-manager, the new task starts at `proposed`, `assignee_agent_id` is ignored (set to `null`), and the manager receives a `subtask_proposed` event. |
-| `accept_proposal` | `{ task_id, assignee_agent_id, required_room? }` | Manager only. Transitions `proposed → queued` and assigns. |
-| `reject_proposal` | `{ task_id, reason }` | Manager only. Transitions `proposed → failed { reason: "proposal_rejected", note: <reason> }`. |
+| `accept_proposal` | `{ task_id, assignee_agent_id, required_room? }` | Manager **or operator**. Transitions `proposed → queued` and assigns. Operator-issued calls land via `/ws/console` (kanban drop) and are recorded with `actor = 'operator'` in `audit_trail`. |
+| `reject_proposal` | `{ task_id, reason }` | Manager **or operator**. Transitions `proposed → failed { reason: "proposal_rejected", note: <reason> }`. |
+| `operator_force_accept` | `{ task_id }` | **Operator only** (via `/ws/console`, never an MCP call). Transitions `awaiting_review → done` with `audit_trail` tagged `force_accept`. The agent-side `task_done` and review evidence remain in the record; the operator override is additional, not replacement. |
+| `operator_force_fail` | `{ task_id, note }` | **Operator only** (via `/ws/console`). Transitions any non-terminal state to `failed`. `note` is required. |
 | `task_accept` | `{ task_id }` | Manager of that task. Transitions `awaiting_review → done`. |
 | `task_request_changes` | `{ task_id, feedback, in_response_to_round }` | Manager of that task. |
 | `hypothesis_state` | `{ task_id, id, claim, rationale }` | Assignee. Appended to `epistemic_log`. |
