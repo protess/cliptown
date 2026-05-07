@@ -8,7 +8,7 @@
  * Phase 0 / M4.8 — possession is detected by the presence of the operator
  * avatar (`__operator__`) in `state.avatars`, mirroring M1.12 cmd_console.
  */
-import { useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { useWorld } from "../hooks/useWorld.js";
 
@@ -51,6 +51,17 @@ export function TownTopBar({ startupId }: { startupId: string }) {
     }
     setTimeout(() => setBusy(false), 250);
   };
+
+  // M4.13 — global keymap `p` fires the same toggle. Use a ref so we always
+  // call the latest closure without re-binding the listener on every render.
+  const toggleRef = useRef(togglePossess);
+  toggleRef.current = togglePossess;
+  useEffect(() => {
+    const onToggle = () => toggleRef.current();
+    window.addEventListener("cliptown:possess-toggle", onToggle);
+    return () =>
+      window.removeEventListener("cliptown:possess-toggle", onToggle);
+  }, []);
 
   const hue = hueFor(startupId);
   const spent = s?.budget_spent_usd ?? 0;

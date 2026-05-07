@@ -42,6 +42,25 @@ export function TopBar() {
     if (tickIdx >= recent.length) setTickIdx(0);
   }, [recent.length, tickIdx]);
 
+  // M4.13 — global keymap "/" opens the New Startup modal as a Phase-0
+  // search stand-in.
+  useEffect(() => {
+    const onOpen = () => setNewStartupOpen(true);
+    window.addEventListener("cliptown:new-startup", onOpen);
+    return () => window.removeEventListener("cliptown:new-startup", onOpen);
+  }, []);
+
+  // M4.13 — Escape dismisses any open menu/modal hosted here.
+  useEffect(() => {
+    const onDismiss = () => {
+      setMenuOpen(false);
+      setHistoryOpen(false);
+      setNewStartupOpen(false);
+    };
+    window.addEventListener("cliptown:dismiss", onDismiss);
+    return () => window.removeEventListener("cliptown:dismiss", onDismiss);
+  }, []);
+
   const recheck = async () => {
     setRecheckBusy(true);
     setMenuOpen(false);

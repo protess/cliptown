@@ -80,6 +80,18 @@ export function ChatPanel({ selectedAgentId }: ChatPanelProps = {}) {
     }
   }, [open, visible.length]);
 
+  // M4.13 — global keymap `c` opens the panel; Escape closes it.
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    const onDismiss = () => setOpen(false);
+    window.addEventListener("cliptown:chat-open", onOpen);
+    window.addEventListener("cliptown:dismiss", onDismiss);
+    return () => {
+      window.removeEventListener("cliptown:chat-open", onOpen);
+      window.removeEventListener("cliptown:dismiss", onDismiss);
+    };
+  }, []);
+
   const submit = () => {
     const body = draft.trim();
     if (!body || !possessing) return;

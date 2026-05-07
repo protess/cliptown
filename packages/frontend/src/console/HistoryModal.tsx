@@ -3,8 +3,12 @@
  *
  * Phase 0 / M4.3 — bound to the in-memory store cap (MAX_SYSTEM_EVENTS in
  * store.ts). Closes on backdrop click and on the explicit close button.
+ *
+ * M4.13 — also closes on the `cliptown:dismiss` event so the global Esc
+ * handler can dismiss it without prop drilling.
  */
 
+import { useEffect } from "react";
 import type { SystemEventVM } from "../store.js";
 
 export function HistoryModal({
@@ -14,6 +18,12 @@ export function HistoryModal({
   events: SystemEventVM[];
   onClose: () => void;
 }) {
+  useEffect(() => {
+    const onDismiss = () => onClose();
+    window.addEventListener("cliptown:dismiss", onDismiss);
+    return () => window.removeEventListener("cliptown:dismiss", onDismiss);
+  }, [onClose]);
+
   return (
     <div
       onClick={onClose}

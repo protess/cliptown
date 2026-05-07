@@ -49,13 +49,21 @@ export function AgentPopover({ agentId, anchorX, anchorY, onClose }: AgentPopove
       (t.status === "in_progress" || t.status === "queued"),
   );
 
-  // Close on Escape.
+  // Close on Escape (kept as a local belt-and-suspenders even though the
+  // global keymap dispatches `cliptown:dismiss`; the directive input grabs
+  // focus, so suppressing global handling there means we still need a local
+  // path for the in-input Escape).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
+    const onDismiss = () => onClose();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("cliptown:dismiss", onDismiss);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("cliptown:dismiss", onDismiss);
+    };
   }, [onClose]);
 
   const sendDirective = () => {

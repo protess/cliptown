@@ -12,7 +12,7 @@
  * `available` and `install_hint` here.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWorld } from "../hooks/useWorld.js";
@@ -77,6 +77,13 @@ export function NewStartupModal({ onClose }: { onClose: () => void }) {
     designer: initialBackend,
   });
   const [submitting, setSubmitting] = useState(false);
+
+  // M4.13 — dismiss on the global Esc event.
+  useEffect(() => {
+    const onDismiss = () => onClose();
+    window.addEventListener("cliptown:dismiss", onDismiss);
+    return () => window.removeEventListener("cliptown:dismiss", onDismiss);
+  }, [onClose]);
 
   const onPickTemplate = (t: Template | null) => {
     setTpl(t);

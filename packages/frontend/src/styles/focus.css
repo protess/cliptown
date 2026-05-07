@@ -1,0 +1,13 @@
+/* Phase 0 / M4.13 — visible focus rings on keyboard-focused elements.
+ * Uses :focus-visible so mouse clicks don't paint an outline on buttons. */
+*:focus-visible {
+  outline: 2px solid #2A9D8F;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+button:focus-visible,
+[role="button"]:focus-visible,
+a:focus-visible {
+  outline-color: #1A1A1A;
+}
