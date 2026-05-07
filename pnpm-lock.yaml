@@ -20,6 +20,16 @@ importers:
       '@cliptown/adapter-core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.39
+      typescript:
+        specifier: ^5.5
+        version: 5.9.3
+      vitest:
+        specifier: ^2
+        version: 2.1.9(@types/node@20.19.39)
 
   packages/adapters/codex:
     dependencies:
