@@ -3,5 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "scripts": { "build": "echo no-op", "test": "echo no-op" }
+  "scripts": { "build": "echo no-op", "test": "echo no-op" },
+  "dependencies": {
+    "@cliptown/adapter-core": "workspace:*"
+  }
 }

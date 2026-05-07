@@ -16,6 +16,7 @@
     "vitest": "^2"
   },
   "dependencies": {
+    "@cliptown/adapter-core": "workspace:*",
     "ws": "^8.20.0"
   }
 }

@@ -15,11 +15,35 @@ importers:
         specifier: ^1
         version: 1.59.1
 
-  packages/adapters/claude-code: {}
+  packages/adapters/claude-code:
+    dependencies:
+      '@cliptown/adapter-core':
+        specifier: workspace:*
+        version: link:../core
 
-  packages/adapters/codex: {}
+  packages/adapters/codex:
+    dependencies:
+      '@cliptown/adapter-core':
+        specifier: workspace:*
+        version: link:../core
 
-  packages/adapters/opencode: {}
+  packages/adapters/core:
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.39
+      typescript:
+        specifier: ^5.5
+        version: 5.9.3
+      vitest:
+        specifier: ^2
+        version: 2.1.9(@types/node@20.19.39)
+
+  packages/adapters/opencode:
+    dependencies:
+      '@cliptown/adapter-core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/frontend: {}
 
@@ -27,6 +51,9 @@ importers:
 
   packages/worker:
     dependencies:
+      '@cliptown/adapter-core':
+        specifier: workspace:*
+        version: link:../adapters/core
       ws:
         specifier: ^8.20.0
         version: 8.20.0
