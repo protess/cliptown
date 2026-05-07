@@ -1,7 +1,8 @@
 use axum::{
-    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, State},
-    response::{Json, Response},
-    routing::{get, post},
+    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, Path, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Json, Response},
+    routing::{get, patch, post},
     Router,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -23,9 +24,60 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(|| async { Json(json!({"ok": true})) }))
         .route("/api/backend-catalog", get(api_catalog))
         .route("/api/backend-catalog/recheck", post(api_recheck))
+        .route("/api/startups/:id", patch(patch_startup))
         .route("/ws/console", get(ws_console))
         .route("/ws/worker", get(ws_worker))
         .with_state(Arc::new(state))
+}
+
+/// Operator endpoint for raising/lowering a startup's budget cap. Auto-resume
+/// after a 100% pause is implicit: `budget::newly_crossed` only trips on
+/// transitions, so raising the cap above current spend prevents subsequent
+/// `report_budget` reports from re-tripping the 100% threshold.
+async fn patch_startup(
+    Path(id): Path<String>,
+    State(s): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    // Operator token may arrive as `Authorization: Bearer <tok>` or as the
+    // bare `X-Operator-Token: <tok>` header — accept either to match the
+    // console hello path's tolerance.
+    let tok = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)))
+        .or_else(|| headers.get("x-operator-token").and_then(|v| v.to_str().ok()))
+        .unwrap_or("");
+    if crate::auth::validate_operator_token(&s.pool, tok).await.is_err() {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"unauthorized"}))).into_response();
+    }
+    let new_cap = match body.get("budget_cap_usd").and_then(|v| v.as_f64()) {
+        Some(v) if v >= 0.0 => v,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"missing or invalid budget_cap_usd"})),
+            )
+                .into_response();
+        }
+    };
+    let r = sqlx::query("UPDATE startups SET budget_cap_usd = ? WHERE id = ?")
+        .bind(new_cap)
+        .bind(&id)
+        .execute(&s.pool)
+        .await;
+    match r {
+        Ok(res) if res.rows_affected() == 0 => {
+            (StatusCode::NOT_FOUND, Json(json!({"error":"startup not found"}))).into_response()
+        }
+        Ok(_) => Json(json!({"ok": true, "id": id, "budget_cap_usd": new_cap})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 async fn api_catalog(State(s): State<Arc<AppState>>) -> Json<serde_json::Value> {

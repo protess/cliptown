@@ -1,7 +1,7 @@
 //! Worker-side command dispatcher. Handles `WorkerInbound` messages from the
-//! agent CLIs. Wired in M1.13: only `MoveIntent` is fully handled; other
-//! variants are stubbed and reply with a generic `ok` so the WS round-trip
-//! still completes during Phase 0 development.
+//! agent CLIs. M1.13 wired `MoveIntent`; M1.15 wires `ReportBudget` (cost
+//! tracking + 80/95/100 thresholds + pause-all). Other variants remain stubbed
+//! so the WS round-trip still completes during Phase 0 development.
 
 use crate::move_sys::{self, PathStore, StartMoveResult};
 use crate::path::RoomGraph;
@@ -9,6 +9,7 @@ use crate::protocol::WorkerInbound;
 use crate::seed::TownLayout;
 use crate::state::WorldView;
 use serde_json::json;
+use sqlx::SqlitePool;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
@@ -18,6 +19,7 @@ pub async fn dispatch(
     layout: &TownLayout,
     graph: &RoomGraph,
     out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
+    pool: &SqlitePool,
     agent_id: &str,
     msg: serde_json::Value,
 ) -> serde_json::Value {
@@ -27,6 +29,48 @@ pub async fn dispatch(
     };
     match inbound {
         WorkerInbound::Hello { .. } => json!({"type":"ok","kind":"hello"}),
+        WorkerInbound::ReportBudget { in_tokens, out_tokens, model_id, task_id, .. } => {
+            let startup_id = match world.avatars.get(agent_id) {
+                Some(a) => a.startup_id.clone(),
+                None => return json!({"type":"error","reason":"unknown_agent"}),
+            };
+            match crate::budget::apply_report(
+                pool,
+                &startup_id,
+                agent_id,
+                task_id.as_deref(),
+                &model_id,
+                in_tokens,
+                out_tokens,
+            )
+            .await
+            {
+                Ok((new_spent, cap, threshold)) => {
+                    if let Some(t) = threshold {
+                        if let Err(e) = crate::budget::record_threshold_event(
+                            pool,
+                            &startup_id,
+                            t,
+                            new_spent,
+                            cap,
+                        )
+                        .await
+                        {
+                            tracing::warn!(error = %e, "record_threshold_event failed");
+                        }
+                        if matches!(t, crate::budget::Threshold::Pause100) {
+                            crate::budget::pause_startup(world, out_bus, &startup_id);
+                        }
+                        // Console toast plumbing for warn80/warn95 lives in M2
+                        // (system_event broadcast). The system_events row above
+                        // is the durable record; the console event feed will
+                        // surface it.
+                    }
+                    json!({"type":"ok","kind":"report_budget","spent_usd":new_spent,"cap_usd":cap})
+                }
+                Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
+            }
+        }
         WorkerInbound::MoveIntent { target_room, target_x, target_y, .. } => {
             let r = move_sys::start_move(
                 world, paths, layout, graph, agent_id, &target_room, target_x, target_y,

@@ -88,7 +88,7 @@ pub fn spawn_with_layout(
                 }
                 Cmd::HandleWorkerMsg { agent_id, msg, reply } => {
                     let result = crate::cmd_worker::dispatch(
-                        &mut w, &mut paths, &layout, &graph, &out_bus, &agent_id, msg,
+                        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, &agent_id, msg,
                     )
                     .await;
                     let _ = view_tx.send(w.clone());

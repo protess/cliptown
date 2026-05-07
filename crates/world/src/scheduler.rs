@@ -104,6 +104,24 @@ pub async fn tick(
             }
         }
 
+        // Budget gate (M1.15): refuse new dispatches once spend ≥ 95% of cap.
+        // The 100% threshold issues a `Pause` to all of the startup's workers
+        // (see `budget::pause_startup`), but Phase 0 doesn't ack a Pause back
+        // to the world; the gate here is what keeps queued tasks from being
+        // handed to a worker that's already supposed to be paused.
+        let budget: Result<(f64, f64), _> = sqlx::query_as(
+            "SELECT budget_spent_usd, budget_cap_usd FROM startups \
+             WHERE id = (SELECT startup_id FROM agents WHERE id = ?)",
+        )
+        .bind(&agent_id)
+        .fetch_one(pool)
+        .await;
+        if let Ok((spent, cap)) = budget {
+            if cap > 0.0 && spent / cap >= 0.95 {
+                continue;
+            }
+        }
+
         // Agent is idle and (if required) already in the right room.
         // Transition the task and notify the worker.
         let r = sqlx::query(
