@@ -234,6 +234,47 @@ async fn dispatched_task_writes_audit_trail() {
 }
 
 #[tokio::test]
+async fn unreachable_required_room_logs_warn_and_skips_dispatch() {
+    // Agent a1 belongs to s1, but the task requires entering suite_2 — which
+    // we mark private to s2. `move_sys::start_move` returns PermissionDenied;
+    // the scheduler logs a warn and skips dispatch. Task remains queued and
+    // no path is created.
+    let (mut w, mut paths, mut layout, graph, out_bus, pool, _dir) = fixture().await;
+    // Mark suite_2 as private to s2 in the in-memory layout. (default_town()
+    // seeds private_to_startup_id = None for every room.)
+    if let Some(r) = layout.rooms.iter_mut().find(|r| r.id == "suite_2") {
+        r.private_to_startup_id = Some("s2".to_string());
+    }
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s2', 'beta', 'goal', 10.0, 'town_default', '/tmp/s2', 'active', unixepoch())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, required_room, created_at, updated_at) \
+         VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', 'suite_2', unixepoch(), unixepoch())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    assert_eq!(n, 0);
+    assert!(
+        !paths.contains_key("a1"),
+        "no path should be created when start_move returns PermissionDenied"
+    );
+
+    let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(s.0, "queued");
+}
+
+#[tokio::test]
 async fn queued_without_assignee_is_ignored() {
     // Task is queued but has no assignee. Scheduler should not pick it up.
     let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;

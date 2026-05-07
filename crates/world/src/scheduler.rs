@@ -77,10 +77,28 @@ pub async fn tick(
         // arrival, where status returns to idle) will retry.
         if let Some(room) = task.required_room.as_deref() {
             if avatar_room != room {
+                // If a path is already in flight for this agent, let
+                // `step_all` finish it; don't recompute A* every tick.
+                // The agent's status stays "idle" during transit, so without
+                // this short-circuit we'd re-enter this branch each tick.
+                if paths.contains_key(&agent_id) {
+                    continue;
+                }
                 if let Some((cx, cy)) = pick_room_center(layout, room) {
-                    let _ = move_sys::start_move(
+                    match move_sys::start_move(
                         world, paths, layout, graph, &agent_id, room, cx, cy,
-                    );
+                    ) {
+                        move_sys::StartMoveResult::Ok => {}
+                        other => {
+                            tracing::warn!(
+                                task_id = %task.id,
+                                agent_id = %agent_id,
+                                room = %room,
+                                result = ?other,
+                                "scheduler: cannot route to required_room"
+                            );
+                        }
+                    }
                 }
                 continue;
             }
