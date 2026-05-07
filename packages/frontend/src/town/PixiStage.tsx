@@ -22,6 +22,13 @@ import {
   buildAvatarSprite, updateAvatarTargets, interpolatePosition,
   type AvatarSnapshot, type AvatarSprite,
 } from "./Avatars.js";
+import {
+  initialState, transitionTo, operatorAlpha, cameraScale,
+  POSSESS_DURATION_MS,
+  type PossessState,
+} from "./possess.js";
+
+const OPERATOR_AVATAR_ID = "__operator__";
 
 interface PixiStageProps {
   startupId: string;
@@ -33,6 +40,9 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
   const appRef = useRef<Application | null>(null);
   const spritesRef = useRef<Map<string, AvatarSprite>>(new Map());
   const avatarLayerRef = useRef<Container | null>(null);
+  const worldRootRef = useRef<Container | null>(null);
+  const possessRef = useRef<PossessState>(initialState());
+  const wasPossessingRef = useRef(false);
   const onClickRef = useRef(onAvatarClick);
   const { state } = useWorld();
 
@@ -58,12 +68,22 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
       .then(() => {
         if (cancelled) return;
         hostRef.current?.appendChild(app.canvas);
-        drawTown(app);
+
+        // worldRoot is the container we scale for the possess camera ease.
+        // Pivot + position are pinned to town-center so the scale grows from
+        // the middle of the canvas instead of the top-left corner.
+        const worldRoot = new Container();
+        worldRoot.pivot.set(TOWN_W / 2, TOWN_H / 2);
+        worldRoot.position.set(TOWN_W / 2, TOWN_H / 2);
+        app.stage.addChild(worldRoot);
+        worldRootRef.current = worldRoot;
+
+        drawTown(worldRoot);
         const layer = new Container();
-        app.stage.addChild(layer);
+        worldRoot.addChild(layer);
         avatarLayerRef.current = layer;
 
-        // Animation loop: lerp each avatar toward its target.
+        // Animation loop: lerp each avatar + drive the possess transition.
         app.ticker.add(() => {
           const now = performance.now();
           for (const s of spritesRef.current.values()) {
@@ -73,6 +93,40 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
               ty * TILE + TILE / 2,
             );
           }
+
+          // Advance the possess phase machine when its window has elapsed:
+          //   in  → settled  (operator stays at full alpha)
+          //   out → idle     (operator alpha is now 0; tear the sprite down).
+          const ps = possessRef.current;
+          if (ps.phase === "in" || ps.phase === "out") {
+            if (now - ps.startMs >= POSSESS_DURATION_MS) {
+              const next: PossessState["phase"] =
+                ps.phase === "in" ? "settled" : "idle";
+              possessRef.current = transitionTo(ps, next, now);
+              // After "out" finishes, the operator sprite has alpha 0 and is
+              // no longer in `state.avatars`; the avatar-sync effect held it
+              // through the fade, so clean it up here.
+              if (next === "idle") {
+                const op = spritesRef.current.get(OPERATOR_AVATAR_ID);
+                const layer = avatarLayerRef.current;
+                if (op && layer) {
+                  layer.removeChild(op.container);
+                  op.container.destroy({ children: true });
+                  spritesRef.current.delete(OPERATOR_AVATAR_ID);
+                }
+              }
+            }
+          }
+
+          // Apply alpha to the operator sprite (if present).
+          const opSprite = spritesRef.current.get(OPERATOR_AVATAR_ID);
+          if (opSprite) {
+            opSprite.container.alpha = operatorAlpha(possessRef.current, now);
+          }
+
+          // Apply camera scale to the world container.
+          const root = worldRootRef.current;
+          if (root) root.scale.set(cameraScale(possessRef.current, now));
         });
       })
       .catch(() => {
@@ -89,6 +143,9 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
       appRef.current = null;
       spritesRef.current.clear();
       avatarLayerRef.current = null;
+      worldRootRef.current = null;
+      possessRef.current = initialState();
+      wasPossessingRef.current = false;
     };
   }, []);
 
@@ -97,7 +154,7 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
     const layer = avatarLayerRef.current;
     if (!layer) return;
     const ours = Object.values(state.avatars).filter(
-      (a) => a.startup_id === startupId || a.agent_id === "__operator__",
+      (a) => a.startup_id === startupId || a.agent_id === OPERATOR_AVATAR_ID,
     );
     const seen = new Set<string>();
     for (const raw of ours) {
@@ -116,17 +173,37 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
           const r = canvas?.getBoundingClientRect();
           cb(id, (r?.left ?? 0) + gx, (r?.top ?? 0) + gy);
         });
+        // Operator avatars start invisible; the "in" transition fades them up.
+        if (a.agent_id === OPERATOR_AVATAR_ID) {
+          sprite.container.alpha = 0;
+        }
         spritesRef.current.set(a.agent_id, sprite);
         layer.addChild(sprite.container);
       }
     }
+
+    // Drive the possess lifecycle from operator-avatar presence:
+    //   absent → present  ⇒ start "in"
+    //   present → absent  ⇒ start "out"  (sprite removal is gated below).
+    const isPossessing = OPERATOR_AVATAR_ID in state.avatars;
+    if (isPossessing && !wasPossessingRef.current) {
+      possessRef.current = transitionTo(possessRef.current, "in", performance.now());
+    } else if (!isPossessing && wasPossessingRef.current) {
+      possessRef.current = transitionTo(possessRef.current, "out", performance.now());
+    }
+    wasPossessingRef.current = isPossessing;
+
     // Remove stale avatars (despawned, switched startups, etc.).
+    // The operator sprite is held through the "out" fade — the ticker tears
+    // it down once the phase reaches "idle".
     for (const [id, sprite] of spritesRef.current.entries()) {
-      if (!seen.has(id)) {
-        layer.removeChild(sprite.container);
-        sprite.container.destroy({ children: true });
-        spritesRef.current.delete(id);
+      if (seen.has(id)) continue;
+      if (id === OPERATOR_AVATAR_ID && possessRef.current.phase !== "idle") {
+        continue;
       }
+      layer.removeChild(sprite.container);
+      sprite.container.destroy({ children: true });
+      spritesRef.current.delete(id);
     }
   }, [state.avatars, startupId]);
 
@@ -138,10 +215,10 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
   );
 }
 
-function drawTown(app: Application): void {
+function drawTown(parent: Container): void {
   const bg = new Graphics();
   bg.rect(0, 0, TOWN_W, TOWN_H).fill(0xFAFAFA);
-  app.stage.addChild(bg);
+  parent.addChild(bg);
 
   for (const r of ROOMS) {
     const rect = roomRect(r);
@@ -150,7 +227,7 @@ function drawTown(app: Application): void {
       .rect(rect.x, rect.y, rect.w, rect.h)
       .fill(ROOM_COLORS[r.type])
       .stroke({ color: FLOOR_BORDER, width: 1 });
-    app.stage.addChild(room);
+    parent.addChild(room);
   }
 
   // Phase 0 simplification: explicit walls aren't drawn — the per-room border
@@ -162,7 +239,7 @@ function drawTown(app: Application): void {
       .rect(d.tile[0] * TILE, d.tile[1] * TILE, TILE, TILE)
       .fill(0xFAFAFA)
       .stroke({ color: 0x2A9D8F, width: 1 });
-    app.stage.addChild(door);
+    parent.addChild(door);
   }
 }
 
