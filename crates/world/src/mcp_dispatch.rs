@@ -232,6 +232,15 @@ fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, (String, Strin
         .ok_or_else(|| ("bad_args".to_string(), format!("{key} required")))
 }
 
+/// Public rooms (spec invariant 7): lobby, cafe, library are shared social
+/// spaces where chat broadcasts cross startup boundaries. Suites remain
+/// private (same-startup-only). Phase 0 keeps this list inline; Phase 1 may
+/// derive it from `rooms.type` (`social`/`transit`/`focus`) or an explicit
+/// `is_public` column.
+fn is_public_room(room_id: &str) -> bool {
+    matches!(room_id, "lobby" | "cafe" | "library")
+}
+
 // ── handlers ────────────────────────────────────────────────────────────────
 
 async fn handle_move_intent(
@@ -383,23 +392,28 @@ async fn handle_speak(
     .map_err(|e| ("sql".to_string(), e.to_string()))?;
 
     if kind == "chat" {
-        // Fan to every same-startup peer in the same room. Spec §5.4:
-        // chat is room-scoped, not org-scoped. Cross-startup peers in a
-        // common room will hear nothing in Phase 0 because we keep the
-        // startup_id filter; that simplification is intentional.
+        // Spec invariant 7: chat is room-scoped, not org-scoped, and public
+        // rooms (lobby/cafe/library) fan across startups so visitors can
+        // overhear each other. Private suites stay same-startup-only.
+        let public = is_public_room(&caller.room_id);
         for (peer_id, peer) in &world.avatars {
             if peer_id == &caller.agent_id {
                 continue;
             }
-            if peer.room_id == caller.room_id && peer.startup_id == caller.startup_id {
-                if let Some(tx) = out_bus.get(peer_id) {
-                    let _ = tx.try_send(json!({
-                        "type":"chat_received","v":1,
-                        "from_agent_id":caller.agent_id,
-                        "body":body,
-                        "room_id":caller.room_id
-                    }));
-                }
+            if peer.room_id != caller.room_id {
+                continue;
+            }
+            let same_startup = peer.startup_id == caller.startup_id;
+            if !(same_startup || public) {
+                continue;
+            }
+            if let Some(tx) = out_bus.get(peer_id) {
+                let _ = tx.try_send(json!({
+                    "type":"chat_received","v":1,
+                    "from_agent_id":caller.agent_id,
+                    "body":body,
+                    "room_id":caller.room_id
+                }));
             }
         }
     } else if let Some(rid) = to_agent_id.as_deref() {
