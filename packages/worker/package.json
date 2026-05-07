@@ -18,6 +18,8 @@
   "dependencies": {
     "@cliptown/adapter-core": "workspace:*",
     "@cliptown/adapter-claude-code": "workspace:*",
+    "@cliptown/adapter-codex": "workspace:*",
+    "@cliptown/adapter-opencode": "workspace:*",
     "ws": "^8.20.0"
   }
 }

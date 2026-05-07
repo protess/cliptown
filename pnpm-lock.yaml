@@ -116,9 +116,15 @@ importers:
       '@cliptown/adapter-claude-code':
         specifier: workspace:*
         version: link:../adapters/claude-code
+      '@cliptown/adapter-codex':
+        specifier: workspace:*
+        version: link:../adapters/codex
       '@cliptown/adapter-core':
         specifier: workspace:*
         version: link:../adapters/core
+      '@cliptown/adapter-opencode':
+        specifier: workspace:*
+        version: link:../adapters/opencode
       ws:
         specifier: ^8.20.0
         version: 8.20.0

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { claudeCodeAdapter } from "@cliptown/adapter-claude-code";
-import type { HookEvent } from "@cliptown/adapter-core";
+import { codexAdapter } from "@cliptown/adapter-codex";
+import { opencodeAdapter } from "@cliptown/adapter-opencode";
+import type { BackendAdapter, HookEvent } from "@cliptown/adapter-core";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -72,5 +74,38 @@ describe("M3.3 adapter contract — claudeCodeAdapter end-to-end via fixture CLI
     const exit = await spawned.wait();
     expect(exit.exit_code).toBe(0);
     expect(stderr).not.toMatch(/mcp/i); // fixture doesn't reference MCP at all
+  });
+});
+
+/**
+ * M8.3 cross-adapter contract — extends M3.3 across all 3 backend adapters.
+ *
+ * Phase 0 simplification: the fixture-cli at packages/worker/bin/fixture-cli
+ * only knows Claude Code's settings.json hook shape. codex/opencode use
+ * different hook protocols (TODO M9+), so for those adapters this test asserts
+ * the BackendAdapter contract surface (id, capabilities, spawn) rather than
+ * driving an end-to-end hook cycle. The claude-code end-to-end coverage above
+ * already exercises the shared bridge that all three adapters use.
+ */
+describe("M8.3 cross-adapter shape", () => {
+  const cases: Array<{ label: BackendAdapter["id"]; adapter: BackendAdapter }> = [
+    { label: "claude_code", adapter: claudeCodeAdapter },
+    { label: "codex", adapter: codexAdapter },
+    { label: "opencode", adapter: opencodeAdapter },
+  ];
+
+  it.each(cases)("$label adapter exposes id + capabilities + spawn", ({ label, adapter }) => {
+    expect(adapter.id).toBe(label);
+    expect(typeof adapter.spawn).toBe("function");
+    expect(Array.isArray(adapter.capabilities.hooks)).toBe(true);
+    expect(adapter.capabilities.hooks).toContain("session_stop");
+    expect(adapter.capabilities.hooks).toContain("session_error");
+    expect(typeof adapter.capabilities.inject_context).toBe("boolean");
+    expect(typeof adapter.capabilities.block_on_stop).toBe("boolean");
+  });
+
+  it("all three adapter ids are unique and cover the agents.backend enum", () => {
+    const ids = cases.map((c) => c.adapter.id).sort();
+    expect(ids).toEqual(["claude_code", "codex", "opencode"]);
   });
 });
