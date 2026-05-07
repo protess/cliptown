@@ -142,19 +142,19 @@ impl AgentSupervisor {
             // Was this exit caused by dissolve_startup? If so, suppress respawn.
             if self.take_tombstone(&cfg.agent_id).await {
                 self.remove_agent(&cfg.agent_id).await;
-                tracing::info!(agent_id = %cfg.agent_id, "worker terminated by dissolve");
+                tracing::info!(component = "agent_supervisor", agent_id = %cfg.agent_id, "worker terminated by dissolve");
                 return;
             }
 
             let succeeded = matches!(&exit_status, Ok(s) if s.success());
             if succeeded {
                 self.remove_agent(&cfg.agent_id).await;
-                tracing::info!(agent_id = %cfg.agent_id, "worker exited cleanly");
+                tracing::info!(component = "agent_supervisor", agent_id = %cfg.agent_id, "worker exited cleanly");
                 return;
             }
 
             failures += 1;
-            tracing::warn!(
+            tracing::warn!(component = "agent_supervisor",
                 agent_id = %cfg.agent_id,
                 failure = failures,
                 "worker crashed; will retry after backoff"
@@ -179,14 +179,14 @@ impl AgentSupervisor {
             // If dissolve raced during the backoff sleep, honor the tombstone.
             if self.take_tombstone(&cfg.agent_id).await {
                 self.remove_agent(&cfg.agent_id).await;
-                tracing::info!(agent_id = %cfg.agent_id, "respawn cancelled by dissolve");
+                tracing::info!(component = "agent_supervisor", agent_id = %cfg.agent_id, "respawn cancelled by dissolve");
                 return;
             }
 
             let new_child = match self.spawn_child(&cfg) {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!(agent_id = %cfg.agent_id, error = %e, "respawn failed");
+                    tracing::error!(component = "agent_supervisor", agent_id = %cfg.agent_id, error = %e, "respawn failed");
                     continue;
                 }
             };

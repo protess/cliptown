@@ -55,7 +55,7 @@ pub fn cost_usd(model_id: &str, in_tokens: u64, out_tokens: u64) -> f64 {
     let (in_p, out_p) = match price_per_mtok(model_id) {
         Some(p) => p,
         None => {
-            tracing::warn!(model_id = %model_id, "unknown model pricing; treating as $0");
+            tracing::warn!(component = "budget", model_id = %model_id, "unknown model pricing; treating as $0");
             (0.0, 0.0)
         }
     };
@@ -143,7 +143,7 @@ pub async fn apply_report(
     {
         // Map anyhow → sqlx::Error path is awkward; surface as RowNotFound is
         // wrong, so log and continue. The spend update above already committed.
-        tracing::warn!(error = %e, startup_id = %startup_id, "record_budget_event failed");
+        tracing::warn!(component = "budget", error = %e, startup_id = %startup_id, "record_budget_event failed");
     }
 
     let threshold = newly_crossed(prev_spent, new_spent, cap);
@@ -172,7 +172,7 @@ pub fn pause_startup(
             if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
                 tx.try_send(payload.clone())
             {
-                tracing::warn!(agent_id = %agent_id, "out_bus full, dropping pause");
+                tracing::warn!(component = "budget", agent_id = %agent_id, "out_bus full, dropping pause");
             }
             sent += 1;
         }
@@ -205,7 +205,7 @@ pub fn warn_startup(
             if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
                 tx.try_send(payload.clone())
             {
-                tracing::warn!(agent_id = %agent_id, "out_bus full, dropping budget_warning");
+                tracing::warn!(component = "budget", agent_id = %agent_id, "out_bus full, dropping budget_warning");
             }
             sent += 1;
         }

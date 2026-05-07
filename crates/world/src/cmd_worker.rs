@@ -66,7 +66,7 @@ pub async fn dispatch(
                         )
                         .await
                         {
-                            tracing::warn!(error = %e, "record_threshold_event failed");
+                            tracing::warn!(component = "cmd_worker", error = %e, "record_threshold_event failed");
                         }
                         match t {
                             crate::budget::Threshold::Warn80
@@ -113,7 +113,7 @@ pub async fn dispatch(
                         if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
                             tx.try_send(payload)
                         {
-                            tracing::warn!(agent_id = %agent_id, "out_bus full, dropping move_failed (no_path)");
+                            tracing::warn!(component = "cmd_worker", agent_id = %agent_id, "out_bus full, dropping move_failed (no_path)");
                         }
                     }
                     json!({"type":"error","reason":"no_path"})
@@ -126,7 +126,7 @@ pub async fn dispatch(
                         if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
                             tx.try_send(payload)
                         {
-                            tracing::warn!(agent_id = %agent_id, "out_bus full, dropping move_failed (no_permission)");
+                            tracing::warn!(component = "cmd_worker", agent_id = %agent_id, "out_bus full, dropping move_failed (no_permission)");
                         }
                     }
                     json!({"type":"error","reason":"no_permission"})

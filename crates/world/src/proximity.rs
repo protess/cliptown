@@ -42,7 +42,7 @@ pub fn compute_and_emit(
                     "peers": peers,
                 });
                 if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx.try_send(payload) {
-                    tracing::warn!(agent_id = %a.agent_id, "out_bus full, dropping proximity_tick");
+                    tracing::warn!(component = "proximity", agent_id = %a.agent_id, "out_bus full, dropping proximity_tick");
                 }
             }
         }

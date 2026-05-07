@@ -1,7 +1,7 @@
 use crate::move_sys::{self, MoveEvent, PathStore};
 use crate::path::RoomGraph;
 use crate::seed::TownLayout;
-use crate::state::WorldView;
+use crate::state::{AvatarView, WorldView};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -26,6 +26,29 @@ pub enum Cmd {
         agent_id: String,
     },
     BackendCatalogUpdated(HashMap<String, serde_json::Value>),
+    /// Insert freshly-provisioned avatars into the in-memory world view, and
+    /// optionally mark a suite as privately owned by a startup. Sent by
+    /// `api_startups::create_startup` after the SQL transaction commits.
+    ///
+    /// Without this, `mcp_dispatch` lookups + the scheduler can't see the new
+    /// agents, and `move_sys::can_enter_layout_room` keeps treating the
+    /// claimed suite as public (since the loop's layout was built once at
+    /// startup and never reloads from SQL).
+    InsertAvatars {
+        avatars: Vec<AvatarView>,
+        /// `(suite_id, startup_id)` — when `Some`, the layout's matching room
+        /// has its `private_to_startup_id` set. Mirrors what the SQL UPDATE
+        /// already wrote to `rooms.private_to_startup_id`.
+        claim_suite: Option<(String, String)>,
+    },
+    /// Release any suites owned by `startup_id` in the in-memory layout (set
+    /// `private_to_startup_id = None`). Mirrors `delete_startup`'s SQL
+    /// `UPDATE rooms SET private_to_startup_id = NULL WHERE
+    /// private_to_startup_id = ?` so the freed suite immediately stops
+    /// rejecting other startups in `move_sys::can_enter_layout_room`.
+    ReleaseSuite {
+        startup_id: String,
+    },
     Shutdown,
 }
 
@@ -52,6 +75,12 @@ pub fn spawn_with_layout(
     let mut w = initial;
     let mut paths: PathStore = HashMap::new();
     let mut out_bus: HashMap<String, mpsc::Sender<serde_json::Value>> = HashMap::new();
+    // `layout` is owned + `mut` so `Cmd::InsertAvatars`/`Cmd::ReleaseSuite`
+    // can flip suite ownership in lock-step with the SQL writes done by
+    // `api_startups::{create_startup,delete_startup}`. Without this, every
+    // suite stays public to `move_sys::can_enter_layout_room` for the lifetime
+    // of the process.
+    let mut layout = layout;
 
     tokio::spawn(async move {
         while let Some(cmd) = rx.recv().await {
@@ -69,7 +98,7 @@ pub fn spawn_with_layout(
                                     if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
                                         tx.try_send(payload)
                                     {
-                                        tracing::warn!(agent_id = %agent_id, "out_bus full, dropping move_complete");
+                                        tracing::warn!(component = "loop", agent_id = %agent_id, "out_bus full, dropping move_complete");
                                     }
                                 }
                             }
@@ -104,6 +133,26 @@ pub fn spawn_with_layout(
                 Cmd::BackendCatalogUpdated(c) => {
                     w.backend_catalog = c;
                     let _ = view_tx.send(w.clone());
+                }
+                Cmd::InsertAvatars { avatars, claim_suite } => {
+                    for a in avatars {
+                        w.avatars.insert(a.agent_id.clone(), a);
+                    }
+                    if let Some((suite_id, startup_id)) = claim_suite {
+                        if let Some(room) =
+                            layout.rooms.iter_mut().find(|r| r.id == suite_id)
+                        {
+                            room.private_to_startup_id = Some(startup_id);
+                        }
+                    }
+                    let _ = view_tx.send(w.clone());
+                }
+                Cmd::ReleaseSuite { startup_id } => {
+                    for room in layout.rooms.iter_mut() {
+                        if room.private_to_startup_id.as_deref() == Some(startup_id.as_str()) {
+                            room.private_to_startup_id = None;
+                        }
+                    }
                 }
                 Cmd::Shutdown => break,
             }

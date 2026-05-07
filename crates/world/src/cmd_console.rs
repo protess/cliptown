@@ -95,7 +95,7 @@ pub async fn dispatch(
                         if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
                             tx.try_send(payload)
                         {
-                            tracing::warn!(
+                            tracing::warn!(component = "cmd_console",
                                 agent_id = %to_agent_id,
                                 "out_bus full, dropping operator directive"
                             );

@@ -53,7 +53,7 @@ pub async fn tick(
     {
         Ok(rows) => rows,
         Err(e) => {
-            tracing::warn!(error = %e, "scheduler: query failed");
+            tracing::warn!(component = "scheduler", error = %e, "scheduler: query failed");
             return 0;
         }
     };
@@ -90,7 +90,7 @@ pub async fn tick(
                     ) {
                         move_sys::StartMoveResult::Ok => {}
                         other => {
-                            tracing::warn!(
+                            tracing::warn!(component = "scheduler",
                                 task_id = %task.id,
                                 agent_id = %agent_id,
                                 room = %room,
@@ -131,7 +131,7 @@ pub async fn tick(
         .execute(pool)
         .await;
         if let Err(e) = r {
-            tracing::warn!(task_id = %task.id, error = %e, "scheduler: status update failed");
+            tracing::warn!(component = "scheduler", task_id = %task.id, error = %e, "scheduler: status update failed");
             continue;
         }
 
@@ -169,7 +169,7 @@ pub async fn tick(
             let payload_json = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
             if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx.try_send(payload_json)
             {
-                tracing::warn!(agent_id = %agent_id, "out_bus full, dropping task_assigned");
+                tracing::warn!(component = "scheduler", agent_id = %agent_id, "out_bus full, dropping task_assigned");
             }
         }
         dispatched += 1;

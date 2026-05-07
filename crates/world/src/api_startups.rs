@@ -18,15 +18,29 @@
 
 use crate::agent_supervisor::SpawnConfig;
 use crate::http::AppState;
+use crate::loop_::Cmd;
+use crate::state::AvatarView;
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// Pull the operator token from either `Authorization: Bearer <tok>` or the
+/// bare `X-Operator-Token: <tok>` header. Mirrors `http::patch_startup` so the
+/// PATCH and DELETE handlers agree on which auth headers they accept.
+fn extract_operator_token(headers: &HeaderMap) -> &str {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)))
+        .or_else(|| headers.get("x-operator-token").and_then(|v| v.to_str().ok()))
+        .unwrap_or("")
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CreateStartupRequest {
@@ -201,7 +215,7 @@ pub async fn create_startup(
     //    since the row is already committed; M5.x cleanup can backfill.
     let artifacts = std::path::Path::new(&workspace_path).join("artifacts");
     if let Err(e) = tokio::fs::create_dir_all(&artifacts).await {
-        tracing::warn!(error = %e, path = %artifacts.display(), "failed to create workspace artifacts dir");
+        tracing::warn!(component = "api_startups", error = %e, path = %artifacts.display(), "failed to create workspace artifacts dir");
     }
 
     // 5. Generate per-agent secrets, persist into process env, spawn workers.
@@ -223,9 +237,44 @@ pub async fn create_startup(
             backend: backend.to_string(),
         };
         if let Err(e) = s.supervisor.spawn_agent(cfg).await {
-            tracing::warn!(agent_id = %aid, error = %e, "spawn_agent failed");
+            tracing::warn!(component = "api_startups", agent_id = %aid, error = %e, "spawn_agent failed");
         }
     }
+
+    // 6. Tell the world loop about the new avatars *and* the suite claim. The
+    //    in-memory `avatars` map is what `mcp_dispatch` looks up (so worker
+    //    MCP calls would otherwise fail with `unknown_agent`), and the
+    //    in-memory `layout` is what `move_sys::can_enter_layout_room` reads
+    //    (so without the claim the suite would still be public to other
+    //    startups even though SQL says otherwise).
+    let avatar_views: Vec<AvatarView> = agents
+        .iter()
+        .map(|(role, aid, backend, _)| {
+            let (ox, oy) = HOME_DESK_OFFSETS
+                .iter()
+                .find(|(r, _, _)| r == role)
+                .map(|(_, x, y)| (*x, *y))
+                .unwrap_or((1, 1));
+            AvatarView {
+                agent_id: aid.to_string(),
+                startup_id: startup_id.clone(),
+                role: role.to_string(),
+                backend: backend.to_string(),
+                current_pos: (suite_x + ox, suite_y + oy),
+                target_pos: None,
+                room_id: suite_id.clone(),
+                status: "idle".to_string(),
+            }
+        })
+        .collect();
+    let _ = s
+        .handle
+        .tx
+        .send(Cmd::InsertAvatars {
+            avatars: avatar_views,
+            claim_suite: Some((suite_id.clone(), startup_id.clone())),
+        })
+        .await;
 
     let resp = CreateStartupResponse {
         id: startup_id,
@@ -269,7 +318,16 @@ fn reply_err(code: StatusCode, message: &str) -> Response {
 pub async fn delete_startup(
     State(s): State<Arc<AppState>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
+    // Operator auth — same pattern as `http::patch_startup`. Validate BEFORE
+    // the existence check so unauthenticated callers can't probe whether a
+    // given startup id exists.
+    let tok = extract_operator_token(&headers);
+    if crate::auth::validate_operator_token(&s.pool, tok).await.is_err() {
+        return reply_err(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+
     // Verify startup exists. We do this outside the tx so a 404 doesn't
     // require a rollback — and the lookup matches what callers expect for
     // unknown ids.
@@ -311,6 +369,16 @@ pub async fn delete_startup(
     // Kill workers via M3.5 supervisor (SIGTERM → 5s grace → SIGKILL handled
     // inside). Idempotent: a no-op when no workers match this startup_id.
     s.supervisor.dissolve_startup(&id).await;
+
+    // Mirror the SQL `private_to_startup_id = NULL` into the in-memory layout
+    // so subsequent `move_sys::can_enter_layout_room` checks treat the freed
+    // suite as public again. Without this, dissolved startups still own their
+    // suite for the lifetime of the process.
+    let _ = s
+        .handle
+        .tx
+        .send(Cmd::ReleaseSuite { startup_id: id.clone() })
+        .await;
 
     // Audit trail: emit a system_events row at `warn`. Best-effort; a logging
     // failure shouldn't fail the user-facing DELETE since the dissolve is

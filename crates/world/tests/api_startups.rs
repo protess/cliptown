@@ -255,9 +255,10 @@ async fn delete_marks_dissolved_and_frees_suite() {
     ).bind(&startup_id).fetch_one(&state.pool).await.unwrap();
     assert_eq!(claimed.0, 1);
 
-    // DELETE.
+    // DELETE. Operator token uses the default dev token (`auth.rs`).
     let req = Request::builder()
         .method("DELETE").uri(format!("/api/startups/{}", startup_id))
+        .header("Authorization", "Bearer dev-token")
         .body(Body::empty()).unwrap();
     let res = router(state.clone()).oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -322,6 +323,7 @@ async fn delete_then_create_succeeds_after_exhaustion() {
 
     // DELETE the first.
     let req = Request::builder().method("DELETE").uri(format!("/api/startups/{}", ids[0]))
+        .header("Authorization", "Bearer dev-token")
         .body(Body::empty()).unwrap();
     let res = router(state.clone()).oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -354,9 +356,266 @@ async fn delete_unknown_returns_404() {
     let state = fixture().await;
     let app = router(state.clone());
     let req = Request::builder().method("DELETE").uri("/api/startups/does-not-exist")
+        .header("Authorization", "Bearer dev-token")
         .body(Body::empty()).unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+/// Without an operator token, DELETE must reject with 401 BEFORE doing the
+/// existence check — otherwise an unauthenticated probe could distinguish
+/// known from unknown ids.
+#[tokio::test]
+async fn delete_without_auth_returns_401() {
+    let state = fixture().await;
+    let app = router(state.clone());
+    // Use a real id that exists, so a missing-auth bypass would 200 (not 404).
+    let body = serde_json::json!({
+        "name": "alpha", "goal_text": "x", "budget_cap_usd": 5.0,
+        "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+    });
+    let req = Request::builder().method("POST").uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string())).unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bs = to_bytes(res.into_body(), 8192).await.unwrap();
+    let j: serde_json::Value = serde_json::from_slice(&bs).unwrap();
+    let id = j["id"].as_str().unwrap().to_string();
+    let workspace: (String,) = sqlx::query_as("SELECT workspace_path FROM startups WHERE id = ?")
+        .bind(&id).fetch_one(&state.pool).await.unwrap();
+
+    // No Authorization header.
+    let req = Request::builder().method("DELETE").uri(format!("/api/startups/{}", id))
+        .body(Body::empty()).unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Wrong token.
+    let req = Request::builder().method("DELETE").uri(format!("/api/startups/{}", id))
+        .header("Authorization", "Bearer WRONG")
+        .body(Body::empty()).unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Status remains active — auth failure must not have side effects.
+    let row: (String,) = sqlx::query_as("SELECT status FROM startups WHERE id = ?")
+        .bind(&id).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(row.0, "active");
+
+    // Cleanup workspace dir.
+    let _ = std::fs::remove_dir_all(&workspace.0);
+}
+
+/// `POST /api/startups` must seed the in-memory `WorldView.avatars` map with
+/// the 3 new agents (so worker MCP calls + scheduler dispatch can find them)
+/// and mark the claimed suite as private in the loop's layout (so other
+/// startups cannot pathfind into it).
+#[tokio::test]
+async fn post_inserts_avatars_and_claims_suite_in_world_view() {
+    let state = fixture().await;
+    let app = router(state.clone());
+    let body = serde_json::json!({
+        "name": "alpha", "goal_text": "x", "budget_cap_usd": 5.0,
+        "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+    });
+    let req = Request::builder().method("POST").uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string())).unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bs = to_bytes(res.into_body(), 8192).await.unwrap();
+    let j: serde_json::Value = serde_json::from_slice(&bs).unwrap();
+    let startup_id = j["id"].as_str().unwrap().to_string();
+    let suite_id = j["suite_id"].as_str().unwrap().to_string();
+    let workspace: (String,) = sqlx::query_as("SELECT workspace_path FROM startups WHERE id = ?")
+        .bind(&startup_id).fetch_one(&state.pool).await.unwrap();
+
+    // Wait for the InsertAvatars cmd to land. The handler send is fire-and-
+    // forget on an mpsc channel that the loop drains on its next select tick;
+    // give it a beat. We poll for up to ~500ms.
+    let mut found = 0usize;
+    for _ in 0..50 {
+        let view = state.handle.view_rx.borrow().clone();
+        found = view
+            .avatars
+            .values()
+            .filter(|a| a.startup_id == startup_id)
+            .count();
+        if found == 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(found, 3, "expected 3 avatars in WorldView; got {}", found);
+
+    // Each avatar should be in the claimed suite at one of the home-desk
+    // offsets we hand-wrote in api_startups::HOME_DESK_OFFSETS.
+    let view = state.handle.view_rx.borrow().clone();
+    for a in view.avatars.values().filter(|a| a.startup_id == startup_id) {
+        assert_eq!(a.room_id, suite_id, "avatar {} not in suite", a.agent_id);
+        assert_eq!(a.status, "idle");
+    }
+
+    // Suite-claim sync: ask the world loop to start a move from a *different*
+    // startup's agent into this suite — it must fail with permission_denied.
+    // We stage that by inserting a synthetic avatar belonging to a fake other
+    // startup, then sending a move_intent through the same path the worker
+    // does (via Cmd::HandleWorkerMsg).
+    let other_avatar = cliptown_world::state::AvatarView {
+        agent_id: "intruder".to_string(),
+        startup_id: "other-startup".to_string(),
+        role: "founder".to_string(),
+        backend: "claude_code".to_string(),
+        current_pos: (20, 5), // lobby
+        target_pos: None,
+        room_id: "lobby".to_string(),
+        status: "idle".to_string(),
+    };
+    let _ = state
+        .handle
+        .tx
+        .send(cliptown_world::loop_::Cmd::InsertAvatars {
+            avatars: vec![other_avatar],
+            claim_suite: None,
+        })
+        .await;
+
+    // Insert a row so auth wouldn't bounce a hypothetical worker connect (we
+    // don't need it for the loop dispatch path, but it keeps the test honest).
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('other-startup', 'beta', 'g', 1.0, 'town_default', '/tmp/beta', 'active', unixepoch())"
+    ).execute(&state.pool).await.unwrap();
+
+    // Ask the loop to start a move into the claimed suite. We use
+    // HandleWorkerMsg so the actual move_sys::start_move runs against the
+    // loop's owned (mutable) layout.
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let intent = serde_json::json!({
+        "type": "move_intent",
+        "v": 1,
+        "target_room": suite_id,
+        "target_x": 1,
+        "target_y": 1,
+    });
+    state
+        .handle
+        .tx
+        .send(cliptown_world::loop_::Cmd::HandleWorkerMsg {
+            agent_id: "intruder".to_string(),
+            msg: intent,
+            reply: reply_tx,
+        })
+        .await
+        .unwrap();
+    let reply = reply_rx.await.unwrap();
+    assert_eq!(
+        reply.get("reason").and_then(|v| v.as_str()),
+        Some("no_permission"),
+        "intruder should not be able to move into the claimed suite; got {reply}"
+    );
+
+    // Cleanup.
+    let _ = std::fs::remove_dir_all(&workspace.0);
+}
+
+/// After DELETE, the suite ownership is cleared in the in-memory layout so
+/// another startup can pathfind in. Mirrors the SQL `private_to_startup_id =
+/// NULL` write — without `Cmd::ReleaseSuite` the in-memory map would diverge
+/// for the lifetime of the process.
+#[tokio::test]
+async fn delete_releases_suite_in_world_view() {
+    let state = fixture().await;
+    let app = router(state.clone());
+
+    // Create + delete a startup.
+    let body = serde_json::json!({
+        "name": "alpha", "goal_text": "x", "budget_cap_usd": 5.0,
+        "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+    });
+    let req = Request::builder().method("POST").uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string())).unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bs = to_bytes(res.into_body(), 8192).await.unwrap();
+    let j: serde_json::Value = serde_json::from_slice(&bs).unwrap();
+    let startup_id = j["id"].as_str().unwrap().to_string();
+    let suite_id = j["suite_id"].as_str().unwrap().to_string();
+    let workspace: (String,) = sqlx::query_as("SELECT workspace_path FROM startups WHERE id = ?")
+        .bind(&startup_id).fetch_one(&state.pool).await.unwrap();
+
+    // Wait for InsertAvatars to land before issuing DELETE (so the claim is
+    // observable by the cleanup path).
+    for _ in 0..50 {
+        let view = state.handle.view_rx.borrow().clone();
+        if view.avatars.values().filter(|a| a.startup_id == startup_id).count() == 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let req = Request::builder().method("DELETE").uri(format!("/api/startups/{}", startup_id))
+        .header("Authorization", "Bearer dev-token")
+        .body(Body::empty()).unwrap();
+    let res = router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Insert a foreign avatar in the lobby — it must now be allowed into the
+    // freed suite.
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('other-startup', 'beta', 'g', 1.0, 'town_default', '/tmp/beta', 'active', unixepoch())"
+    ).execute(&state.pool).await.unwrap();
+    let other = cliptown_world::state::AvatarView {
+        agent_id: "free_agent".to_string(),
+        startup_id: "other-startup".to_string(),
+        role: "founder".to_string(),
+        backend: "claude_code".to_string(),
+        current_pos: (20, 5),
+        target_pos: None,
+        room_id: "lobby".to_string(),
+        status: "idle".to_string(),
+    };
+    let _ = state
+        .handle
+        .tx
+        .send(cliptown_world::loop_::Cmd::InsertAvatars {
+            avatars: vec![other],
+            claim_suite: None,
+        })
+        .await;
+
+    // Wait for ReleaseSuite + InsertAvatars to drain.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let intent = serde_json::json!({
+        "type": "move_intent",
+        "v": 1,
+        "target_room": suite_id,
+        "target_x": 1,
+        "target_y": 1,
+    });
+    state
+        .handle
+        .tx
+        .send(cliptown_world::loop_::Cmd::HandleWorkerMsg {
+            agent_id: "free_agent".to_string(),
+            msg: intent,
+            reply: reply_tx,
+        })
+        .await
+        .unwrap();
+    let reply = reply_rx.await.unwrap();
+    assert_eq!(
+        reply.get("type").and_then(|v| v.as_str()),
+        Some("ok"),
+        "free_agent should be able to enter the freed suite; got {reply}"
+    );
+
+    let _ = std::fs::remove_dir_all(&workspace.0);
 }
 
 #[tokio::test]

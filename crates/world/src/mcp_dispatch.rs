@@ -687,7 +687,7 @@ async fn handle_task_accept(
                 }
             }
             if grandparent.is_some() {
-                tracing::warn!(
+                tracing::warn!(component = "mcp_dispatch",
                     task_id = %task_id,
                     "task_accept: grand-manager propagation deferred to M3+"
                 );

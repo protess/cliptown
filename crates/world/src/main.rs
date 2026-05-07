@@ -39,8 +39,7 @@ async fn main() -> Result<()> {
         .tx
         .send(loop_::Cmd::BackendCatalogUpdated(initial_json))
         .await;
-    tracing::info!(
-        component = "world",
+    tracing::info!(component = "world",
         event = "backend_catalog_probed",
         count = initial_cat.len()
     );
@@ -89,7 +88,7 @@ async fn main() -> Result<()> {
 
     let supervisor = Arc::new(AgentSupervisor::new(SupervisorConfig::default(), pool.clone()));
     let app = http::router(http::AppState { pool, handle, catalog, supervisor });
-    let addr = std::env::var("CLIPTOWN_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
+    let addr = std::env::var("CLIPTOWN_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let bound = listener.local_addr()?;
     tracing::info!(component = "world", event = "listening", addr = %bound);
