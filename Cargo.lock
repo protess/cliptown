@@ -223,6 +223,7 @@ dependencies = [
  "cliptown-world",
  "futures-util",
  "hyper",
+ "libc",
  "pathfinding",
  "proptest",
  "rand 0.8.6",

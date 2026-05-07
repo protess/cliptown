@@ -25,6 +25,7 @@ hyper = "1"
 pathfinding = "=4.14.0"
 unicode-normalization = "0.1"
 futures-util = "0.3"
+libc = "0.2"
 
 [build-dependencies]
 ts-rs.workspace = true
