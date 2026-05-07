@@ -35,19 +35,29 @@ pub async fn dispatch(
                 StartMoveResult::Ok => json!({"type":"ok","kind":"move_intent"}),
                 StartMoveResult::NoPath => {
                     if let Some(tx) = out_bus.get(agent_id) {
-                        let _ = tx.try_send(json!({
+                        let payload = json!({
                             "type":"move_failed","v":1,"reason":"no_path"
-                        }));
+                        });
+                        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
+                            tx.try_send(payload)
+                        {
+                            tracing::warn!(agent_id = %agent_id, "out_bus full, dropping move_failed (no_path)");
+                        }
                     }
                     json!({"type":"error","reason":"no_path"})
                 }
                 StartMoveResult::PermissionDenied => {
                     if let Some(tx) = out_bus.get(agent_id) {
-                        let _ = tx.try_send(json!({
-                            "type":"move_failed","v":1,"reason":"permission_denied"
-                        }));
+                        let payload = json!({
+                            "type":"move_failed","v":1,"reason":"no_permission"
+                        });
+                        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
+                            tx.try_send(payload)
+                        {
+                            tracing::warn!(agent_id = %agent_id, "out_bus full, dropping move_failed (no_permission)");
+                        }
                     }
-                    json!({"type":"error","reason":"permission_denied"})
+                    json!({"type":"error","reason":"no_permission"})
                 }
                 StartMoveResult::NoSuchAgent => json!({"type":"error","reason":"unknown_agent"}),
             }

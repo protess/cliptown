@@ -164,8 +164,13 @@ pub fn full_route(
         // Find the in-bounds exit tile (adjacent to or equal to door_tile).
         let exit_tile = adjacent_inside(bounds, *door_tile)?;
         let mut segment = tile_path(bounds, current_tile, exit_tile)?;
-        // Step onto the door tile as the last waypoint of this segment.
-        segment.push(*door_tile);
+        // Step onto the door tile as the last waypoint of this segment —
+        // but only if the in-bounds exit tile isn't already the door tile,
+        // otherwise we'd duplicate it (and start_move's dedupe would drop
+        // the copy that carries the room-transition annotation).
+        if exit_tile != *door_tile {
+            segment.push(*door_tile);
+        }
         out.push((current_room.clone(), segment));
 
         // Enter the next room: starting tile is the in-bounds neighbor of

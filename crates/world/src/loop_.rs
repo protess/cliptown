@@ -58,14 +58,19 @@ pub fn spawn_with_layout(
             match cmd {
                 Cmd::Tick => {
                     w.tick_seq = w.tick_seq.wrapping_add(1);
-                    let events = move_sys::step_all(&mut w, &mut paths, &layout);
+                    let events = move_sys::step_all(&mut w, &mut paths);
                     for e in events {
                         match e {
                             MoveEvent::Complete { agent_id, room_id } => {
                                 if let Some(tx) = out_bus.get(&agent_id) {
-                                    let _ = tx.try_send(serde_json::json!({
+                                    let payload = serde_json::json!({
                                         "type":"move_complete","v":1,"room_id":room_id
-                                    }));
+                                    });
+                                    if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
+                                        tx.try_send(payload)
+                                    {
+                                        tracing::warn!(agent_id = %agent_id, "out_bus full, dropping move_complete");
+                                    }
                                 }
                             }
                         }

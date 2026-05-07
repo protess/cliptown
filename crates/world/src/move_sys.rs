@@ -148,11 +148,7 @@ pub fn start_move(
 /// On arrival (path empty after this step), clears `target_pos` and emits
 /// `MoveEvent::Complete`. Door-tile transitions are taken from the planned
 /// `Step.enter_room`, never inferred from coincidental tile matches.
-pub fn step_all(
-    world: &mut WorldView,
-    paths: &mut PathStore,
-    _layout: &TownLayout,
-) -> Vec<MoveEvent> {
+pub fn step_all(world: &mut WorldView, paths: &mut PathStore) -> Vec<MoveEvent> {
     let mut events = Vec::new();
     let mut to_remove: Vec<String> = Vec::new();
 
