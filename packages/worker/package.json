@@ -8,8 +8,12 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "vitest": "^2",
+    "@types/node": "^20",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.5",
-    "@types/node": "^20"
+    "vitest": "^2"
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
   }
 }
