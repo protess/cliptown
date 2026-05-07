@@ -3,5 +3,13 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "scripts": { "build": "echo no-op", "test": "echo no-op" }
+  "scripts": {
+    "build": "echo no-op",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2",
+    "typescript": "^5.5",
+    "@types/node": "^20"
+  }
 }

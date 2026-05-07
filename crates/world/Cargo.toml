@@ -17,15 +17,18 @@ ts-rs.workspace = true
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
 uuid = { version = "1", features = ["v4"] }
 toml = "0.8"
+rand = "0.8"
 
 [build-dependencies]
 ts-rs.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+cliptown-world = { path = ".", features = ["test_det"] }
 
 [features]
 _ts_export = []
+test_det = []
 
 [lib]
 path = "src/lib.rs"

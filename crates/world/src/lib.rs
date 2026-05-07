@@ -1,4 +1,5 @@
 pub mod config;
+pub mod det;
 pub mod protocol;
 pub mod storage;
 
