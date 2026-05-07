@@ -79,6 +79,7 @@ pub fn spawn_with_layout(
                         &mut w, &mut paths, &layout, &graph, &out_bus, &pool,
                     )
                     .await;
+                    crate::proximity::compute_and_emit(&w, &out_bus);
                     let _ = view_tx.send(w.clone());
                 }
                 Cmd::HandleConsoleMsg { msg, reply } => {
