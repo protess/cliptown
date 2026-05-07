@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/world"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ts-rs = { version = "9", features = ["serde-compat"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }

@@ -1,0 +1,7 @@
+{
+  "name": "@cliptown/adapter-claude-code",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "echo no-op", "test": "echo no-op" }
+}

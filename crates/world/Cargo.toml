@@ -1,0 +1,26 @@
+[package]
+name = "cliptown-world"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+ts-rs.workspace = true
+
+[build-dependencies]
+ts-rs.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cliptown-world"
+path = "src/main.rs"

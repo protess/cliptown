@@ -1,1 +1,12 @@
 .superpowers/
+target/
+node_modules/
+dist/
+workspaces/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
+playwright-report/
+test-results/
