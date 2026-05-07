@@ -36,7 +36,13 @@ function recencyOf(s: StartupVM): number {
   return s.last_event_ts ?? 0;
 }
 
-export function Sidebar({ onSelect }: { onSelect?: (id: string) => void }) {
+export function Sidebar({
+  selected,
+  onSelect,
+}: {
+  selected?: string | null;
+  onSelect?: (id: string) => void;
+}) {
   const { state } = useWorld();
   const sorted = Object.values(state.startups)
     .slice()
@@ -104,6 +110,8 @@ export function Sidebar({ onSelect }: { onSelect?: (id: string) => void }) {
               borderBottom: "1px solid var(--border)",
               cursor: onSelect ? "pointer" : "default",
               gap: 10,
+              background:
+                selected === s.id ? "rgba(0,0,0,0.04)" : "transparent",
             }}
           >
             <span

@@ -1,11 +1,12 @@
+import { useState } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 import { TopBar } from "./TopBar.js";
 import { Sidebar } from "./Sidebar.js";
+import { MainHeader } from "./MainHeader.js";
 
 export function Console() {
   const { state } = useWorld();
-  const startupCount = Object.keys(state.startups).length;
-  const avatarCount = Object.keys(state.avatars).length;
+  const [selected, setSelected] = useState<string | null>(null);
   return (
     <div
       style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
@@ -19,12 +20,21 @@ export function Console() {
           minHeight: 0,
         }}
       >
-        <Sidebar />
-        <main style={{ padding: 24, overflow: "auto" }}>
-          <p style={{ color: "var(--fg-secondary)" }}>
-            Status: <code>{state.status}</code> · {startupCount} startup(s) ·{" "}
-            {avatarCount} avatar(s)
-          </p>
+        <Sidebar selected={selected} onSelect={setSelected} />
+        <main
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
+          <MainHeader startupId={selected} />
+          <div style={{ padding: 24, overflow: "auto", flex: 1 }}>
+            <p style={{ color: "var(--fg-secondary)" }}>
+              Status: <code>{state.status}</code> · Kanban lands in M4.6.
+            </p>
+          </div>
         </main>
       </div>
     </div>
