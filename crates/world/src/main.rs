@@ -1,5 +1,5 @@
 use anyhow::Result;
-use cliptown_world::{backend_catalog, config, http, loop_, state::WorldView, storage};
+use cliptown_world::{backend_catalog, config, http, loop_, seed, state::WorldView, storage};
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
@@ -16,6 +16,9 @@ async fn main() -> Result<()> {
     let db_path = std::env::var("CLIPTOWN_DB").unwrap_or_else(|_| "cliptown.db".into());
     let pool = storage::open(&db_path).await?;
     tracing::info!(component = "world", event = "storage_ready", db = %db_path);
+
+    seed::seed_if_empty(&pool).await?;
+    tracing::info!(component = "world", event = "town_seeded", town_id = "town_default");
 
     let handle = loop_::spawn(WorldView::default());
     tracing::info!(component = "world", event = "loop_started");
