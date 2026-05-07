@@ -111,20 +111,42 @@ pub async fn dispatch(
             // approach has tricky sqlx::Query lifetime constraints; inlining the
             // accept_proposal flow is simpler and keeps the audit + state-machine call
             // + UPDATE in a single readable block.
-            let current_row: Result<(String,), _> =
-                sqlx::query_as("SELECT status FROM tasks WHERE id = ?")
+            //
+            // Codex round-3 P2#4: pull `startup_id` alongside `status` so we can
+            // refuse cross-startup assignments before the UPDATE — mirrors the
+            // mcp_dispatch path so the operator UI can't bypass the guard.
+            let current_row: Result<(String, String), _> =
+                sqlx::query_as("SELECT status, startup_id FROM tasks WHERE id = ?")
                     .bind(&task_id)
                     .fetch_one(pool)
                     .await;
-            let current = match current_row {
-                Ok((s,)) => match parse_status(&s) {
-                    Some(s) => s,
+            let (current, task_startup_id) = match current_row {
+                Ok((s, sid)) => match parse_status(&s) {
+                    Some(s) => (s, sid),
                     None => return json!({"type":"error","reason":"unknown_status","status":s}),
                 },
                 Err(e) => return json!({"type":"error","reason":"sql","detail":e.to_string()}),
             };
             if next(current, &Transition::AcceptProposal { caller: Actor::Operator }).is_err() {
                 return json!({"type":"error","reason":"illegal_transition"});
+            }
+            // Same-startup check: scheduler can't dispatch the task to a
+            // foreign worker without this guard (task_done would later
+            // reject it, leaving the task wedged in `queued`).
+            let assignee_row: Result<Option<(String,)>, _> =
+                sqlx::query_as("SELECT startup_id FROM agents WHERE id = ?")
+                    .bind(&assignee_agent_id)
+                    .fetch_optional(pool)
+                    .await;
+            match assignee_row {
+                Ok(Some((sid,))) if sid == task_startup_id => { /* ok */ }
+                Ok(Some(_)) => {
+                    return json!({"type":"error","reason":"cross_startup","detail":"assignee in different startup"});
+                }
+                Ok(None) => {
+                    return json!({"type":"error","reason":"unknown_assignee","detail":"no such agent"});
+                }
+                Err(e) => return json!({"type":"error","reason":"sql","detail":e.to_string()}),
             }
             let r = sqlx::query(
                 "UPDATE tasks SET status = 'queued', assignee_agent_id = ?, required_room = ?, updated_at = unixepoch() WHERE id = ?"

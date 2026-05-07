@@ -162,3 +162,50 @@ async fn parse_error_returns_error_reply() {
     assert_eq!(r["type"], "error");
     assert_eq!(r["reason"], "parse");
 }
+
+/// Codex round-3 P2#4: operator path mirrors the mcp_dispatch guard —
+/// accepting a proposal with an assignee in a different startup is refused
+/// before any state mutation, and the task stays in `proposed`.
+#[tokio::test]
+async fn accept_proposal_rejects_cross_startup_assignee() {
+    let (mut w, pool) = fresh().await;
+    // Two startups, each with one agent. The task lives in s1; we try to
+    // assign s2's agent.
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'alpha', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s2', 'beta', 'g', 10.0, 'town_default', '/tmp/s2', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status) \
+         VALUES ('a1', 's1', 'A1', 'engineer', 'claude_code', 'm', '{}', 'suite_1', 'idle')"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status) \
+         VALUES ('a2', 's2', 'A2', 'engineer', 'claude_code', 'm', '{}', 'suite_3', 'idle')"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO tasks (id, startup_id, title, description, status, created_at, updated_at) \
+         VALUES ('T1', 's1', 't', 'd', 'proposed', unixepoch(), unixepoch())"
+    ).execute(&pool).await.unwrap();
+
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(
+        &mut w,
+        &pool,
+        &bus,
+        json!({"type":"operator_accept_proposal","v":1,"task_id":"T1","assignee_agent_id":"a2"}),
+    ).await;
+    assert_eq!(r["type"], "error", "{r}");
+    assert_eq!(r["reason"], "cross_startup", "{r}");
+    let row: (String, Option<String>) =
+        sqlx::query_as("SELECT status, assignee_agent_id FROM tasks WHERE id='T1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0, "proposed");
+    assert_eq!(row.1, None);
+}

@@ -17,9 +17,16 @@ import type { CSSProperties, ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWorld } from "../hooks/useWorld.js";
 
+// Empty default → relative URL so fetch() goes through the Vite dev proxy
+// (vite.config.ts) rather than triggering a cross-origin preflight against
+// 127.0.0.1:8080. Production builds set VITE_WORLD_HTTP_URL explicitly.
 const API_BASE: string =
-  (import.meta.env.VITE_WORLD_HTTP_URL as string | undefined) ??
-  "http://127.0.0.1:8080";
+  (import.meta.env.VITE_WORLD_HTTP_URL as string | undefined) ?? "";
+
+// POST /api/startups gained operator auth in round 2 (P2#5); the modal has
+// to send the same Bearer token the WS hello uses or the world replies 401.
+const OPERATOR_TOKEN: string =
+  (import.meta.env.VITE_OPERATOR_TOKEN as string | undefined) ?? "dev-token";
 
 interface Template {
   id: string;
@@ -95,7 +102,10 @@ export function NewStartupModal({ onClose }: { onClose: () => void }) {
     try {
       const res = await fetch(`${API_BASE}/api/startups`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${OPERATOR_TOKEN}`,
+        },
         body: JSON.stringify({
           name,
           goal_text: goal,

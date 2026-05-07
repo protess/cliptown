@@ -109,6 +109,85 @@ async fn ws_worker(ws: WebSocketUpgrade, State(s): State<Arc<AppState>>) -> Resp
     ws.on_upgrade(move |sock| handle_worker(sock, s))
 }
 
+/// Build the `world_view_snapshot` frame the console expects on connect and
+/// after every world-view change. The frame embeds the raw `WorldView`
+/// fields (tick_seq, backend_catalog, avatars) plus two SQL-sourced lists
+/// (`startups`, `tasks`) that the frontend reducer in
+/// `packages/frontend/src/store.ts` reads directly into its sidebar +
+/// kanban views.
+///
+/// Note: each invocation runs two SELECT statements. Phase-0 worlds are
+/// tiny (a few startups, dozens of tasks) so the cost is negligible, but
+/// this is a TODO for caching once tick rates climb past a few Hz —
+/// e.g. memoize on `tick_seq` + a cheap "tasks dirty" counter.
+async fn build_console_snapshot(
+    pool: &SqlitePool,
+    view: &crate::state::WorldView,
+) -> serde_json::Value {
+    // Active startups, plus the most recent system_event ts so the sidebar
+    // can flag stale runs at a glance. Falls back to `created_at` when no
+    // event exists yet.
+    let startups: Vec<serde_json::Value> = sqlx::query_as::<
+        _,
+        (String, String, f64, f64, i64),
+    >(
+        "SELECT id, name, budget_spent_usd, budget_cap_usd, \
+         COALESCE((SELECT MAX(ts) FROM system_events WHERE startup_id = startups.id), created_at) \
+         FROM startups WHERE status = 'active'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|(id, name, spent, cap, last_ts)| {
+        json!({
+            "id": id,
+            "name": name,
+            "budget_spent_usd": spent,
+            "budget_cap_usd": cap,
+            "last_event_ts": last_ts,
+        })
+    })
+    .collect();
+
+    // In-flight + pending tasks (everything except `done` / `failed`) so
+    // the kanban shows the live work surface without flooding on history.
+    let tasks: Vec<serde_json::Value> = sqlx::query_as::<
+        _,
+        (String, String, String, String, Option<String>, Option<String>),
+    >(
+        "SELECT id, startup_id, title, status, assignee_agent_id, required_room \
+         FROM tasks WHERE status NOT IN ('done', 'failed')",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|(id, startup_id, title, status, assignee, required_room)| {
+        json!({
+            "id": id,
+            "startup_id": startup_id,
+            "title": title,
+            "status": status,
+            "assignee_agent_id": assignee,
+            "required_room": required_room,
+        })
+    })
+    .collect();
+
+    json!({
+        "type": "world_view_snapshot",
+        "v": 1,
+        "snapshot": {
+            "tick_seq": view.tick_seq,
+            "backend_catalog": view.backend_catalog,
+            "avatars": view.avatars.values().collect::<Vec<_>>(),
+            "startups": startups,
+            "tasks": tasks,
+        },
+    })
+}
+
 async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
     // Phase 1: hello + auth on the unsplit socket so we can early-return
     // before splitting (no split needs to be undone on auth failure).
@@ -135,12 +214,8 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
     // chunk_snapshot when the serialized payload exceeds the 256 KiB threshold
     // already enforced for worker view fans.
     {
-        let snapshot = state.handle.view_rx.borrow().clone();
-        let frame = serde_json::json!({
-            "type": "world_view_snapshot",
-            "v": 1,
-            "snapshot": snapshot,
-        });
+        let view = state.handle.view_rx.borrow().clone();
+        let frame = build_console_snapshot(&state.pool, &view).await;
         if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
             return;
         }
@@ -170,12 +245,8 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
             }
             changed = view_rx.changed() => {
                 if changed.is_err() { break; }
-                let snapshot = view_rx.borrow_and_update().clone();
-                let frame = serde_json::json!({
-                    "type": "world_view_snapshot",
-                    "v": 1,
-                    "snapshot": snapshot,
-                });
+                let view = view_rx.borrow_and_update().clone();
+                let frame = build_console_snapshot(&state.pool, &view).await;
                 if sender.send(Message::Text(frame.to_string().into())).await.is_err() {
                     break;
                 }

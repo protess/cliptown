@@ -786,3 +786,58 @@ async fn unknown_tool_returns_mcp_error() {
     assert_eq!(r["type"], "mcp_error");
     assert_eq!(r["code"], "unknown_tool");
 }
+
+/// Codex round-3 P2#4: when a manager accepts a proposal, the assignee must
+/// be in the same startup as the task. Otherwise the scheduler dispatches
+/// the foreign task to the wrong-startup worker and `task_done` later
+/// rejects it as cross-startup, leaving the task wedged in `queued`.
+#[tokio::test]
+async fn accept_proposal_with_cross_startup_assignee_rejected() {
+    let mut fx = fixture().await;
+    // Set T1 (s1's task) to proposed so the manager-only gate passes
+    // before the same-startup assignee check fires.
+    sqlx::query("UPDATE tasks SET status = 'proposed' WHERE id = 'T1'")
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    // m1 (s1) tries to assign e2 (s2). Should be refused with
+    // `cross_startup`, and the task must remain in `proposed`.
+    let r = fx
+        .call(
+            "m1",
+            "accept_proposal",
+            json!({"task_id":"T1","assignee_agent_id":"e2"}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_error", "{r}");
+    assert_eq!(r["code"], "cross_startup", "{r}");
+    let row: (String, Option<String>) =
+        sqlx::query_as("SELECT status, assignee_agent_id FROM tasks WHERE id='T1'")
+            .fetch_one(&fx.pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0, "proposed");
+    // The fixture seeds T1.assignee_agent_id = "e1"; the guard rejected the
+    // attempted reassignment before any UPDATE ran, so it must still be e1.
+    assert_eq!(row.1.as_deref(), Some("e1"));
+}
+
+/// Sibling guard: an unknown assignee_agent_id is rejected before any
+/// state-machine transition runs.
+#[tokio::test]
+async fn accept_proposal_with_unknown_assignee_rejected() {
+    let mut fx = fixture().await;
+    sqlx::query("UPDATE tasks SET status = 'proposed' WHERE id = 'T1'")
+        .execute(&fx.pool)
+        .await
+        .unwrap();
+    let r = fx
+        .call(
+            "m1",
+            "accept_proposal",
+            json!({"task_id":"T1","assignee_agent_id":"ghost"}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_error", "{r}");
+    assert_eq!(r["code"], "unknown_assignee", "{r}");
+}

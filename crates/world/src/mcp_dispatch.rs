@@ -844,6 +844,26 @@ async fn handle_accept_proposal(
             "accept_proposal is manager-only".into(),
         ));
     }
+    // Codex round-3 P2#4: assignee must belong to the same startup as the
+    // task. Without this check the scheduler dispatches the foreign task to
+    // the wrong-startup worker; `task_done` then rejects it as cross-startup,
+    // leaving the task wedged in `queued`.
+    let assignee_startup: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM agents WHERE id = ?")
+            .bind(&assignee)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| ("sql".to_string(), e.to_string()))?;
+    let assignee_sid = match assignee_startup {
+        Some((s,)) => s,
+        None => return Err(("unknown_assignee".into(), "no such agent".into())),
+    };
+    if assignee_sid != caller.startup_id {
+        return Err((
+            "cross_startup".into(),
+            "assignee in different startup".into(),
+        ));
+    }
     let new_status = next(task.status, &Transition::AcceptProposal { caller: Actor::Manager })
         .map_err(|r| ("illegal_transition".to_string(), r.to_string()))?;
     sqlx::query(

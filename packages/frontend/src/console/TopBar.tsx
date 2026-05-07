@@ -16,9 +16,12 @@ import { HistoryModal } from "./HistoryModal.js";
 import { NewStartupModal } from "./NewStartupModal.js";
 
 const ROTATE_MS = 3_000;
+// Empty default → relative URL so fetch() goes through the Vite dev proxy
+// (vite.config.ts) rather than triggering a cross-origin preflight against
+// 127.0.0.1:8080. Production builds set VITE_WORLD_HTTP_URL explicitly.
 const RECHECK_URL =
-  ((import.meta.env.VITE_WORLD_HTTP_URL as string | undefined) ??
-    "http://127.0.0.1:8080") + "/api/backend-catalog/recheck";
+  ((import.meta.env.VITE_WORLD_HTTP_URL as string | undefined) ?? "") +
+  "/api/backend-catalog/recheck";
 
 export function TopBar() {
   const { state } = useWorld();

@@ -4,7 +4,9 @@
  * state without re-establishing a WebSocket.
  *
  * Configuration is read once at module load from Vite env vars:
- *   VITE_WORLD_WS_URL    — defaults to ws://127.0.0.1:8080/ws/console
+ *   VITE_WORLD_WS_URL    — defaults to ws://<page-host>/ws/console (relative
+ *                          so the Vite dev proxy in vite.config.ts can route
+ *                          to the world server without CORS)
  *   VITE_OPERATOR_TOKEN  — defaults to "dev-token" (Phase 0 dev seed)
  *
  * Phase 0 / M4.13 — the global keymap (j/k navigation, `t` to open the town
@@ -24,7 +26,12 @@ import { useConsole, type WorldState } from "../store.js";
 
 const WS_URL: string =
   (import.meta.env.VITE_WORLD_WS_URL as string | undefined) ??
-  "ws://127.0.0.1:8080/ws/console";
+  // Default to same-origin so the Vite dev proxy can forward /ws to the
+  // world server. In a built bundle (no Vite proxy), set VITE_WORLD_WS_URL
+  // explicitly at build time.
+  (typeof location !== "undefined"
+    ? `ws://${location.host}/ws/console`
+    : "ws://127.0.0.1:8080/ws/console");
 
 const OPERATOR_TOKEN: string =
   (import.meta.env.VITE_OPERATOR_TOKEN as string | undefined) ?? "dev-token";
