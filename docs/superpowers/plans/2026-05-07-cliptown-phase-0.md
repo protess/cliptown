@@ -1,17 +1,35 @@
-# cliptown Phase 0 — Walking Skeleton Implementation Plan
+# cliptown Phase 0 — Walking Skeleton Implementation Plan (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the Phase 0 vertical slice of cliptown — a WeWork-style coworking town where multiple AI autonomous startups run real work concurrently with a single human operator who watches from a god view and can possess into any town. Ship gate is the 9 invariants in the spec (`docs/superpowers/specs/2026-05-07-cliptown-design.md` §11).
 
-**Architecture:** Three process types — a Rust **World Server** (single binary, single SQLite, single-threaded event loop with mpsc inbox), N **TS Agent Workers** (one per agent, each hosts an in-process MCP proxy that translates CLI tool calls to `/ws/worker` messages), and a **TS Frontend** SPA (Vite + React + Pixi, talks to world via `/ws/console`). Cross-language types are generated from Rust via `ts-rs` into a `@cliptown/protocol` workspace package.
+**Architecture:** Three process types — a Rust **World Server** (single binary, single SQLite, single-threaded event loop with mpsc inbox; **all WS/HTTP handlers dispatch to the loop, none mutate state directly**), N **TS Agent Workers** (one per agent, each hosts an in-process MCP proxy that translates CLI tool calls to `/ws/worker` messages with correlation-id round-trips), and a **TS Frontend** SPA (Vite + React + Pixi). Cross-language types are generated from Rust via `ts-rs` into `crates/world/src/protocol/` whose build script writes `.d.ts` consumed by `@cliptown/protocol`.
 
 **Tech Stack:**
-- **Rust 1.75+**: `tokio`, `axum`, `sqlx` (SQLite, WAL), `ts-rs`, `tracing`, `proptest`, `rmcp` (MCP server), `serde`, `pathfinding` (A*).
-- **Node 20+** with `pnpm`: Vite, React 18, Pixi.js 8, `pino`, `vitest`, Playwright.
-- **CLIs (Phase 0)**: Claude Code, Codex CLI, opencode. Probed on world boot.
+- **Rust 1.75+**: `tokio`, `axum`, `sqlx` (SQLite, WAL), `ts-rs`, `tracing` (JSON formatter), `proptest`, `rmcp` (only used inside Worker via Node bindings; world does NOT speak MCP), `serde`, `pathfinding` (A*), `chrono`.
+- **Node 20+** with `pnpm`: Vite, React 18, Pixi.js 8, `pino`, `vitest`, Playwright, `tsx` (for running TS without precompile in dev/tests), `@modelcontextprotocol/sdk`.
+- **CLIs (Phase 0)**: Claude Code, Codex CLI, opencode. Probed at world boot.
 
-**How to read this plan:** Tasks are grouped into 10 milestones (M0–M9). Within a milestone, tasks are **sequential**. Across milestones, see §11.5 of the spec for parallelization lanes — once M0 freezes the protocol crate, lanes A, B, C, D can branch. Each task lists exact files, then a checkbox-numbered series of 2–5-minute steps. Run every test command shown; commit after each green test (this is non-negotiable Phase 0 discipline).
+**v1 → v2 changelog (from `/codex review` 2026-05-07, integrated):**
+- Protocol crate moved into `crates/world/src/protocol/` with build script that exports `.d.ts` to `packages/protocol/dist/` on `cargo build`. The separate `crates/protocol` is gone.
+- All HTTP/WS handlers now dispatch through the world's mpsc inbox; no path mutates SQLite or in-memory state outside the loop. Single-thread invariant is enforced structurally, not by convention.
+- Determinism contract (M0.6) lands at the start: clock + randomness + uuid traits with prod and test impls. Every later task uses these — no `Date.now()`, `Math.random()`, `Uuid::new_v4()` in code paths covered by tests.
+- New M1 tasks: world-view watch + chunked snapshot, operator input handling on `/ws/console`, movement subsystem (target/current pos, 1-tile-per-tick, `move_intent` handler), task scheduler (`queued → in_progress`), budget enforcement (80/95/100 thresholds + pause-all).
+- M2.3 expands to handle the full MCP surface (`task_failed`, `accept_proposal`, `reject_proposal`, `verify`, `ask_peer`, `observe_world`, `read_artifact`, plus the existing tools).
+- M2.2 worker MCP proxy uses correlation-id awaits with explicit listener cleanup — no listener leaks across long sessions.
+- M3.1 `SpawnOpts` includes `mcp_url` (the worker's MCP socket), and M3.2 wires the real Claude Code MCP config; the contract test in M3.3 runs the fixture **through** the adapter so normalized hooks are actually validated.
+- M3.5 (new) world-side worker supervisor — the existing TS-side supervisor (M3.4) handles CLI restarts inside a worker; M3.5 spawns and respawns the worker processes themselves.
+- M4 broken into 13 per-component tasks. IBM Plex woff2 self-hosted (no CDN). Adds: system event feed + history modal, first-run gallery, real `+ New Startup` modal with backend selector reflecting `BackendCatalog`, kanban with drag-drop and stuck indicators, chat panel, agent popover, avatar status overlays, keyboard nav, possess transition (now properly inside M4, not after M9).
+- M5.1 spawns founder + engineer + designer (per spec §8.2 role set). M5 also adds `DELETE /api/startups/:id` (M5.8) and a permission-violation E2E (M5.9).
+- M5.6 implements the full review cycle (`task_request_changes → round++ → directive → re-submit → accept`) instead of accept-only. Also exercises `max_review_rounds=3` escalation.
+- M3.3 fixture CLI compiled to JS (TS executed via `tsx` in tests). Build ordering captured at root (`pnpm build` runs before any Rust test that needs `packages/worker/dist`).
+- Sandbox path-escape battery (M1.9) covers Windows absolute paths, Unicode/RTL normalization, trailing-dot Windows-style, hard links, and is replayed by both Rust (world-side `task_done` re-validation) and TS (worker-side `pre_tool` hook).
+- M9.1 broken into nine sub-tasks, one per ship-gate invariant.
+- Per-step commits replaced with **per-task commits** (still TDD: write test, fail, implement, pass, commit).
+- Time estimates revised: tasks marked `(human: ~Xh / CC: ~Y min)`. Several "5-minute" tasks were 30+ minute integration projects; estimates now reflect reality.
+
+**How to read this plan:** Tasks are grouped into 11 milestones (M0–M10). Within a milestone, tasks are **sequential**. Across milestones, see §11.5 of the spec for parallelization lanes — once M0 freezes the protocol module, lanes A, B, C, D can branch. Each task lists exact files, then a checkbox-numbered series of steps. Run every test command shown; commit at the end of each task (not each step). The implementing agent's `/ship` runs `cargo test --workspace && pnpm -r test && pnpm test:e2e` and refuses to land until all green.
 
 **Spec source of truth:** `docs/superpowers/specs/2026-05-07-cliptown-design.md` at commit `62f2f0e`. When this plan and the spec disagree, the spec wins — flag the drift and stop.
 
@@ -19,32 +37,18 @@
 
 ## Milestone 0 — Bootstrap (sequential, single lane)
 
-Goal: a buildable repo with the workspace structure from spec §3.5, the protocol crate emitting `.d.ts`, the SQLite v1 migration runnable, and CI green on an empty test suite.
+Goal: a buildable repo, the protocol module emitting `.d.ts` on `cargo build`, the SQLite v1 migration runnable, the determinism traits in place, CI green.
 
 ### Task 0.1: Cargo + pnpm workspace skeleton
 
-**Files:**
-- Create: `Cargo.toml`
-- Create: `pnpm-workspace.yaml`
-- Create: `package.json`
-- Create: `.gitignore` (append)
-- Create: `crates/world/Cargo.toml`
-- Create: `crates/world/src/main.rs`
-- Create: `crates/protocol/Cargo.toml`
-- Create: `crates/protocol/src/lib.rs`
-- Create: `packages/frontend/package.json`
-- Create: `packages/worker/package.json`
-- Create: `packages/protocol/package.json`
-- Create: `packages/adapters/claude-code/package.json`
-- Create: `packages/adapters/codex/package.json`
-- Create: `packages/adapters/opencode/package.json`
+**Effort:** human ~1.5h / CC ~10 min. **Files:** `Cargo.toml`, `pnpm-workspace.yaml`, `package.json`, `.gitignore`, `crates/world/Cargo.toml`, `crates/world/src/main.rs`, `crates/world/src/lib.rs`, `packages/{frontend,worker,protocol}/package.json`, `packages/adapters/{claude-code,codex,opencode}/package.json`.
 
-- [ ] **Step 1: Write the workspace roots**
+- [ ] **Step 1: Workspace roots**
 
 `Cargo.toml`:
 ```toml
 [workspace]
-members = ["crates/world", "crates/protocol"]
+members = ["crates/world"]
 resolver = "2"
 
 [workspace.package]
@@ -57,7 +61,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ts-rs = { version = "9", features = ["serde-compat"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json"] }
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 ```
 
 `pnpm-workspace.yaml`:
@@ -73,13 +79,21 @@ packages:
   "name": "cliptown",
   "private": true,
   "scripts": {
-    "build": "pnpm -r build",
-    "test": "pnpm -r test",
-    "dev": "pnpm --filter @cliptown/frontend dev"
+    "build:rust": "cargo build --workspace",
+    "build:ts": "pnpm -r --filter '!@cliptown/frontend' build && pnpm --filter @cliptown/frontend build",
+    "build": "pnpm build:rust && pnpm build:ts",
+    "test:rust": "cargo test --workspace",
+    "test:ts": "pnpm -r test",
+    "test": "pnpm build:rust && pnpm build:ts && pnpm test:rust && pnpm test:ts",
+    "test:e2e": "playwright test",
+    "dev": "concurrently -n world,frontend 'cargo run -p cliptown-world' 'pnpm --filter @cliptown/frontend dev'"
   },
+  "devDependencies": { "concurrently": "^9", "playwright": "^1" },
   "packageManager": "pnpm@9.0.0"
 }
 ```
+
+The `build` order — Rust first (it generates `.d.ts` via the protocol module's build script), TS second (consumes them) — is non-negotiable. `test` chains build-before-test so cargo tests that spawn `node packages/worker/dist/index.js` find the artifact.
 
 `.gitignore` (append, do not overwrite the existing `.superpowers/`):
 ```
@@ -92,9 +106,11 @@ workspaces/
 *.db-wal
 .env
 .env.local
+playwright-report/
+test-results/
 ```
 
-- [ ] **Step 2: Write the per-crate / per-package skeletons**
+- [ ] **Step 2: World crate skeleton (no separate protocol crate — protocol lives inside world)**
 
 `crates/world/Cargo.toml`:
 ```toml
@@ -103,6 +119,7 @@ name = "cliptown-world"
 version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [dependencies]
 tokio.workspace = true
@@ -110,48 +127,71 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-cliptown-protocol = { path = "../protocol" }
+anyhow.workspace = true
+chrono.workspace = true
+ts-rs.workspace = true
+
+[build-dependencies]
+ts-rs.workspace = true
+
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "cliptown-world"
 path = "src/main.rs"
 ```
 
+`crates/world/src/lib.rs`:
+```rust
+pub mod protocol;
+```
+
+`crates/world/src/protocol/mod.rs`:
+```rust
+//! Protocol types shared between world (Rust) and worker/frontend (TS via ts-rs).
+//! Add new types in submodules with #[derive(ts_rs::TS)] and
+//! #[ts(export, export_to = "../../packages/protocol/dist/")].
+
+mod schema_version;
+pub use schema_version::SchemaVersion;
+```
+
+`crates/world/src/protocol/schema_version.rs`:
+```rust
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../packages/protocol/dist/")]
+pub struct SchemaVersion { pub v: u8 }
+
+impl SchemaVersion { pub const CURRENT: Self = Self { v: 1 }; }
+```
+
 `crates/world/src/main.rs`:
 ```rust
 fn main() {
     tracing_subscriber::fmt().json().init();
-    tracing::info!(event = "boot", "cliptown world starting");
+    tracing::info!(component = "world", event = "boot", "cliptown world starting");
 }
 ```
 
-`crates/protocol/Cargo.toml`:
-```toml
-[package]
-name = "cliptown-protocol"
-version = "0.0.1"
-edition.workspace = true
-
-[dependencies]
-serde.workspace = true
-ts-rs.workspace = true
-```
-
-`crates/protocol/src/lib.rs`:
+`crates/world/build.rs`:
 ```rust
-//! Protocol types shared between world (Rust) and worker/frontend (TS via ts-rs).
-//! Add new types with #[derive(ts_rs::TS)] and #[ts(export, export_to = "../../packages/protocol/dist/")].
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn protocol_crate_compiles() {
-        // empty placeholder to drive ts-rs export side-effects in later tasks
-    }
+// build.rs — placeholder. ts-rs `#[ts(export, ...)]` derives run on `cargo test`,
+// not on `cargo build`, by design. We trigger them here so a clean `cargo build`
+// produces the .d.ts files. See M0.3 Step 3 for the explicit invocation.
+fn main() {
+    println!("cargo:rerun-if-changed=src/protocol");
 }
 ```
 
-For each TS package (`packages/frontend`, `packages/worker`, `packages/protocol`, `packages/adapters/{claude-code,codex,opencode}`) write a minimal `package.json`:
+> **Note:** `ts-rs` exports happen during `cargo test` runs, not `cargo build`. M0.3 wires an explicit export step into the build pipeline.
+
+- [ ] **Step 3: TS package skeletons**
+
+For `packages/{frontend,worker,protocol}/` and `packages/adapters/{claude-code,codex,opencode}/`, write a minimal `package.json`:
 
 ```json
 {
@@ -159,51 +199,37 @@ For each TS package (`packages/frontend`, `packages/worker`, `packages/protocol`
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "scripts": {
-    "build": "echo no-op",
-    "test": "echo no-op"
-  }
+  "scripts": { "build": "echo no-op", "test": "echo no-op" }
 }
 ```
 
-Use `frontend`, `worker`, `protocol`, `adapter-claude-code`, `adapter-codex`, `adapter-opencode` for the `<short-name>`.
+Use `frontend`, `worker`, `protocol`, `adapter-claude-code`, `adapter-codex`, `adapter-opencode` for `<short-name>`.
 
-- [ ] **Step 3: Verify the world binary builds**
+- [ ] **Step 4: Verify both build systems**
 
-Run: `cargo build -p cliptown-world`
-Expected: "Compiling cliptown-protocol", "Compiling cliptown-world", "Finished".
+```
+cargo build --workspace
+pnpm install
+```
 
-- [ ] **Step 4: Verify pnpm install works**
-
-Run: `pnpm install`
-Expected: workspace resolves, no errors. `node_modules/` and `pnpm-lock.yaml` created.
+Both must succeed with no errors.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add Cargo.toml pnpm-workspace.yaml package.json .gitignore \
-  crates/world crates/protocol \
-  packages/frontend packages/worker packages/protocol \
-  packages/adapters/claude-code packages/adapters/codex packages/adapters/opencode \
-  pnpm-lock.yaml
-git commit -m "chore(M0.1): scaffold Cargo + pnpm workspaces"
+  crates/world packages/ pnpm-lock.yaml Cargo.lock
+git commit -m "chore(M0.1): scaffold Cargo + pnpm workspaces; protocol lives in world crate"
 ```
 
-### Task 0.2: SQLite v1 migration + sqlx-cli wiring
+### Task 0.2: SQLite v1 migration + WAL pragma + storage module
 
-**Files:**
-- Create: `crates/world/migrations/0001_initial.sql`
-- Modify: `crates/world/Cargo.toml` (add `sqlx`)
-- Create: `crates/world/src/storage.rs`
-- Modify: `crates/world/src/main.rs`
-- Create: `crates/world/tests/storage_smoke.rs`
+**Effort:** human ~1h / CC ~8 min. **Files:** `crates/world/migrations/0001_initial.sql`, `crates/world/Cargo.toml` (sqlx, tempfile), `crates/world/src/storage.rs`, `crates/world/src/lib.rs`, `crates/world/tests/storage_smoke.rs`.
 
-- [ ] **Step 1: Write the migration SQL**
+- [ ] **Step 1: Migration SQL — copy spec §4 verbatim, including all CHECK constraints**
 
-`crates/world/migrations/0001_initial.sql` mirrors spec §4 verbatim. Lift the table list there. Include WAL pragma in a separate file or in the world's startup code (sqlx migrations don't run pragmas).
-
+`crates/world/migrations/0001_initial.sql`:
 ```sql
--- towns
 CREATE TABLE towns (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -228,7 +254,6 @@ CREATE TABLE room_doors (
   tile_y INTEGER NOT NULL
 );
 
--- startups (tenant root)
 CREATE TABLE startups (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -237,7 +262,7 @@ CREATE TABLE startups (
   budget_spent_usd REAL NOT NULL DEFAULT 0,
   town_id TEXT NOT NULL REFERENCES towns(id),
   workspace_path TEXT NOT NULL,
-  status TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active','paused','dissolved')),
   config_overrides TEXT,
   created_at INTEGER NOT NULL
 );
@@ -246,13 +271,13 @@ CREATE TABLE agents (
   id TEXT PRIMARY KEY,
   startup_id TEXT NOT NULL REFERENCES startups(id),
   name TEXT NOT NULL,
-  role TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('founder','engineer','designer')),
   backend TEXT NOT NULL CHECK (backend IN ('claude_code','codex','opencode')),
   model_id TEXT NOT NULL,
   position_json TEXT NOT NULL,
   home_room_id TEXT NOT NULL,
   manager_id TEXT REFERENCES agents(id),
-  status TEXT NOT NULL
+  status TEXT NOT NULL CHECK (status IN ('idle','working','walking','talking','offline'))
 );
 
 CREATE TABLE tasks (
@@ -271,7 +296,6 @@ CREATE TABLE tasks (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
-
 CREATE INDEX tasks_by_assignee ON tasks(assignee_agent_id);
 CREATE INDEX tasks_by_startup_status ON tasks(startup_id, status);
 
@@ -284,7 +308,6 @@ CREATE TABLE messages (
   kind TEXT NOT NULL CHECK (kind IN ('chat','directive','system')),
   ts INTEGER NOT NULL
 );
-
 CREATE INDEX messages_by_startup_ts ON messages(startup_id, ts DESC);
 
 CREATE TABLE budget_events (
@@ -319,19 +342,21 @@ CREATE TABLE system_events (
   severity TEXT NOT NULL CHECK (severity IN ('info','warn','alert','critical')),
   ts INTEGER NOT NULL
 );
-
 CREATE INDEX system_events_recent ON system_events(ts DESC);
 ```
 
-- [ ] **Step 2: Add sqlx to the world crate**
+- [ ] **Step 2: deps**
 
-In `crates/world/Cargo.toml` `[dependencies]` add:
+`crates/world/Cargo.toml` `[dependencies]`:
 ```toml
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
-anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
 ```
 
-- [ ] **Step 3: Write storage initializer with WAL pragmas**
+- [ ] **Step 3: Storage initializer (mandatory pragmas)**
 
 `crates/world/src/storage.rs`:
 ```rust
@@ -347,140 +372,172 @@ pub async fn open(path: &str) -> Result<SqlitePool> {
         .pragma("synchronous", "NORMAL")
         .pragma("foreign_keys", "ON")
         .busy_timeout(std::time::Duration::from_millis(5000));
-
     let pool = SqlitePoolOptions::new().connect_with(opts).await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(pool)
 }
 ```
 
-Wire into `crates/world/src/main.rs`:
-```rust
-use anyhow::Result;
-mod storage;
+`lib.rs`: `pub mod storage;`
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt().json().init();
-    let db_path = std::env::var("CLIPTOWN_DB").unwrap_or_else(|_| "cliptown.db".to_string());
-    let _pool = storage::open(&db_path).await?;
-    tracing::info!(event = "storage_ready", db = %db_path, "world storage initialized");
-    Ok(())
-}
-```
-
-- [ ] **Step 4: Write the smoke test**
+- [ ] **Step 4: Smoke test**
 
 `crates/world/tests/storage_smoke.rs`:
 ```rust
-use cliptown_world::*;
-
 #[tokio::test]
 async fn storage_opens_and_runs_migrations_in_tempdir() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test.db");
     let pool = cliptown_world::storage::open(path.to_str().unwrap()).await.unwrap();
-
-    // verify journal_mode is WAL
-    let row: (String,) = sqlx::query_as("PRAGMA journal_mode")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let row: (String,) = sqlx::query_as("PRAGMA journal_mode").fetch_one(&pool).await.unwrap();
     assert_eq!(row.0.to_lowercase(), "wal");
-
-    // verify a known table exists
-    let row: (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='startups'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row: (i64,) = sqlx::query_as("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='startups'").fetch_one(&pool).await.unwrap();
     assert_eq!(row.0, 1);
 }
 ```
 
-To make `storage` accessible from the integration test, expose it from `lib.rs`. Convert `crates/world/src/main.rs` to also expose a library, or add `crates/world/src/lib.rs`:
+Run: `cargo test -p cliptown-world --test storage_smoke` → PASS.
 
-```rust
-pub mod storage;
-```
-
-Add the lib target and `tempfile` dev-dep in `crates/world/Cargo.toml`:
-```toml
-[lib]
-path = "src/lib.rs"
-
-[dev-dependencies]
-tempfile = "3"
-```
-
-Make `main.rs` reference the lib:
-```rust
-use anyhow::Result;
-use cliptown_world::storage;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt().json().init();
-    let db_path = std::env::var("CLIPTOWN_DB").unwrap_or_else(|_| "cliptown.db".to_string());
-    let _pool = storage::open(&db_path).await?;
-    tracing::info!(event = "storage_ready", db = %db_path);
-    Ok(())
-}
-```
-
-- [ ] **Step 5: Run the test**
-
-Run: `cargo test -p cliptown-world --test storage_smoke -- --nocapture`
-Expected: `PASS`. The test creates a tempdir DB, runs migrations, verifies WAL.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/world/migrations crates/world/Cargo.toml \
-  crates/world/src/lib.rs crates/world/src/storage.rs crates/world/src/main.rs \
-  crates/world/tests/storage_smoke.rs Cargo.lock
+git add crates/world Cargo.lock
 git commit -m "feat(M0.2): SQLite v1 migration + WAL pragma init"
 ```
 
-### Task 0.3: protocol crate first ts-rs export
+### Task 0.3: ts-rs export pipeline + protocol module + first WS message types
 
-**Files:**
-- Modify: `crates/protocol/src/lib.rs`
-- Create: `packages/protocol/dist/.gitkeep`
-- Create: `packages/protocol/index.d.ts` (entry point)
-- Create: `crates/protocol/tests/export.rs`
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/src/protocol/{mod,schema_version,ws_messages}.rs`, `crates/world/build.rs`, `crates/world/Cargo.toml`, `packages/protocol/{package.json,index.d.ts,dist/.gitkeep}`, `crates/world/tests/ts_export.rs`, repo root `pnpm-workspace.yaml` already includes packages/protocol.
 
-- [ ] **Step 1: Define the first protocol type**
+- [ ] **Step 1: Define core WS message envelope types**
 
-`crates/protocol/src/lib.rs`:
+`crates/world/src/protocol/ws_messages.rs`:
 ```rust
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// Schema version sent on every WS frame.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[derive(Debug, Serialize, Deserialize, TS, Clone)]
 #[ts(export, export_to = "../../packages/protocol/dist/")]
-pub struct SchemaVersion {
-    pub v: u8,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WorkerInbound {
+    Hello { v: u8, agent_id: String, startup_id: String, secret: String },
+    McpCall { v: u8, corr_id: String, tool: String, args: serde_json::Value },
+    ReportBudget { v: u8, in_tokens: u64, out_tokens: u64, model_id: String, task_id: Option<String> },
+    ReportFsOp { v: u8, op: String, path: String, bytes: i64, ok: bool, error: Option<String> },
+    CliSessionStarted { v: u8, task_id: Option<String>, prompt_hash: String },
+    CliSessionEnded { v: u8, task_id: Option<String>, exit_code: i32, summary: Option<String> },
+    TaskProgress { v: u8, task_id: String, note: String },
 }
 
-impl SchemaVersion {
-    pub const CURRENT: Self = Self { v: 1 };
+#[derive(Debug, Serialize, Deserialize, TS, Clone)]
+#[ts(export, export_to = "../../packages/protocol/dist/")]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WorkerOutbound {
+    McpReply { v: u8, corr_id: String, result: serde_json::Value },
+    McpError { v: u8, corr_id: String, code: String, message: String },
+    WorldState { v: u8, snapshot: serde_json::Value },
+    WorldStateChunk { v: u8, seq: u32, total: u32, payload: serde_json::Value },
+    WorldStateEnd { v: u8 },
+    TaskAssigned { v: u8, task_id: String, title: String, description: String, required_room: Option<String>, parent_id: Option<String> },
+    SubtaskProposed { v: u8, parent_id: String, proposed_task_id: String, proposer_agent_id: String, title: String, description: String, suggested_assignee_role: Option<String> },
+    SubtaskDone { v: u8, parent_id: String, child_id: String, artifact_path: String, review_round: u32 },
+    Directive { v: u8, from_agent_id: String, body: String, in_response_to_task: Option<String> },
+    ProximityTick { v: u8, room_id: String, members: Vec<serde_json::Value> },
+    ChatReceived { v: u8, from_agent_id: String, body: String, room_id: String },
+    MoveComplete { v: u8, room_id: String },
+    MoveFailed { v: u8, reason: String },
+    BudgetWarning { v: u8, remaining_usd: f64, percent_used: u32 },
+    Pause,
+    Shutdown,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS, Clone)]
+#[ts(export, export_to = "../../packages/protocol/dist/")]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConsoleInbound {
+    Hello { v: u8, operator_token: String },
+    OperatorMove { v: u8, target_x: i32, target_y: i32 },
+    OperatorPossess { v: u8, startup_id: String },
+    OperatorUnpossess { v: u8 },
+    OperatorDirective { v: u8, to_agent_id: String, body: String },
+    OperatorAcceptProposal { v: u8, task_id: String, assignee_agent_id: String, required_room: Option<String> },
+    OperatorRejectProposal { v: u8, task_id: String, reason: String },
+    OperatorForceAccept { v: u8, task_id: String },
+    OperatorForceFail { v: u8, task_id: String, note: String },
+    OperatorRecheckBackends,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS, Clone)]
+#[ts(export, export_to = "../../packages/protocol/dist/")]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConsoleOutbound {
+    WorldViewSnapshot { v: u8, snapshot: serde_json::Value },
+    WorldViewDelta { v: u8, tick_seq: u64, changes: serde_json::Value },
+    SystemEvent { v: u8, severity: String, kind: String, startup_id: Option<String>, payload: serde_json::Value, ts: i64 },
+    BackendCatalog { v: u8, entries: serde_json::Value },
+    Toast { v: u8, severity: String, body: String, sticky: bool },
+    Modal { v: u8, kind: String, payload: serde_json::Value },
 }
 ```
 
-- [ ] **Step 2: Wire the TS package entry point**
+`crates/world/src/protocol/mod.rs`:
+```rust
+mod schema_version;
+mod ws_messages;
+pub use schema_version::SchemaVersion;
+pub use ws_messages::*;
+```
+
+- [ ] **Step 2: Wire export trigger into the build pipeline**
+
+`ts-rs` exports run on `cargo test`. To make `pnpm build` produce `.d.ts` deterministically, add a Cargo alias. Create `.cargo/config.toml`:
+```toml
+[alias]
+ts-export = "test -p cliptown-world --lib --features _ts_export -- --ignored ts_rs_export"
+```
+
+`crates/world/Cargo.toml` add a feature:
+```toml
+[features]
+_ts_export = []
+```
+
+`crates/world/src/lib.rs` (append):
+```rust
+#[cfg(test)]
+mod ts_export {
+    /// Forces the ts-rs export side-effect on `cargo test`. Ignored in normal runs;
+    /// run via `cargo ts-export` from package.json's `build:rust` script.
+    #[test]
+    #[ignore]
+    fn ts_rs_export() {
+        use crate::protocol::*;
+        let _ = SchemaVersion::CURRENT;
+    }
+}
+```
+
+Update repo `package.json` `scripts.build:rust`:
+```json
+"build:rust": "cargo build --workspace && cargo test -p cliptown-world --lib -- --ignored ts_rs_export"
+```
+
+- [ ] **Step 3: TS protocol package consumes the generated files**
 
 `packages/protocol/dist/.gitkeep`: empty file.
 
 `packages/protocol/index.d.ts`:
 ```typescript
-export * from "./dist/SchemaVersion";
-// future ts-rs-generated types are re-exported by appending here
+// Generated by ts-rs from crates/world/src/protocol/. Do not edit by hand.
+// New exports appear in dist/ and must be re-exported here.
+export type { SchemaVersion } from "./dist/SchemaVersion";
+export type { WorkerInbound } from "./dist/WorkerInbound";
+export type { WorkerOutbound } from "./dist/WorkerOutbound";
+export type { ConsoleInbound } from "./dist/ConsoleInbound";
+export type { ConsoleOutbound } from "./dist/ConsoleOutbound";
 ```
 
-Update `packages/protocol/package.json`:
+`packages/protocol/package.json`:
 ```json
 {
   "name": "@cliptown/protocol",
@@ -488,53 +545,37 @@ Update `packages/protocol/package.json`:
   "private": true,
   "type": "module",
   "main": "index.d.ts",
-  "types": "index.d.ts"
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "test -f dist/SchemaVersion.ts || (echo 'Run pnpm build:rust first' && exit 1)",
+    "test": "echo no-op"
+  }
 }
 ```
 
-- [ ] **Step 3: Write the export test**
+- [ ] **Step 4: Verify**
 
-`crates/protocol/tests/export.rs`:
-```rust
-//! ts-rs writes export files when tests run with TS_RS_EXPORT_DIR unset.
-//! This test exists so `cargo test -p cliptown-protocol` produces the .d.ts files.
-
-use cliptown_protocol::SchemaVersion;
-
-#[test]
-fn schema_version_exports() {
-    let s = SchemaVersion::CURRENT;
-    assert_eq!(s.v, 1);
-}
+```
+pnpm build:rust
+ls packages/protocol/dist/
 ```
 
-- [ ] **Step 4: Run the test and verify the .d.ts file appears**
-
-Run: `cargo test -p cliptown-protocol`
-Expected: `PASS`.
-
-Run: `ls packages/protocol/dist/`
-Expected: `SchemaVersion.ts` exists.
+Expected files: `SchemaVersion.ts`, `WorkerInbound.ts`, `WorkerOutbound.ts`, `ConsoleInbound.ts`, `ConsoleOutbound.ts`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/protocol packages/protocol
-git commit -m "feat(M0.3): protocol crate with first ts-rs export"
+git add crates/world packages/protocol .cargo package.json
+git commit -m "feat(M0.3): protocol module + ts-rs export pipeline wired into pnpm build"
 ```
 
-### Task 0.4: cliptown.toml config loader
+### Task 0.4: cliptown.toml + config loader
 
-**Files:**
-- Create: `cliptown.toml` (repo root)
-- Modify: `crates/world/Cargo.toml` (add `toml`, `serde`)
-- Create: `crates/world/src/config.rs`
-- Modify: `crates/world/src/lib.rs`
-- Create: `crates/world/tests/config_smoke.rs`
+**Effort:** human ~30min / CC ~5 min. **Files:** `cliptown.toml`, `crates/world/Cargo.toml` (toml dep), `crates/world/src/config.rs`, `crates/world/src/lib.rs`, `crates/world/tests/config_smoke.rs`.
 
-- [ ] **Step 1: Write the default config file**
+- [ ] **Step 1: Default config — copy verbatim from spec §3.5 + kanban additions**
 
-`cliptown.toml` — copy verbatim from spec §3.5 (under "Configuration"):
+`cliptown.toml`:
 ```toml
 [world]
 tick_hz = 1
@@ -566,142 +607,204 @@ stuck_warn_minutes = 5
 stuck_alert_minutes = 30
 ```
 
-- [ ] **Step 2: Add `toml` dep**
+- [ ] **Step 2: Loader** (same as v1)
 
-`crates/world/Cargo.toml` `[dependencies]`:
-```toml
-toml = "0.8"
-```
+`crates/world/Cargo.toml` add `toml = "0.8"`. `src/config.rs` with the structs from spec; `pub mod config;` in `lib.rs`.
 
-- [ ] **Step 3: Write the loader**
+- [ ] **Step 3: Smoke** asserting all top-level sections load without panic.
 
-`crates/world/src/config.rs`:
-```rust
-use anyhow::Result;
-use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-pub struct Config {
-    pub world: WorldCfg,
-    pub task: TaskCfg,
-    pub epistemic: EpistemicCfg,
-    pub budget: BudgetCfg,
-    pub supervisor: SupervisorCfg,
-    pub possess: PossessCfg,
-    pub kanban: KanbanCfg,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct WorldCfg { pub tick_hz: u32, pub position_snapshot_every_ticks: u32 }
-#[derive(Debug, Deserialize)]
-pub struct TaskCfg { pub max_review_rounds: u32, pub max_llm_turns_per_task: u32 }
-#[derive(Debug, Deserialize)]
-pub struct EpistemicCfg { pub max_hypotheses_per_task: u32, pub max_tests_per_hypothesis: u32, pub non_trivial_description_token_threshold: u32 }
-#[derive(Debug, Deserialize)]
-pub struct BudgetCfg { pub warn_pct: u32, pub no_new_task_pct: u32, pub pause_all_pct: u32 }
-#[derive(Debug, Deserialize)]
-pub struct SupervisorCfg { pub worker_respawn_backoff_seconds: Vec<u64>, pub worker_respawn_max_attempts: u32 }
-#[derive(Debug, Deserialize)]
-pub struct PossessCfg { pub operator_keepalive_timeout_seconds: u64 }
-#[derive(Debug, Deserialize)]
-pub struct KanbanCfg { pub stuck_warn_minutes: u32, pub stuck_alert_minutes: u32 }
-
-pub fn load_from(path: &str) -> Result<Config> {
-    let s = std::fs::read_to_string(path)?;
-    let cfg: Config = toml::from_str(&s)?;
-    Ok(cfg)
-}
-```
-
-- [ ] **Step 4: Re-export from `lib.rs`**
-
-`crates/world/src/lib.rs` (append):
-```rust
-pub mod config;
-```
-
-- [ ] **Step 5: Smoke test**
-
-`crates/world/tests/config_smoke.rs`:
-```rust
-#[test]
-fn loads_repo_root_config() {
-    let cfg = cliptown_world::config::load_from("../../cliptown.toml").unwrap();
-    assert_eq!(cfg.world.tick_hz, 1);
-    assert_eq!(cfg.task.max_review_rounds, 3);
-    assert_eq!(cfg.kanban.stuck_alert_minutes, 30);
-}
-```
-
-Run: `cargo test -p cliptown-world --test config_smoke`
-Expected: PASS.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add cliptown.toml crates/world/Cargo.toml crates/world/src/config.rs \
-  crates/world/src/lib.rs crates/world/tests/config_smoke.rs Cargo.lock
+git add cliptown.toml crates/world
 git commit -m "feat(M0.4): cliptown.toml loader with full Phase 0 surface"
 ```
 
-### Task 0.5: CI skeleton
+### Task 0.5: CI skeleton (with build ordering)
 
-**Files:**
-- Create: `.github/workflows/ci.yml`
+**Effort:** human ~30min / CC ~5 min. **Files:** `.github/workflows/ci.yml`.
 
-- [ ] **Step 1: Write CI workflow**
+- [ ] **Step 1: CI workflow that builds Rust → TS → tests both → e2e (mocked)**
 
 ```yaml
 name: CI
-on:
-  push:
-    branches: [main]
-  pull_request:
+on: [push, pull_request]
 jobs:
-  rust:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace
-      - run: cargo test --workspace
-  ts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - uses: pnpm/action-setup@v4
         with: { version: 9 }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
-      - run: pnpm -r test
+      - name: Build (Rust → TS)
+        run: pnpm build
+      - name: Rust tests
+        run: pnpm test:rust
+      - name: TS tests
+        run: pnpm test:ts
+      - name: E2E (mocked LLM)
+        run: pnpm test:e2e
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
 git add .github
-git commit -m "ci(M0.5): cargo and pnpm workspace CI"
+git commit -m "ci(M0.5): cargo + pnpm + e2e with mandatory build-before-test order"
+```
+
+### Task 0.6: Determinism contract — clock, randomness, uuid traits
+
+**Effort:** human ~1h / CC ~7 min. **Files:** `crates/world/src/det.rs`, `crates/world/src/lib.rs`, `crates/world/tests/det_unit.rs`, `packages/worker/src/det.ts`.
+
+> **Why this lands now:** every later task references the determinism contract. Without it, every test that mocks time or randomness has to invent its own pattern.
+
+- [ ] **Step 1: Rust traits + prod/test impls**
+
+`crates/world/src/det.rs`:
+```rust
+use std::sync::Arc;
+use std::time::SystemTime;
+use uuid::Uuid;
+
+pub trait Clock: Send + Sync { fn now_unix(&self) -> i64; }
+pub trait Randomness: Send + Sync { fn next_u32(&self) -> u32; }
+pub trait UuidGen: Send + Sync { fn new(&self) -> String; }
+
+pub struct ProdClock;
+impl Clock for ProdClock {
+    fn now_unix(&self) -> i64 {
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+}
+pub struct ProdRandom;
+impl Randomness for ProdRandom { fn next_u32(&self) -> u32 { rand::random() } }
+pub struct ProdUuid;
+impl UuidGen for ProdUuid { fn new(&self) -> String { Uuid::new_v4().to_string() } }
+
+#[derive(Clone)]
+pub struct DetCtx {
+    pub clock: Arc<dyn Clock>,
+    pub random: Arc<dyn Randomness>,
+    pub uuid: Arc<dyn UuidGen>,
+}
+impl DetCtx {
+    pub fn prod() -> Self { Self { clock: Arc::new(ProdClock), random: Arc::new(ProdRandom), uuid: Arc::new(ProdUuid) } }
+}
+
+#[cfg(any(test, feature = "test_det"))]
+pub mod testing {
+    use super::*;
+    use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
+    pub struct FakeClock(AtomicI64);
+    impl FakeClock { pub fn at(t: i64) -> Self { Self(AtomicI64::new(t)) } pub fn advance(&self, by: i64) { self.0.fetch_add(by, Ordering::SeqCst); } }
+    impl Clock for FakeClock { fn now_unix(&self) -> i64 { self.0.load(Ordering::SeqCst) } }
+    pub struct SeededRandom(AtomicU32);
+    impl SeededRandom { pub fn seed(s: u32) -> Self { Self(AtomicU32::new(s)) } }
+    impl Randomness for SeededRandom {
+        fn next_u32(&self) -> u32 {
+            // xorshift32
+            let mut x = self.0.load(Ordering::SeqCst);
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            self.0.store(x, Ordering::SeqCst);
+            x
+        }
+    }
+    pub struct SeededUuid(AtomicU64);
+    impl SeededUuid { pub fn seed(s: u64) -> Self { Self(AtomicU64::new(s)) } }
+    impl UuidGen for SeededUuid {
+        fn new(&self) -> String {
+            let n = self.0.fetch_add(1, Ordering::SeqCst);
+            format!("00000000-0000-0000-0000-{:012x}", n)
+        }
+    }
+    pub fn ctx(t0: i64, seed: u32) -> DetCtx {
+        DetCtx {
+            clock: Arc::new(FakeClock::at(t0)),
+            random: Arc::new(SeededRandom::seed(seed)),
+            uuid: Arc::new(SeededUuid::seed(0)),
+        }
+    }
+}
+```
+
+Add `rand = "0.8"` to deps. `lib.rs`: `pub mod det;`.
+
+- [ ] **Step 2: TS mirror**
+
+`packages/worker/src/det.ts`:
+```ts
+export interface Clock { nowUnix(): number; }
+export interface Randomness { nextU32(): number; }
+export interface UuidGen { new(): string; }
+export interface DetCtx { clock: Clock; random: Randomness; uuid: UuidGen; }
+export function prodCtx(): DetCtx {
+  return {
+    clock: { nowUnix: () => Math.floor(Date.now() / 1000) },
+    random: { nextU32: () => Math.floor(Math.random() * 0x1_0000_0000) },
+    uuid: { new: () => crypto.randomUUID() },
+  };
+}
+export function testCtx(t0: number, seed: number): DetCtx {
+  let t = t0; let r = seed >>> 0; let u = 0;
+  return {
+    clock: { nowUnix: () => t },
+    random: { nextU32: () => { r ^= r << 13; r ^= r >>> 17; r ^= r << 5; return r >>> 0; } },
+    uuid: { new: () => `00000000-0000-0000-0000-${(u++).toString(16).padStart(12, "0")}` },
+  };
+}
+```
+
+- [ ] **Step 3: Unit tests for both sides**
+
+```rust
+// crates/world/tests/det_unit.rs
+#[test]
+fn fake_clock_is_deterministic() {
+    use cliptown_world::det::testing::*;
+    let c = FakeClock::at(100);
+    assert_eq!(<FakeClock as cliptown_world::det::Clock>::now_unix(&c), 100);
+    c.advance(5);
+    assert_eq!(<FakeClock as cliptown_world::det::Clock>::now_unix(&c), 105);
+}
+```
+
+```ts
+// packages/worker/test/det.test.ts
+import { testCtx } from "../src/det";
+import { describe, it, expect } from "vitest";
+describe("det", () => {
+  it("is reproducible with the same seed", () => {
+    const a = testCtx(100, 7); const b = testCtx(100, 7);
+    expect(a.random.nextU32()).toBe(b.random.nextU32());
+    expect(a.uuid.new()).toBe(b.uuid.new());
+  });
+});
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add crates/world packages/worker
+git commit -m "feat(M0.6): determinism contract — FakeClock + SeededRandom + SeededUuid in Rust and TS"
 ```
 
 ---
 
 ## Milestone 1 — World Server Core (Lane A)
 
-Goal: world process boots, listens on `:8080`, accepts WS connections on `/ws/console` and `/ws/worker`, runs a 1Hz tick, persists positions to SQLite, exposes a backend catalog. No agents yet — just the substrate.
+Goal: world boots, all WS/HTTP traffic dispatches to a single mpsc loop (not direct mutation), backend catalog probed, town seeded, sandbox + permissions + state machine + persist + scheduler + budget + movement + view-snapshot all in place.
 
-### Task 1.1: Boot + tracing + axum HTTP
+### Task 1.1: Boot + structured logging + health endpoint
 
-**Files:**
-- Modify: `crates/world/Cargo.toml`
-- Modify: `crates/world/src/main.rs`
-- Create: `crates/world/src/http.rs`
-- Modify: `crates/world/src/lib.rs`
-- Create: `crates/world/tests/http_smoke.rs`
+**Effort:** human ~1h / CC ~7 min. **Files:** `crates/world/Cargo.toml` (axum, tower-http), `crates/world/src/http.rs`, `crates/world/src/main.rs`, `crates/world/src/lib.rs`, `crates/world/tests/http_smoke.rs`.
 
-- [ ] **Step 1: Add axum + tower deps**
+- [ ] **Step 1: deps**
 
 ```toml
 axum = { version = "0.7", features = ["ws", "json"] }
@@ -710,59 +813,72 @@ tower-http = { version = "0.6", features = ["trace"] }
 hyper = "1"
 ```
 
-- [ ] **Step 2: Write the HTTP module**
+- [ ] **Step 2: `tracing` JSON formatter with required fields**
+
+`main.rs`:
+```rust
+use anyhow::Result;
+use cliptown_world::{config, http, storage};
+use tracing_subscriber::{fmt, EnvFilter};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    fmt()
+        .json()
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .init();
+    tracing::info!(component = "world", event = "boot");
+
+    let _cfg = config::load_from("cliptown.toml")?;
+    let db_path = std::env::var("CLIPTOWN_DB").unwrap_or_else(|_| "cliptown.db".into());
+    let pool = storage::open(&db_path).await?;
+    tracing::info!(component = "world", event = "storage_ready", db = %db_path);
+
+    let app = http::router_minimal();
+    let addr = std::env::var("CLIPTOWN_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let bound = listener.local_addr()?;
+    tracing::info!(component = "world", event = "listening", addr = %bound);
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+```
+
+> **`CLIPTOWN_ADDR` defaults to `127.0.0.1:0`** so tests get an OS-assigned port. Production uses `127.0.0.1:8080`.
+
+- [ ] **Step 3: Required JSON log fields enforced**
+
+Every `tracing::info!`, `warn!`, `error!` call site in this codebase must include `component = "world"` (or `"worker:<agent_id>"` / `"adapter:<id>"` in those crates) and `event = "<snake_case>"`. Add a `clippy.toml` lint allowance not required, but add a CI grep step:
+
+`.github/workflows/ci.yml` add a step:
+```yaml
+- name: Enforce log shape
+  run: |
+    ! rg -n 'tracing::(info|warn|error)' crates/ | rg -v 'component\s*=' || (echo "Missing component= field" && exit 1)
+```
+
+- [ ] **Step 4: Smoke test on a random port**
 
 `crates/world/src/http.rs`:
 ```rust
 use axum::{routing::get, Router, response::Json};
 use serde_json::json;
 
-pub fn router() -> Router {
-    Router::new()
-        .route("/health", get(|| async { Json(json!({"ok": true})) }))
+pub fn router_minimal() -> Router {
+    Router::new().route("/health", get(|| async { Json(json!({"ok": true})) }))
 }
 ```
 
-- [ ] **Step 3: Wire into `main.rs`**
-
-```rust
-use anyhow::Result;
-use cliptown_world::{config, http, storage};
-use std::net::SocketAddr;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt().json().init();
-
-    let _cfg = config::load_from("cliptown.toml")?;
-    let db_path = std::env::var("CLIPTOWN_DB").unwrap_or_else(|_| "cliptown.db".into());
-    let _pool = storage::open(&db_path).await?;
-
-    let app = http::router();
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(event = "listening", addr = %addr);
-    axum::serve(listener, app).await?;
-    Ok(())
-}
-```
-
-Re-export in `lib.rs`: `pub mod http;`.
-
-- [ ] **Step 4: Smoke test the health endpoint**
-
-`crates/world/tests/http_smoke.rs`:
+`tests/http_smoke.rs`:
 ```rust
 use axum::body::to_bytes;
 use tower::ServiceExt;
-
 #[tokio::test]
 async fn health_returns_ok_json() {
-    let app = cliptown_world::http::router();
-    let req = axum::http::Request::builder()
-        .uri("/health")
-        .body(axum::body::Body::empty())
-        .unwrap();
+    let app = cliptown_world::http::router_minimal();
+    let req = axum::http::Request::builder().uri("/health").body(axum::body::Body::empty()).unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 200);
     let body = to_bytes(resp.into_body(), 1024).await.unwrap();
@@ -770,258 +886,278 @@ async fn health_returns_ok_json() {
 }
 ```
 
-Run: `cargo test -p cliptown-world --test http_smoke`
-Expected: PASS.
+Run: `cargo test -p cliptown-world --test http_smoke` → PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M1.1): world boots axum on :8080 with /health"
+git commit -am "feat(M1.1): world boot + JSON tracing with enforced component/event fields"
 ```
 
-### Task 1.2: World state + mpsc inbox + tick
+### Task 1.2: World state + mpsc loop + tick + watch view
 
-**Files:**
-- Create: `crates/world/src/state.rs`
-- Create: `crates/world/src/loop_.rs`
-- Modify: `crates/world/src/lib.rs`
-- Modify: `crates/world/src/main.rs`
-- Create: `crates/world/tests/tick_smoke.rs`
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/src/state.rs`, `crates/world/src/loop_.rs`, `crates/world/src/lib.rs`, `crates/world/tests/loop_smoke.rs`.
 
-- [ ] **Step 1: Define minimal in-memory state**
+- [ ] **Step 1: World state (typed, single-source-of-truth)**
 
 `crates/world/src/state.rs`:
 ```rust
 use std::collections::HashMap;
+use serde::Serialize;
+use ts_rs::TS;
 
-#[derive(Debug, Default, Clone)]
-pub struct World {
+#[derive(Debug, Default, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../packages/protocol/dist/")]
+pub struct WorldView {
     pub tick_seq: u64,
-    pub positions: HashMap<String, (i32, i32, String)>, // agent_id -> (x, y, room_id)
+    pub backend_catalog: HashMap<String, serde_json::Value>,
+    pub avatars: HashMap<String, AvatarView>,
 }
 
-impl World {
-    pub fn advance_tick(&mut self) {
-        self.tick_seq = self.tick_seq.wrapping_add(1);
-    }
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../packages/protocol/dist/")]
+pub struct AvatarView {
+    pub agent_id: String,
+    pub startup_id: String,
+    pub role: String,
+    pub backend: String,
+    pub current_pos: (i32, i32),
+    pub target_pos: Option<(i32, i32)>,
+    pub room_id: String,
+    pub status: String,
 }
 ```
 
-- [ ] **Step 2: Write the event loop**
+- [ ] **Step 2: Inbox message types — every world mutation MUST go through here**
 
 `crates/world/src/loop_.rs`:
 ```rust
-use crate::state::World;
-use tokio::sync::{mpsc, watch};
+use crate::state::WorldView;
+use tokio::sync::{mpsc, oneshot, watch};
 
 #[derive(Debug)]
-pub enum InMsg {
+pub enum Cmd {
     Tick,
+    HandleConsoleMsg { msg: serde_json::Value, reply: oneshot::Sender<serde_json::Value> },
+    HandleWorkerMsg { agent_id: String, msg: serde_json::Value, reply: oneshot::Sender<serde_json::Value> },
+    BackendCatalogUpdated(std::collections::HashMap<String, serde_json::Value>),
     Shutdown,
 }
 
-pub struct Handles {
-    pub tx: mpsc::Sender<InMsg>,
-    pub view_rx: watch::Receiver<World>,
+#[derive(Clone)]
+pub struct Handle {
+    pub tx: mpsc::Sender<Cmd>,
+    pub view_rx: watch::Receiver<WorldView>,
 }
 
-pub fn spawn(initial: World) -> Handles {
-    let (tx, mut rx) = mpsc::channel::<InMsg>(1024);
+pub fn spawn(initial: WorldView) -> Handle {
+    let (tx, mut rx) = mpsc::channel::<Cmd>(1024);
     let (view_tx, view_rx) = watch::channel(initial.clone());
     let mut w = initial;
-
     tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            match msg {
-                InMsg::Tick => {
-                    w.advance_tick();
-                    let _ = view_tx.send(w.clone());
-                }
-                InMsg::Shutdown => break,
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                Cmd::Tick => { w.tick_seq = w.tick_seq.wrapping_add(1); let _ = view_tx.send(w.clone()); }
+                Cmd::HandleConsoleMsg { msg: _, reply } => { let _ = reply.send(serde_json::json!({"ok": true})); }
+                Cmd::HandleWorkerMsg { agent_id: _, msg: _, reply } => { let _ = reply.send(serde_json::json!({"ok": true})); }
+                Cmd::BackendCatalogUpdated(c) => { w.backend_catalog = c; let _ = view_tx.send(w.clone()); }
+                Cmd::Shutdown => break,
             }
         }
     });
-
     let timer_tx = tx.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-        loop {
-            interval.tick().await;
-            if timer_tx.send(InMsg::Tick).await.is_err() { break; }
-        }
+        loop { interval.tick().await; if timer_tx.send(Cmd::Tick).await.is_err() { break; } }
     });
-
-    Handles { tx, view_rx }
+    Handle { tx, view_rx }
 }
 ```
 
-- [ ] **Step 3: Re-export and wire into main**
+> **The single-thread invariant:** the world's `WorldView` and any future SQLite write that depends on `WorldView` are mutated only inside this `match cmd` block. Every test that touches the world reaches it through `Handle::tx`. The HTTP/WS layers in 1.3 + later tasks construct a `Cmd` and send it; they never call `sqlx::query` directly during request handling.
 
-`lib.rs` append:
+`lib.rs`: `pub mod state; pub mod loop_;`
+
+- [ ] **Step 3: Tick smoke**
+
+`tests/loop_smoke.rs`:
 ```rust
-pub mod state;
-pub mod loop_;
-```
-
-`main.rs` after `_pool` line:
-```rust
-let _handles = cliptown_world::loop_::spawn(cliptown_world::state::World::default());
-```
-
-- [ ] **Step 4: Test tick advances**
-
-`crates/world/tests/tick_smoke.rs`:
-```rust
-use cliptown_world::{loop_, state::World};
-
+use cliptown_world::{loop_, state::WorldView};
 #[tokio::test(start_paused = true)]
-async fn tick_advances_seq_each_second() {
-    let h = loop_::spawn(World::default());
+async fn tick_advances_seq() {
+    let h = loop_::spawn(WorldView::default());
     let initial = h.view_rx.borrow().tick_seq;
     tokio::time::advance(std::time::Duration::from_secs(3)).await;
-    // give the loop a chance to process
     tokio::task::yield_now().await;
-    let now = h.view_rx.borrow().tick_seq;
-    assert!(now > initial, "expected tick advance, got {now} from {initial}");
+    assert!(h.view_rx.borrow().tick_seq > initial);
 }
 ```
 
-Run: `cargo test -p cliptown-world --test tick_smoke`
-Expected: PASS.
+Run → PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M1.2): mpsc event loop + 1Hz tick + watch view"
+git commit -am "feat(M1.2): mpsc inbox + 1Hz tick + watch view (single-thread mutation invariant)"
 ```
 
-### Task 1.3: WS endpoints (skeleton, accept-only)
+### Task 1.3: WS endpoints with auth + dispatch through inbox
 
-**Files:**
-- Modify: `crates/world/src/http.rs`
-- Modify: `crates/world/src/main.rs`
-- Modify: `crates/world/Cargo.toml` (add `axum` ws is already there; add `tokio-tungstenite` if needed for the test client)
-- Create: `crates/world/tests/ws_smoke.rs`
+**Effort:** human ~3h / CC ~15 min. **Files:** `crates/world/src/http.rs` (replace `router_minimal` with `router`), `crates/world/src/auth.rs`, `crates/world/tests/ws_auth.rs`.
 
-- [ ] **Step 1: Add WS routes**
+- [ ] **Step 1: Auth helpers**
 
-`crates/world/src/http.rs`:
+`crates/world/src/auth.rs`:
+```rust
+use anyhow::{anyhow, Result};
+use sqlx::SqlitePool;
+
+pub async fn validate_operator_token(_pool: &SqlitePool, token: &str) -> Result<()> {
+    // Phase 0: single-operator. Token comes from CLIPTOWN_OPERATOR_TOKEN env.
+    let expected = std::env::var("CLIPTOWN_OPERATOR_TOKEN").unwrap_or_else(|_| "dev-token".into());
+    if token == expected { Ok(()) } else { Err(anyhow!("invalid_operator_token")) }
+}
+
+pub async fn validate_agent_secret(pool: &SqlitePool, agent_id: &str, secret: &str) -> Result<String> {
+    // Phase 0: secrets stored in agents.config_overrides JSON or env. Returns startup_id.
+    let row: (String, Option<String>) = sqlx::query_as("SELECT startup_id, config_overrides FROM agents WHERE id = ?")
+        .bind(agent_id).fetch_optional(pool).await?
+        .ok_or_else(|| anyhow!("unknown_agent"))?;
+    let expected = std::env::var(format!("CLIPTOWN_AGENT_SECRET_{agent_id}")).unwrap_or_else(|_| "dev-secret".into());
+    if secret != expected { return Err(anyhow!("invalid_agent_secret")); }
+    Ok(row.0)
+}
+```
+
+- [ ] **Step 2: New `router` with auth + dispatch via `Handle::tx`**
+
+`crates/world/src/http.rs` — replace previous `router_minimal`:
 ```rust
 use axum::{
-    extract::{ws::{WebSocket, WebSocketUpgrade}, State},
-    response::{Json, Response},
-    routing::get,
+    extract::{ws::{WebSocket, WebSocketUpgrade, Message}, State},
+    response::{Json, Response, IntoResponse},
+    routing::{get, post},
     Router,
+    http::StatusCode,
 };
 use serde_json::json;
 use std::sync::Arc;
-use tokio::sync::watch;
-use crate::state::World;
+use sqlx::SqlitePool;
+use tokio::sync::oneshot;
+use crate::loop_::{Cmd, Handle};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub view: watch::Receiver<World>,
+    pub pool: SqlitePool,
+    pub handle: Handle,
+    pub catalog: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, serde_json::Value>>>,
 }
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(|| async { Json(json!({"ok": true})) }))
+        .route("/api/backend-catalog", get(api_catalog))
+        .route("/api/backend-catalog/recheck", post(api_recheck))
         .route("/ws/console", get(ws_console))
         .route("/ws/worker", get(ws_worker))
         .with_state(Arc::new(state))
 }
 
-async fn ws_console(ws: WebSocketUpgrade, State(_s): State<Arc<AppState>>) -> Response {
-    ws.on_upgrade(handle_console)
+async fn api_catalog(State(s): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let m = s.catalog.read().await;
+    Json(serde_json::to_value(&*m).unwrap())
 }
 
-async fn ws_worker(ws: WebSocketUpgrade, State(_s): State<Arc<AppState>>) -> Response {
-    ws.on_upgrade(handle_worker)
+async fn api_recheck(State(s): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let new_cat = crate::backend_catalog::probe_all().await;
+    let new_json: std::collections::HashMap<_, _> = new_cat.iter()
+        .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap())).collect();
+    *s.catalog.write().await = new_json.clone();
+    let _ = s.handle.tx.send(Cmd::BackendCatalogUpdated(new_json.clone())).await;
+    Json(serde_json::json!({"ok": true, "entries": new_json}))
 }
 
-async fn handle_console(mut socket: WebSocket) {
-    while let Some(msg) = socket.recv().await {
-        let Ok(_msg) = msg else { break };
-        // skeleton: echo a hello on first message
-        let _ = socket.send(axum::extract::ws::Message::Text(r#"{"type":"hello_console"}"#.into())).await;
+async fn ws_console(ws: WebSocketUpgrade, State(s): State<Arc<AppState>>) -> Response {
+    ws.on_upgrade(move |sock| handle_console(sock, s))
+}
+async fn ws_worker(ws: WebSocketUpgrade, State(s): State<Arc<AppState>>) -> Response {
+    ws.on_upgrade(move |sock| handle_worker(sock, s))
+}
+
+async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
+    // First frame must be Hello { operator_token }; on failure, close.
+    let Some(Ok(Message::Text(first))) = socket.recv().await else { return; };
+    let parsed: serde_json::Value = match serde_json::from_str(&first) { Ok(v) => v, Err(_) => return };
+    if parsed.get("type") != Some(&serde_json::Value::String("hello".into())) { return; }
+    let token = parsed.get("operator_token").and_then(|v| v.as_str()).unwrap_or("");
+    if crate::auth::validate_operator_token(&state.pool, token).await.is_err() {
+        let _ = socket.send(Message::Text(r#"{"type":"auth_error"}"#.into())).await;
+        return;
+    }
+
+    while let Some(Ok(Message::Text(txt))) = socket.recv().await {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) else { continue; };
+        let (tx, rx) = oneshot::channel();
+        let _ = state.handle.tx.send(Cmd::HandleConsoleMsg { msg, reply: tx }).await;
+        if let Ok(reply) = rx.await {
+            let _ = socket.send(Message::Text(reply.to_string().into())).await;
+        }
     }
 }
 
-async fn handle_worker(mut socket: WebSocket) {
-    while let Some(msg) = socket.recv().await {
-        let Ok(_msg) = msg else { break };
-        let _ = socket.send(axum::extract::ws::Message::Text(r#"{"type":"hello_worker"}"#.into())).await;
+async fn handle_worker(mut socket: WebSocket, state: Arc<AppState>) {
+    let Some(Ok(Message::Text(first))) = socket.recv().await else { return; };
+    let parsed: serde_json::Value = match serde_json::from_str(&first) { Ok(v) => v, Err(_) => return };
+    if parsed.get("type") != Some(&serde_json::Value::String("hello".into())) { return; }
+    let agent_id = parsed.get("agent_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let secret = parsed.get("secret").and_then(|v| v.as_str()).unwrap_or("");
+    if crate::auth::validate_agent_secret(&state.pool, &agent_id, secret).await.is_err() {
+        let _ = socket.send(Message::Text(r#"{"type":"auth_error"}"#.into())).await;
+        return;
+    }
+
+    while let Some(Ok(Message::Text(txt))) = socket.recv().await {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) else { continue; };
+        let (tx, rx) = oneshot::channel();
+        let _ = state.handle.tx.send(Cmd::HandleWorkerMsg { agent_id: agent_id.clone(), msg, reply: tx }).await;
+        if let Ok(reply) = rx.await {
+            let _ = socket.send(Message::Text(reply.to_string().into())).await;
+        }
     }
 }
 ```
 
-- [ ] **Step 2: Update main to pass state**
+> Every WS message becomes a `Cmd` on the inbox. Handlers do not touch state; they wait on a oneshot reply. Backpressure: send is awaited; if the inbox is full, the WS task blocks (slow, not lossy).
 
+`lib.rs`: `pub mod auth; pub mod http;`
+
+- [ ] **Step 3: Auth tests**
+
+`tests/ws_auth.rs`:
 ```rust
-let handles = cliptown_world::loop_::spawn(cliptown_world::state::World::default());
-let app = cliptown_world::http::router(cliptown_world::http::AppState { view: handles.view_rx });
+// Cover: missing hello, wrong token, valid token. Use tempdir DB.
 ```
-
-- [ ] **Step 3: Test client connects**
-
-Add `[dev-dependencies]` to `crates/world/Cargo.toml`:
-```toml
-tokio-tungstenite = "0.24"
-futures-util = "0.3"
-```
-
-`crates/world/tests/ws_smoke.rs`:
-```rust
-use cliptown_world::{http, loop_, state::World};
-use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::tungstenite::Message;
-
-#[tokio::test]
-async fn worker_ws_echoes_hello() {
-    let h = loop_::spawn(World::default());
-    let app = http::router(http::AppState { view: h.view_rx });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-    let url = format!("ws://{addr}/ws/worker");
-    let (mut stream, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-    stream.send(Message::Text("ping".into())).await.unwrap();
-    let reply = stream.next().await.unwrap().unwrap();
-    assert!(reply.into_text().unwrap().contains("hello_worker"));
-}
-```
-
-Run: `cargo test -p cliptown-world --test ws_smoke`
-Expected: PASS.
+Implement two cases: bad operator token closes WS with `auth_error`; bad agent secret closes WS with `auth_error`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M1.3): /ws/console and /ws/worker accept connections"
+git commit -am "feat(M1.3): /ws/console and /ws/worker with auth + dispatch through mpsc"
 ```
 
-### Task 1.4: Backend catalog probe at boot
+### Task 1.4: Backend catalog probe (boot + SIGHUP + 5min timer)
 
-**Files:**
-- Create: `crates/world/src/backend_catalog.rs`
-- Modify: `crates/world/src/lib.rs`
-- Modify: `crates/world/src/main.rs`
-- Modify: `crates/world/src/http.rs`
-- Create: `crates/world/tests/backend_catalog.rs`
+**Effort:** human ~1.5h / CC ~10 min. **Files:** `crates/world/src/backend_catalog.rs`, `crates/world/src/main.rs`, `crates/world/tests/backend_catalog.rs`.
 
-- [ ] **Step 1: Implement the probe**
+- [ ] **Step 1: Probe (same as v1) + struct with version**
 
-`crates/world/src/backend_catalog.rs`:
+`backend_catalog.rs`:
 ```rust
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../packages/protocol/dist/")]
 pub struct BackendInfo {
     pub id: String,
@@ -1037,965 +1173,352 @@ pub async fn probe_all() -> HashMap<String, BackendInfo> {
         ("claude_code", "claude", "Install: npm i -g @anthropic-ai/claude-code"),
         ("codex", "codex", "Install: npm i -g @openai/codex"),
         ("opencode", "opencode", "Install: see https://opencode.ai"),
-    ] {
-        let info = probe_one(id, cmd, hint).await;
-        out.insert(id.to_string(), info);
-    }
+    ] { out.insert(id.into(), probe_one(id, cmd, hint).await); }
     out
 }
 
 async fn probe_one(id: &str, cmd: &str, hint: &str) -> BackendInfo {
     let now = chrono::Utc::now().timestamp();
-    match tokio::process::Command::new(cmd)
-        .arg("--version")
-        .kill_on_drop(true)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn() {
-        Ok(mut child) => {
-            match tokio::time::timeout(std::time::Duration::from_secs(2), child.wait_with_output()).await {
-                Ok(Ok(out)) if out.status.success() => {
-                    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    BackendInfo { id: id.into(), available: true, version: Some(version), install_hint: None, last_checked_ts: now }
-                }
-                _ => BackendInfo { id: id.into(), available: false, version: None, install_hint: Some(hint.into()), last_checked_ts: now },
+    let result = tokio::process::Command::new(cmd)
+        .arg("--version").kill_on_drop(true)
+        .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
+        .spawn();
+    if let Ok(mut child) = result {
+        if let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait_with_output()).await {
+            if out.status.success() {
+                let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                return BackendInfo { id: id.into(), available: true, version: Some(version), install_hint: None, last_checked_ts: now };
             }
         }
-        Err(_) => BackendInfo { id: id.into(), available: false, version: None, install_hint: Some(hint.into()), last_checked_ts: now },
     }
+    BackendInfo { id: id.into(), available: false, version: None, install_hint: Some(hint.into()), last_checked_ts: now }
 }
 ```
 
-Add deps in `crates/world/Cargo.toml`:
-```toml
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
-```
+- [ ] **Step 2: Boot + SIGHUP + 5-minute timer in `main.rs`**
 
-- [ ] **Step 2: Re-export and surface via HTTP**
-
-`lib.rs` append:
-```rust
-pub mod backend_catalog;
-```
-
-`http.rs` add the route + state field:
-```rust
-#[derive(Clone)]
-pub struct AppState {
-    pub view: watch::Receiver<crate::state::World>,
-    pub catalog: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, crate::backend_catalog::BackendInfo>>>,
-}
-
-pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(|| async { Json(json!({"ok": true})) }))
-        .route("/api/backend-catalog", get(api_catalog))
-        .route("/ws/console", get(ws_console))
-        .route("/ws/worker", get(ws_worker))
-        .with_state(Arc::new(state))
-}
-
-async fn api_catalog(State(s): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let m = s.catalog.read().await;
-    Json(serde_json::to_value(&*m).unwrap())
-}
-```
-
-`main.rs`:
 ```rust
 let catalog = std::sync::Arc::new(tokio::sync::RwLock::new(
-    cliptown_world::backend_catalog::probe_all().await,
+    backend_catalog::probe_all().await.into_iter()
+        .map(|(k,v)| (k, serde_json::to_value(v).unwrap())).collect()
 ));
-let app = cliptown_world::http::router(cliptown_world::http::AppState { view: handles.view_rx, catalog });
-```
+let handle = loop_::spawn(state::WorldView::default());
 
-- [ ] **Step 3: Test it returns three entries**
-
-`crates/world/tests/backend_catalog.rs`:
-```rust
-#[tokio::test]
-async fn probe_returns_three_entries() {
-    let m = cliptown_world::backend_catalog::probe_all().await;
-    assert_eq!(m.len(), 3);
-    assert!(m.contains_key("claude_code"));
-    assert!(m.contains_key("codex"));
-    assert!(m.contains_key("opencode"));
-    // we don't assert availability — depends on host
-}
-```
-
-Run: `cargo test -p cliptown-world --test backend_catalog`
-Expected: PASS regardless of which CLIs are installed.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M1.4): backend catalog probe + /api/backend-catalog"
-```
-
-### Task 1.5: town_default seed (5 rooms hardcoded JSON)
-
-**Files:**
-- Create: `crates/world/src/seed.rs`
-- Modify: `crates/world/src/lib.rs`
-- Modify: `crates/world/src/main.rs`
-- Create: `crates/world/tests/seed_smoke.rs`
-
-- [ ] **Step 1: Write the seed function**
-
-`crates/world/src/seed.rs`:
-```rust
-use anyhow::Result;
-use sqlx::SqlitePool;
-
-const TOWN_ID: &str = "town_default";
-const TOWN_MAP_JSON: &str = include_str!("../seed/town_default.json");
-
-pub async fn seed_if_empty(pool: &SqlitePool) -> Result<()> {
-    let count: (i64,) = sqlx::query_as("SELECT count(*) FROM towns")
-        .fetch_one(pool).await?;
-    if count.0 > 0 { return Ok(()); }
-
-    let mut tx = pool.begin().await?;
-    sqlx::query("INSERT INTO towns (id, name, map_json) VALUES (?, ?, ?)")
-        .bind(TOWN_ID).bind("Default Town").bind(TOWN_MAP_JSON)
-        .execute(&mut *tx).await?;
-
-    // 4 suite slots (initially unowned) + 3 common rooms
-    let rooms = [
-        ("suite_1", "Suite 1", "office", r#"{"x":0,"y":0,"w":7,"h":6}"#),
-        ("suite_2", "Suite 2", "office", r#"{"x":0,"y":6,"w":7,"h":6}"#),
-        ("suite_3", "Suite 3", "office", r#"{"x":33,"y":0,"w":7,"h":6}"#),
-        ("suite_4", "Suite 4", "office", r#"{"x":33,"y":6,"w":7,"h":6}"#),
-        ("lobby",   "Lobby",   "transit", r#"{"x":7,"y":4,"w":26,"h":4}"#),
-        ("cafe",    "Cafe",    "social",  r#"{"x":7,"y":0,"w":26,"h":4}"#),
-        ("library", "Library", "focus",   r#"{"x":7,"y":8,"w":26,"h":4}"#),
-    ];
-    for (id, name, kind, bounds) in rooms {
-        sqlx::query("INSERT INTO rooms (id, town_id, name, type, bounds, private_to_startup_id) VALUES (?, ?, ?, ?, ?, NULL)")
-            .bind(id).bind(TOWN_ID).bind(name).bind(kind).bind(bounds)
-            .execute(&mut *tx).await?;
-    }
-    // doors
-    let doors = [
-        ("door_s1_lobby", "suite_1", "lobby", 7, 4),
-        ("door_s2_lobby", "suite_2", "lobby", 7, 7),
-        ("door_s3_lobby", "suite_3", "lobby", 33, 4),
-        ("door_s4_lobby", "suite_4", "lobby", 33, 7),
-        ("door_lobby_cafe", "lobby", "cafe", 20, 4),
-        ("door_lobby_library", "lobby", "library", 20, 8),
-    ];
-    for (id, a, b, x, y) in doors {
-        sqlx::query("INSERT INTO room_doors (id, town_id, room_a, room_b, tile_x, tile_y) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(id).bind(TOWN_ID).bind(a).bind(b).bind(x).bind(y)
-            .execute(&mut *tx).await?;
-    }
-    tx.commit().await?;
-    Ok(())
-}
-```
-
-`crates/world/seed/town_default.json` (informational, not parsed at runtime — kept for documentation):
-```json
-{ "tile_size": 32, "width_tiles": 40, "height_tiles": 12 }
-```
-
-- [ ] **Step 2: Re-export and call on boot**
-
-`lib.rs`: `pub mod seed;`
-`main.rs` (after `_pool = storage::open(...)`):
-```rust
-cliptown_world::seed::seed_if_empty(&_pool).await?;
-```
-Bind the pool: change `let _pool` to `let pool` and use `&pool`. Also store it in `AppState` so later tasks can use it.
-
-- [ ] **Step 3: Smoke test**
-
-`crates/world/tests/seed_smoke.rs`:
-```rust
-#[tokio::test]
-async fn seed_creates_one_town_seven_rooms_six_doors() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("test.db");
-    let pool = cliptown_world::storage::open(p.to_str().unwrap()).await.unwrap();
-    cliptown_world::seed::seed_if_empty(&pool).await.unwrap();
-
-    let towns: (i64,) = sqlx::query_as("SELECT count(*) FROM towns").fetch_one(&pool).await.unwrap();
-    let rooms: (i64,) = sqlx::query_as("SELECT count(*) FROM rooms").fetch_one(&pool).await.unwrap();
-    let doors: (i64,) = sqlx::query_as("SELECT count(*) FROM room_doors").fetch_one(&pool).await.unwrap();
-    assert_eq!(towns.0, 1);
-    assert_eq!(rooms.0, 7);
-    assert_eq!(doors.0, 6);
-
-    // calling again is a no-op
-    cliptown_world::seed::seed_if_empty(&pool).await.unwrap();
-    let towns2: (i64,) = sqlx::query_as("SELECT count(*) FROM towns").fetch_one(&pool).await.unwrap();
-    assert_eq!(towns2.0, 1);
-}
-```
-
-Run: `cargo test -p cliptown-world --test seed_smoke`
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M1.5): seed town_default with 4 suite slots + 3 common rooms"
-```
-
-### Task 1.6: A* pathfinding on the room/tile graph
-
-**Files:**
-- Create: `crates/world/src/path.rs`
-- Modify: `crates/world/Cargo.toml`
-- Modify: `crates/world/src/lib.rs`
-- Create: `crates/world/tests/path_unit.rs`
-
-- [ ] **Step 1: Add `pathfinding` dep**
-
-```toml
-pathfinding = "4"
-```
-
-- [ ] **Step 2: Implement room-graph A* (rooms as nodes, doors as edges, target tile inside the destination room)**
-
-`crates/world/src/path.rs`:
-```rust
-use pathfinding::prelude::astar;
-use std::collections::HashMap;
-
-#[derive(Debug, Clone)]
-pub struct Door { pub a: String, pub b: String, pub tile: (i32, i32) }
-
-#[derive(Debug, Clone)]
-pub struct RoomGraph {
-    pub doors: Vec<Door>,
-    pub neighbors: HashMap<String, Vec<(String, (i32, i32))>>, // room -> [(neighbor_room, door_tile)]
-}
-
-impl RoomGraph {
-    pub fn from_doors(doors: Vec<Door>) -> Self {
-        let mut neighbors: HashMap<String, Vec<(String, (i32, i32))>> = HashMap::new();
-        for d in &doors {
-            neighbors.entry(d.a.clone()).or_default().push((d.b.clone(), d.tile));
-            neighbors.entry(d.b.clone()).or_default().push((d.a.clone(), d.tile));
+// 5-min refresh
+{
+    let cat = catalog.clone(); let h = handle.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            let new_cat = backend_catalog::probe_all().await;
+            let new_json: std::collections::HashMap<_, _> = new_cat.iter()
+                .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap())).collect();
+            *cat.write().await = new_json.clone();
+            let _ = h.tx.send(loop_::Cmd::BackendCatalogUpdated(new_json)).await;
         }
-        Self { doors, neighbors }
-    }
-    /// Returns Vec<(room_id, tile_to_enter_room)> from `from` to `to`. Empty Vec if same room.
-    pub fn route(&self, from: &str, to: &str) -> Option<Vec<(String, (i32, i32))>> {
-        if from == to { return Some(vec![]); }
-        let result = astar(
-            &from.to_string(),
-            |r| self.neighbors.get(r).cloned().unwrap_or_default()
-                .into_iter().map(|(nb, _tile)| (nb, 1u32)).collect::<Vec<_>>(),
-            |_| 0u32,
-            |r| r == to,
-        );
-        result.map(|(path, _)| {
-            path.windows(2)
-                .map(|w| {
-                    let next = &w[1];
-                    let tile = self.neighbors.get(&w[0]).unwrap()
-                        .iter().find(|(n, _)| n == next).unwrap().1;
-                    (next.clone(), tile)
-                })
-                .collect()
-        })
-    }
+    });
 }
+
+// SIGHUP → recheck (Unix only)
+#[cfg(unix)] {
+    use tokio::signal::unix::{signal, SignalKind};
+    let cat = catalog.clone(); let h = handle.clone();
+    tokio::spawn(async move {
+        let mut s = signal(SignalKind::hangup()).unwrap();
+        while s.recv().await.is_some() {
+            let new_cat = backend_catalog::probe_all().await;
+            let new_json: std::collections::HashMap<_, _> = new_cat.iter()
+                .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap())).collect();
+            *cat.write().await = new_json.clone();
+            let _ = h.tx.send(loop_::Cmd::BackendCatalogUpdated(new_json)).await;
+        }
+    });
+}
+
+let app = http::router(http::AppState { pool: pool.clone(), handle: handle.clone(), catalog });
 ```
 
-- [ ] **Step 3: Re-export**
+- [ ] **Step 3: Test that probe returns 3 entries (regardless of host)**
 
-`lib.rs`: `pub mod path;`
+(Same as v1.)
 
-- [ ] **Step 4: Unit test routes**
+- [ ] **Step 4: Commit**
 
-`crates/world/tests/path_unit.rs`:
+```bash
+git commit -am "feat(M1.4): backend catalog with boot probe + SIGHUP + 5-min refresh"
+```
+
+### Task 1.5: town_default seed (7 rooms, 4 suite slots, 6 doors)
+
+**Effort:** human ~30 min / CC ~5 min. **Files:** `crates/world/src/seed.rs`, `crates/world/tests/seed_smoke.rs`.
+
+> **Title fix from v1:** the seed creates **7 rooms** (4 suite slots + Lobby + Cafe + Library). v1 said "5 rooms" in the title.
+
+(Implementation identical to v1 Task 1.5 step 1. Test asserts `7 rooms, 6 doors, 1 town`.)
+
+Commit: `feat(M1.5): seed town_default with 4 suite slots + 3 common rooms`.
+
+### Task 1.6: Pathfinding — room graph + tile grid
+
+**Effort:** human ~3h / CC ~15 min. **Files:** `crates/world/src/path.rs`, `crates/world/tests/path_unit.rs`.
+
+- [ ] **Step 1: Room-graph A* (waypoints between rooms)**
+
+(Same as v1 Task 1.6 Step 2.)
+
+- [ ] **Step 2: Tile-grid A* inside each room**
+
 ```rust
-use cliptown_world::path::{Door, RoomGraph};
-
-fn graph() -> RoomGraph {
-    RoomGraph::from_doors(vec![
-        Door { a: "suite_1".into(), b: "lobby".into(), tile: (7, 4) },
-        Door { a: "lobby".into(), b: "library".into(), tile: (20, 8) },
-        Door { a: "lobby".into(), b: "cafe".into(), tile: (20, 4) },
-    ])
-}
-
-#[test]
-fn same_room_is_empty_path() {
-    let g = graph();
-    assert_eq!(g.route("lobby", "lobby"), Some(vec![]));
-}
-
-#[test]
-fn suite_to_library_passes_through_lobby() {
-    let g = graph();
-    let r = g.route("suite_1", "library").unwrap();
-    assert_eq!(r.len(), 2);
-    assert_eq!(r[0].0, "lobby");
-    assert_eq!(r[1].0, "library");
-}
-
-#[test]
-fn no_path_returns_none() {
-    let g = RoomGraph::from_doors(vec![Door { a: "a".into(), b: "b".into(), tile: (0, 0) }]);
-    assert_eq!(g.route("a", "z"), None);
+// Given a room's bounds and a list of obstacles (later: furniture), return tile waypoints.
+pub fn tile_path(bounds: (i32, i32, i32, i32), from: (i32, i32), to: (i32, i32)) -> Option<Vec<(i32, i32)>> {
+    use pathfinding::prelude::astar;
+    let result = astar(
+        &from,
+        |&(x, y)| {
+            let mut nbs = vec![];
+            for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let nx = x + dx; let ny = y + dy;
+                if nx >= bounds.0 && nx < bounds.0 + bounds.2 && ny >= bounds.1 && ny < bounds.1 + bounds.3 {
+                    nbs.push(((nx, ny), 1u32));
+                }
+            }
+            nbs
+        },
+        |&(x, y)| ((x - to.0).abs() + (y - to.1).abs()) as u32,
+        |&p| p == to,
+    );
+    result.map(|(path, _)| path)
 }
 ```
 
-Run: `cargo test -p cliptown-world --test path_unit`
-Expected: 3 PASS.
+- [ ] **Step 3: Compose — given `from_room`, `from_tile`, `to_room`, `to_tile`, return Vec<(room_id, tile)>**
+
+```rust
+pub fn full_route(graph: &RoomGraph, room_bounds: &std::collections::HashMap<String, (i32,i32,i32,i32)>, from: (&str, (i32, i32)), to: (&str, (i32, i32))) -> Option<Vec<(String, Vec<(i32, i32)>)>> {
+    let waypoints = graph.route(from.0, to.0)?;
+    let mut current_room = from.0.to_string();
+    let mut current_tile = from.1;
+    let mut out = vec![];
+    for (next_room, door_tile) in &waypoints {
+        let bounds = room_bounds.get(&current_room).copied()?;
+        let segment = tile_path(bounds, current_tile, *door_tile)?;
+        out.push((current_room.clone(), segment));
+        current_room = next_room.clone();
+        current_tile = *door_tile;
+    }
+    let bounds = room_bounds.get(&current_room).copied()?;
+    let segment = tile_path(bounds, current_tile, to.1)?;
+    out.push((current_room, segment));
+    Some(out)
+}
+```
+
+- [ ] **Step 4: Tests** for both layers + full_route end-to-end across rooms.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M1.6): A* room-graph pathfinding"
+git commit -am "feat(M1.6): room-graph + tile-grid A* with full_route composition"
 ```
 
 ### Task 1.7: Permission predicates + property tests
 
-**Files:**
-- Create: `crates/world/src/permissions.rs`
-- Modify: `crates/world/src/lib.rs`
-- Modify: `crates/world/Cargo.toml`
-- Create: `crates/world/tests/permissions_property.rs`
+**Effort:** human ~1h / CC ~7 min. (Same as v1 Task 1.7. Commit `feat(M1.7): permission predicates + invariant 8 property tests`.)
 
-- [ ] **Step 1: Add proptest**
+### Task 1.8: Task state machine
 
-```toml
-[dev-dependencies]
-proptest = "1"
-```
+**Effort:** human ~1h / CC ~7 min. (Same as v1 Task 1.8. Commit `feat(M1.8): task state machine with proposed/operator-force transitions`.)
 
-- [ ] **Step 2: Implement predicates**
+### Task 1.9: Sandbox path-escape battery (full per spec §6.3)
 
-`crates/world/src/permissions.rs`:
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/src/sandbox.rs`, `crates/world/tests/sandbox_attacks.rs`, `packages/worker/src/sandbox.ts`, `packages/worker/test/sandbox_attacks.test.ts`.
+
+- [ ] **Step 1: Rust resolver** (same as v1 with these additional rejection rules)
+
+Add to `resolve`:
 ```rust
-#[derive(Debug, Clone)]
-pub struct AgentRef<'a> {
-    pub agent_id: &'a str,
-    pub startup_id: &'a str,
-    pub kind: AgentKind,
-    pub manager_id: Option<&'a str>,
-}
+// Reject Windows absolute (drive letter or UNC)
+if candidate.len() >= 2 && candidate.chars().nth(1) == Some(':') { return Err(anyhow!("windows absolute")); }
+if candidate.starts_with("\\\\") || candidate.starts_with("//") { return Err(anyhow!("UNC path forbidden")); }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentKind { Agent, Operator }
+// Reject Unicode RTL override + Bidi controls
+const FORBIDDEN_CTRL: &[char] = &['\u{202E}', '\u{202D}', '\u{202A}', '\u{202B}', '\u{202C}', '\u{200E}', '\u{200F}'];
+if candidate.chars().any(|c| FORBIDDEN_CTRL.contains(&c)) { return Err(anyhow!("bidi control char")); }
 
-pub fn can_enter_room(agent: &AgentRef, room_private_to: Option<&str>) -> bool {
-    if agent.kind == AgentKind::Operator { return true; }
-    match room_private_to {
-        None => true,
-        Some(owner) => owner == agent.startup_id,
-    }
-}
+// Reject unicode normalization mismatch — require NFC
+use unicode_normalization::UnicodeNormalization;
+let nfc: String = candidate.nfc().collect();
+if nfc != candidate { return Err(anyhow!("non-NFC path")); }
 
-pub fn can_send_directive(from: &AgentRef, to: &AgentRef) -> bool {
-    if from.kind == AgentKind::Operator { return true; }
-    if from.startup_id != to.startup_id { return false; }
-    to.manager_id == Some(from.agent_id)
-}
+// Reject trailing dot (Windows legacy quirk where "foo." resolves to "foo")
+if candidate.ends_with('.') || candidate.ends_with(' ') { return Err(anyhow!("trailing dot/space")); }
+```
 
-pub fn can_receive_chat_in_room(listener: &AgentRef, speaker: &AgentRef, room_private_to: Option<&str>) -> bool {
-    // listener must be in the room; we don't have positions here, the caller filters by room.
-    // Cross-startup chat is allowed in common rooms; suites are scoped by entry permission already.
-    can_enter_room(listener, room_private_to) && can_enter_room(speaker, room_private_to)
+Add `unicode-normalization = "0.1"` to deps.
+
+- [ ] **Step 2: Test battery** — extend v1 with cases for Windows abs, bidi RTL, non-NFC, trailing dot, trailing space, and ensure hard-link symlink tests work on macOS and Linux.
+
+- [ ] **Step 3: Mirror in TS**
+
+`packages/worker/src/sandbox.ts`:
+```ts
+import * as path from "node:path";
+import * as fs from "node:fs";
+
+export function resolveSandbox(root: string, candidate: string): string {
+  if (!candidate) throw new Error("empty path");
+  if (candidate.includes("\0")) throw new Error("nul byte");
+  if (candidate.length > 4096) throw new Error("too long");
+  if (path.isAbsolute(candidate)) throw new Error("absolute forbidden");
+  if (/^[A-Za-z]:/.test(candidate) || candidate.startsWith("\\\\") || candidate.startsWith("//")) throw new Error("windows abs");
+  if (/[‪-‮‎‏]/.test(candidate)) throw new Error("bidi control");
+  if (candidate.normalize("NFC") !== candidate) throw new Error("non-NFC");
+  if (candidate.endsWith(".") || candidate.endsWith(" ")) throw new Error("trailing dot/space");
+  const joined = path.join(root, candidate);
+  const realRoot = fs.realpathSync(root);
+  let real: string;
+  try { real = fs.realpathSync(joined); }
+  catch { const parent = path.dirname(joined); real = path.join(fs.realpathSync(parent), path.basename(joined)); }
+  if (!real.startsWith(realRoot + path.sep) && real !== realRoot) throw new Error("escapes root");
+  return real;
 }
 ```
 
-`lib.rs`: `pub mod permissions;`
-
-- [ ] **Step 3: Property tests**
-
-`crates/world/tests/permissions_property.rs`:
-```rust
-use cliptown_world::permissions::*;
-use proptest::prelude::*;
-
-proptest! {
-    #[test]
-    fn agent_never_enters_foreign_suite(
-        startup_self in "[a-z]{3}", startup_owner in "[a-z]{3}"
-    ) {
-        prop_assume!(startup_self != startup_owner);
-        let a = AgentRef { agent_id: "x", startup_id: &startup_self, kind: AgentKind::Agent, manager_id: None };
-        prop_assert!(!can_enter_room(&a, Some(&startup_owner)));
-    }
-
-    #[test]
-    fn directive_never_crosses_startup_boundary(
-        a in "[a-z]{3}", b in "[a-z]{3}"
-    ) {
-        prop_assume!(a != b);
-        let from = AgentRef { agent_id: "f", startup_id: &a, kind: AgentKind::Agent, manager_id: None };
-        let to   = AgentRef { agent_id: "t", startup_id: &b, kind: AgentKind::Agent, manager_id: Some("f") };
-        prop_assert!(!can_send_directive(&from, &to));
-    }
-
-    #[test]
-    fn operator_can_always_enter(any_owner in proptest::option::of("[a-z]{3}")) {
-        let op = AgentRef { agent_id: "op", startup_id: "_", kind: AgentKind::Operator, manager_id: None };
-        let owner = any_owner.as_deref();
-        prop_assert!(can_enter_room(&op, owner));
-    }
-}
-
-#[test]
-fn directive_within_same_startup_to_direct_report() {
-    let from = AgentRef { agent_id: "f", startup_id: "a", kind: AgentKind::Agent, manager_id: None };
-    let to   = AgentRef { agent_id: "t", startup_id: "a", kind: AgentKind::Agent, manager_id: Some("f") };
-    assert!(can_send_directive(&from, &to));
-}
-```
-
-Run: `cargo test -p cliptown-world --test permissions_property`
-Expected: 4 PASS.
+Replay the same fixture battery in `test/sandbox_attacks.test.ts`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M1.7): permission predicates + multi-tenant property tests (invariant 8)"
+git commit -am "feat(M1.9): sandbox attack battery — Rust + TS replay (Windows abs, RTL, NFC, trailing dot, hard links)"
 ```
 
-### Task 1.8: Task state machine
+### Task 1.10: Persist helpers + position snapshots
 
-**Files:**
-- Create: `crates/world/src/task_sm.rs`
-- Modify: `crates/world/src/lib.rs`
-- Create: `crates/world/tests/task_sm_unit.rs`
+**Effort:** human ~1.5h / CC ~10 min. (Same as v1 Task 1.10 + add `snapshot_positions(pool, &avatars)` writing `agents.position_json` every 60 ticks.)
 
-- [ ] **Step 1: Implement the state machine**
+Commit: `feat(M1.10): persist helpers (audit_trail, fs_audit, position snapshot)`.
 
-`crates/world/src/task_sm.rs`:
+### Task 1.11: World-view watch + chunked snapshot
+
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/src/view.rs`, `crates/world/tests/view_chunk.rs`.
+
+- [ ] **Step 1: Build a per-startup `world_view` payload** filtered by viewer (operator sees all; agent sees own + same-room peers + last-20-msgs).
+
+- [ ] **Step 2: Chunk if >256KB** — split into `WorldStateChunk { seq, total }` + `WorldStateEnd`.
+
+- [ ] **Step 3: Tests** — small case fits one frame; large case (synthetic) chunks correctly; reassembly on the receiver side reproduces original.
+
+Commit: `feat(M1.11): world_view snapshot + chunked transport for large state`.
+
+### Task 1.12: Operator input handling on /ws/console
+
+**Effort:** human ~3h / CC ~15 min. **Files:** `crates/world/src/cmd_console.rs`, `crates/world/tests/console_cmds.rs`.
+
+- [ ] **Step 1: Inside `Cmd::HandleConsoleMsg` arm in `loop_::spawn`**, parse the JSON into `ConsoleInbound` and dispatch:
+
 ```rust
-use serde::{Deserialize, Serialize};
-use ts_rs::TS;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../packages/protocol/dist/")]
-#[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
-    Proposed,
-    Queued,
-    InProgress,
-    AwaitingReview,
-    ChangesRequested,
-    Done,
-    Failed,
-    Escalated,
+use crate::protocol::ConsoleInbound;
+match serde_json::from_value::<ConsoleInbound>(msg.clone()) {
+    Ok(ConsoleInbound::OperatorMove { target_x, target_y, .. }) => { /* mutate operator avatar target_pos */ }
+    Ok(ConsoleInbound::OperatorPossess { startup_id, .. }) => { /* spawn operator avatar in lobby */ }
+    Ok(ConsoleInbound::OperatorUnpossess { .. }) => { /* despawn operator */ }
+    Ok(ConsoleInbound::OperatorDirective { to_agent_id, body, .. }) => { /* append to messages, push to worker */ }
+    Ok(ConsoleInbound::OperatorAcceptProposal { task_id, assignee_agent_id, required_room, .. }) => { /* state machine + persist */ }
+    Ok(ConsoleInbound::OperatorRejectProposal { task_id, reason, .. }) => { /* state machine + persist */ }
+    Ok(ConsoleInbound::OperatorForceAccept { task_id, .. }) => { /* state machine + audit-tag force_accept */ }
+    Ok(ConsoleInbound::OperatorForceFail { task_id, note, .. }) => { /* state machine + persist */ }
+    Ok(ConsoleInbound::OperatorRecheckBackends) => { /* fire backend probe */ }
+    _ => {}
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Actor {
-    Manager,
-    NonManager,
-    Operator,
-    System,
-}
-
-#[derive(Debug)]
-pub enum Transition {
-    SubtaskCreate { caller: Actor },
-    AcceptProposal { caller: Actor },
-    RejectProposal { caller: Actor },
-    AssignFromQueued, // scheduler picks up
-    TaskDoneMcp,
-    RequestChanges,
-    TaskAccept,
-    OperatorForceAccept,
-    OperatorForceFail,
-    Fail,
-    Escalate,
-}
-
-pub fn next(current: TaskStatus, t: &Transition) -> Result<TaskStatus, &'static str> {
-    use TaskStatus::*;
-    match (current, t) {
-        (_, Transition::SubtaskCreate { caller: Actor::Manager }) => Ok(Queued),
-        (_, Transition::SubtaskCreate { caller: Actor::NonManager }) => Ok(Proposed),
-        (Proposed, Transition::AcceptProposal { .. }) => Ok(Queued),
-        (Proposed, Transition::RejectProposal { .. }) => Ok(Failed),
-        (Queued, Transition::AssignFromQueued) => Ok(InProgress),
-        (InProgress, Transition::TaskDoneMcp) => Ok(AwaitingReview),
-        (AwaitingReview, Transition::RequestChanges) => Ok(ChangesRequested),
-        (ChangesRequested, Transition::TaskDoneMcp) => Ok(AwaitingReview),
-        (AwaitingReview, Transition::TaskAccept) => Ok(Done),
-        (AwaitingReview, Transition::OperatorForceAccept) => Ok(Done),
-        (s, Transition::OperatorForceFail) if s != Done && s != Failed => Ok(Failed),
-        (s, Transition::Fail) if s != Done && s != Failed => Ok(Failed),
-        (s, Transition::Escalate) if s != Done && s != Failed => Ok(Escalated),
-        _ => Err("illegal transition"),
-    }
-}
+let _ = reply.send(serde_json::json!({"ok": true}));
 ```
 
-`lib.rs`: `pub mod task_sm;`
+- [ ] **Step 2: For each operator command, write the corresponding `audit_trail` entry with `actor = "operator"`.**
 
-- [ ] **Step 2: Unit tests**
+- [ ] **Step 3: Tests** — each command produces the right state transition + audit row.
 
-`crates/world/tests/task_sm_unit.rs`:
-```rust
-use cliptown_world::task_sm::*;
+Commit: `feat(M1.12): operator input handling — directive, possess, kanban-drop, recheck`.
 
-#[test]
-fn manager_subtask_goes_straight_to_queued() {
-    assert_eq!(next(TaskStatus::Proposed, &Transition::SubtaskCreate { caller: Actor::Manager }).unwrap(), TaskStatus::Queued);
-}
+### Task 1.13: Movement subsystem
 
-#[test]
-fn nonmanager_subtask_lands_in_proposed() {
-    assert_eq!(next(TaskStatus::Proposed, &Transition::SubtaskCreate { caller: Actor::NonManager }).unwrap(), TaskStatus::Proposed);
-}
+**Effort:** human ~3h / CC ~15 min. **Files:** `crates/world/src/move_sys.rs`, `crates/world/tests/movement.rs`.
 
-#[test]
-fn review_round_loop() {
-    assert_eq!(next(TaskStatus::InProgress, &Transition::TaskDoneMcp).unwrap(), TaskStatus::AwaitingReview);
-    assert_eq!(next(TaskStatus::AwaitingReview, &Transition::RequestChanges).unwrap(), TaskStatus::ChangesRequested);
-    assert_eq!(next(TaskStatus::ChangesRequested, &Transition::TaskDoneMcp).unwrap(), TaskStatus::AwaitingReview);
-    assert_eq!(next(TaskStatus::AwaitingReview, &Transition::TaskAccept).unwrap(), TaskStatus::Done);
-}
+- [ ] **Step 1: Add `target_pos` and `current_pos` to `AvatarView`** (already in M1.2).
 
-#[test]
-fn operator_force_accept_only_from_awaiting_review() {
-    assert_eq!(next(TaskStatus::AwaitingReview, &Transition::OperatorForceAccept).unwrap(), TaskStatus::Done);
-    assert!(next(TaskStatus::Queued, &Transition::OperatorForceAccept).is_err());
-}
+- [ ] **Step 2: Inside `Cmd::Tick`**, advance each avatar one tile toward its `target_pos` along its computed path. When a tile is the boundary of its current room and matches a door tile to the next room, transition `room_id`.
 
-#[test]
-fn done_is_terminal() {
-    assert!(next(TaskStatus::Done, &Transition::Fail).is_err());
-    assert!(next(TaskStatus::Done, &Transition::OperatorForceFail).is_err());
-}
-```
+- [ ] **Step 3: `move_intent` MCP handler in worker dispatch** (will land in M2.3) calls into `move_sys::start_move(world, agent_id, target_room | target_tile)` which precomputes the path. The path is stored on the avatar (memory-only).
 
-Run: `cargo test -p cliptown-world --test task_sm_unit`
-Expected: 5 PASS.
+- [ ] **Step 4: On arrival, emit `move_complete { room_id }` to the worker via `Cmd::HandleWorkerMsg` reply or a side-channel out-bus** (add a per-agent mpsc that the WS handler reads).
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 5: `move_failed { reason }`** when path is impossible or permission is denied (cross-startup suite).
 
-```bash
-git add crates/world
-git commit -m "feat(M1.8): task state machine with proposed/operator-force transitions"
-```
+- [ ] **Step 6: Tests** — straight-line move; cross-room move; permission deny; no-path.
 
-### Task 1.9: Sandbox path-escape resolver (battery)
+Commit: `feat(M1.13): tile-by-tile movement with target_pos/current_pos and move_intent handler`.
 
-**Files:**
-- Create: `crates/world/src/sandbox.rs`
-- Modify: `crates/world/src/lib.rs`
-- Create: `crates/world/tests/sandbox_attacks.rs`
+### Task 1.14: Task scheduler
 
-- [ ] **Step 1: Implement the resolver**
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/src/scheduler.rs`, `crates/world/tests/scheduler.rs`.
 
-`crates/world/src/sandbox.rs`:
-```rust
-use anyhow::{anyhow, Result};
-use std::path::{Path, PathBuf};
+- [ ] **Step 1: On each tick, find tasks where `status = 'queued'` and `assignee_agent_id IS NOT NULL`. If the assignee is `idle`, transition the task to `in_progress` and emit `task_assigned` to the assignee's worker.**
 
-pub fn resolve(root: &Path, candidate: &str) -> Result<PathBuf> {
-    if candidate.is_empty() { return Err(anyhow!("empty path")); }
-    if candidate.contains('\0') { return Err(anyhow!("nul byte in path")); }
-    if candidate.len() > 4096 { return Err(anyhow!("path too long")); }
-    let p = Path::new(candidate);
-    if p.is_absolute() { return Err(anyhow!("absolute path forbidden")); }
-    let joined = root.join(p);
-    let canon_root = root.canonicalize().map_err(|e| anyhow!("root canonicalize: {e}"))?;
-    let canon = match joined.canonicalize() {
-        Ok(c) => c,
-        Err(_) => {
-            // file may not exist yet — verify the parent then synthesize
-            let parent = joined.parent().ok_or_else(|| anyhow!("no parent"))?;
-            let parent_c = parent.canonicalize().map_err(|e| anyhow!("parent canonicalize: {e}"))?;
-            if !parent_c.starts_with(&canon_root) { return Err(anyhow!("parent escapes root")); }
-            parent_c.join(joined.file_name().ok_or_else(|| anyhow!("no file name"))?)
-        }
-    };
-    if !canon.starts_with(&canon_root) {
-        return Err(anyhow!("path escapes root"));
-    }
-    Ok(canon)
-}
-```
+- [ ] **Step 2: If the task has a `required_room` and the agent is not in it, also call `move_sys::start_move` toward the room before the agent's CLI is woken.**
 
-`lib.rs`: `pub mod sandbox;`
+- [ ] **Step 3: Tests** — queued+idle → in_progress; queued+working → wait; required_room triggers move first.
 
-- [ ] **Step 2: Attack battery test**
+Commit: `feat(M1.14): task scheduler — queued → in_progress with required_room dispatch`.
 
-`crates/world/tests/sandbox_attacks.rs`:
-```rust
-use cliptown_world::sandbox::resolve;
-use std::fs;
-use std::os::unix::fs::symlink;
-use tempfile::tempdir;
+### Task 1.15: Budget enforcement
 
-fn root() -> tempfile::TempDir {
-    let d = tempdir().unwrap();
-    fs::create_dir_all(d.path().join("artifacts")).unwrap();
-    d
-}
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/src/budget.rs`, `crates/world/tests/budget_thresholds.rs`.
 
-#[test]
-fn rejects_dot_dot_escape() {
-    let d = root();
-    assert!(resolve(d.path(), "../etc/passwd").is_err());
-    assert!(resolve(d.path(), "../../etc/passwd").is_err());
-    assert!(resolve(d.path(), "././../etc/passwd").is_err());
-}
+- [ ] **Step 1: Pricing table** (model_id → $/Mtok in/out) embedded in `budget.rs`.
 
-#[test]
-fn rejects_absolute_path() {
-    let d = root();
-    assert!(resolve(d.path(), "/etc/passwd").is_err());
-}
+- [ ] **Step 2: On `Cmd::HandleWorkerMsg(report_budget)`:** compute cost, increment `startups.budget_spent_usd`, append a `budget_events` row, and check thresholds:
+  - At 80%: emit `system_event { severity: "warn" }` and `Toast` to console.
+  - At 95%: refuse new task assignments (scheduler skip), emit `warn`.
+  - At 100%: send `Pause` to all of that startup's workers; emit `alert`.
 
-#[test]
-fn rejects_nul_byte() {
-    let d = root();
-    assert!(resolve(d.path(), "artifacts/foo\0.md").is_err());
-}
+- [ ] **Step 3: Operator can raise cap via `PATCH /api/startups/:id { budget_cap_usd: N }`** — auto-resume.
 
-#[test]
-fn rejects_too_long() {
-    let d = root();
-    let long = "a".repeat(5000);
-    assert!(resolve(d.path(), &long).is_err());
-}
+- [ ] **Step 4: Tests** — cross 80/95/100 with synthetic budget reports and assert side effects.
 
-#[test]
-fn rejects_symlink_escape() {
-    let d = root();
-    let outside = d.path().parent().unwrap().to_path_buf();
-    symlink(&outside, d.path().join("artifacts").join("link")).unwrap();
-    assert!(resolve(d.path(), "artifacts/link/passwd").is_err());
-}
-
-#[test]
-fn allows_legit_artifact_path() {
-    let d = root();
-    let r = resolve(d.path(), "artifacts/T1.md").unwrap();
-    assert!(r.starts_with(d.path()));
-}
-```
-
-Run: `cargo test -p cliptown-world --test sandbox_attacks`
-Expected: 6 PASS.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M1.9): sandbox path resolver + path-escape attack battery"
-```
-
-### Task 1.10: SQLite write-batch helpers (audit_trail / fs_audit windows)
-
-**Files:**
-- Create: `crates/world/src/persist.rs`
-- Modify: `crates/world/src/lib.rs`
-- Create: `crates/world/tests/persist_smoke.rs`
-
-- [ ] **Step 1: Implement batched insert**
-
-`crates/world/src/persist.rs`:
-```rust
-use anyhow::Result;
-use sqlx::SqlitePool;
-
-pub async fn append_audit(pool: &SqlitePool, task_id: &str, entry_json: &str) -> Result<()> {
-    sqlx::query(
-        "UPDATE tasks SET audit_trail = json_insert(audit_trail, '$[#]', json(?)), updated_at = unixepoch() WHERE id = ?"
-    )
-    .bind(entry_json).bind(task_id).execute(pool).await?;
-    Ok(())
-}
-
-pub async fn append_epistemic(pool: &SqlitePool, task_id: &str, entry_json: &str) -> Result<()> {
-    sqlx::query(
-        "UPDATE tasks SET epistemic_log = json_insert(epistemic_log, '$[#]', json(?)), updated_at = unixepoch() WHERE id = ?"
-    )
-    .bind(entry_json).bind(task_id).execute(pool).await?;
-    Ok(())
-}
-
-pub async fn record_fs_audit(
-    pool: &SqlitePool, startup_id: &str, agent_id: &str,
-    op: &str, path: &str, bytes: i64, ok: bool, err: Option<&str>
-) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO fs_audit (id, startup_id, agent_id, op, path, bytes, ok, error, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())"
-    )
-    .bind(uuid::Uuid::new_v4().to_string()).bind(startup_id).bind(agent_id)
-    .bind(op).bind(path).bind(bytes).bind(if ok {1} else {0}).bind(err)
-    .execute(pool).await?;
-    Ok(())
-}
-```
-
-Add `uuid = { version = "1", features = ["v4"] }` to deps.
-
-`lib.rs`: `pub mod persist;`
-
-- [ ] **Step 2: Smoke test (creates startup + task + appends)**
-
-`crates/world/tests/persist_smoke.rs`:
-```rust
-use cliptown_world::{persist, seed, storage};
-use sqlx::Row;
-
-#[tokio::test]
-async fn append_audit_grows_array() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("test.db");
-    let pool = storage::open(p.to_str().unwrap()).await.unwrap();
-    seed::seed_if_empty(&pool).await.unwrap();
-
-    sqlx::query("INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) VALUES ('s1','α','goal',10,'town_default','/tmp/s1','active', unixepoch())")
-        .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO tasks (id, startup_id, title, description, status, created_at, updated_at) VALUES ('T1','s1','t','d','queued', unixepoch(), unixepoch())")
-        .execute(&pool).await.unwrap();
-
-    persist::append_audit(&pool, "T1", r#"{"kind":"task_assigned","ts":1}"#).await.unwrap();
-    persist::append_audit(&pool, "T1", r#"{"kind":"task_done","ts":2}"#).await.unwrap();
-
-    let row = sqlx::query("SELECT json_array_length(audit_trail) AS n FROM tasks WHERE id='T1'").fetch_one(&pool).await.unwrap();
-    assert_eq!(row.get::<i64, _>("n"), 2);
-}
-```
-
-Run: `cargo test -p cliptown-world --test persist_smoke`
-Expected: PASS.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M1.10): persist helpers for audit_trail / epistemic_log / fs_audit"
-```
+Commit: `feat(M1.15): budget enforcement with 80/95/100 thresholds and pause-all`.
 
 ---
 
 ## Milestone 2 — Worker + MCP proxy (Lane C)
 
-Goal: a TS Worker process can connect to `/ws/worker`, identify, expose an in-process MCP server to a (mocked) child CLI, and translate MCP tool calls into WS round-trips.
+### Task 2.1: Worker WS hello + auth
 
-### Task 2.1: Worker package skeleton + WS hello
+**Effort:** human ~1.5h / CC ~10 min. (Same shape as v1 M2.1 + sets `AGENT_SECRET` env, sends `hello { agent_id, startup_id, secret }`. Test goes through the auth gate.)
 
-**Files:**
-- Modify: `packages/worker/package.json`
-- Create: `packages/worker/tsconfig.json`
-- Create: `packages/worker/src/index.ts`
-- Create: `packages/worker/src/ws.ts`
-- Create: `packages/worker/test/ws.test.ts`
+Commit: `feat(M2.1): worker WS connect with hello + auth`.
 
-- [ ] **Step 1: tsconfig + deps**
+### Task 2.2: In-process MCP proxy with leak-free correlation
 
-`packages/worker/package.json`:
-```json
-{
-  "name": "@cliptown/worker",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "main": "dist/index.js",
-  "scripts": {
-    "build": "tsc -p .",
-    "test": "vitest run",
-    "dev": "tsx src/index.ts"
-  },
-  "dependencies": {
-    "@cliptown/protocol": "workspace:*",
-    "ws": "^8",
-    "pino": "^9"
-  },
-  "devDependencies": {
-    "typescript": "^5.5",
-    "tsx": "^4",
-    "vitest": "^2",
-    "@types/ws": "^8",
-    "@types/node": "^20"
-  }
-}
-```
+**Effort:** human ~3h / CC ~15 min. **Files:** `packages/worker/src/mcp.ts`, `packages/worker/test/mcp_correlation.test.ts`.
 
-`packages/worker/tsconfig.json`:
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "strict": true,
-    "outDir": "dist",
-    "declaration": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true
-  },
-  "include": ["src/**/*"]
-}
-```
+- [ ] **Step 1: Server with all 16 MCP tools (list from spec §6.2)** — wire each `CallTool` to `callOverWS` with proper schema typing per tool.
 
-Run: `pnpm install`
+- [ ] **Step 2: `callOverWS` with cleanup**
 
-- [ ] **Step 2: WS connect + hello**
-
-`packages/worker/src/ws.ts`:
 ```ts
-import WebSocket from "ws";
-
-export interface WorkerHandle {
-  send(msg: unknown): void;
-  close(): void;
-  onMessage(fn: (m: unknown) => void): void;
-  onClose(fn: () => void): void;
-}
-
-export async function connect(opts: {
-  url: string; agentId: string; startupId: string; secret: string;
-}): Promise<WorkerHandle> {
-  const ws = new WebSocket(opts.url);
-  await new Promise<void>((res, rej) => {
-    ws.once("open", () => res());
-    ws.once("error", rej);
-  });
-  ws.send(JSON.stringify({ v: 1, type: "hello", agent_id: opts.agentId, startup_id: opts.startupId, secret: opts.secret }));
-  let listeners: ((m: unknown) => void)[] = [];
-  let closeListeners: (() => void)[] = [];
-  ws.on("message", (data) => {
-    try { listeners.forEach((l) => l(JSON.parse(String(data)))); } catch {}
-  });
-  ws.on("close", () => closeListeners.forEach((l) => l()));
-  return {
-    send: (m) => ws.send(JSON.stringify(m)),
-    close: () => ws.close(),
-    onMessage: (fn) => { listeners.push(fn); },
-    onClose: (fn) => { closeListeners.push(fn); },
-  };
-}
-```
-
-- [ ] **Step 3: Test against the world skeleton**
-
-`packages/worker/test/ws.test.ts`:
-```ts
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn, ChildProcess } from "node:child_process";
-import { connect } from "../src/ws";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-let world: ChildProcess;
-beforeAll(async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "ct-"));
-  world = spawn("cargo", ["run", "-q", "-p", "cliptown-world"], {
-    env: { ...process.env, CLIPTOWN_DB: join(tmp, "test.db") },
-    stdio: "inherit"
-  });
-  await new Promise((r) => setTimeout(r, 1500)); // wait for boot
-});
-afterAll(() => world.kill());
-
-describe("worker WS", () => {
-  it("connects and sends hello", async () => {
-    const h = await connect({ url: "ws://127.0.0.1:8080/ws/worker", agentId: "α-eng", startupId: "α", secret: "x" });
-    const msg = await new Promise((res) => h.onMessage(res));
-    expect(msg).toMatchObject({ type: "hello_worker" }); // current skeleton echo
-    h.close();
-  });
-});
-```
-
-Run: `pnpm --filter @cliptown/worker test`
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add packages/worker pnpm-lock.yaml
-git commit -m "feat(M2.1): worker WS connect + hello against world skeleton"
-```
-
-### Task 2.2: In-process MCP proxy server
-
-**Files:**
-- Create: `packages/worker/src/mcp.ts`
-- Create: `packages/worker/test/mcp.test.ts`
-- Modify: `packages/worker/package.json` (add `@modelcontextprotocol/sdk`)
-
-- [ ] **Step 1: Add dep**
-
-```json
-"@modelcontextprotocol/sdk": "^1.0.0"
-```
-Run: `pnpm install`
-
-- [ ] **Step 2: Implement the proxy**
-
-`packages/worker/src/mcp.ts`:
-```ts
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { WorkerHandle } from "./ws";
-
-const TOOLS = [
-  { name: "move_intent", description: "Move to a target room or tile" },
-  { name: "speak", description: "Send a chat or directive" },
-  { name: "task_done", description: "Declare a task complete with artifact path" },
-  { name: "task_failed", description: "Declare a task failed with reason" },
-  { name: "subtask_create", description: "Create a subtask (manager → queued, non-manager → proposed)" },
-  { name: "task_accept", description: "Accept a child task at awaiting_review" },
-  { name: "task_request_changes", description: "Request changes on a child task" },
-  { name: "accept_proposal", description: "Manager accepts a proposed subtask" },
-  { name: "reject_proposal", description: "Manager rejects a proposed subtask" },
-  { name: "hypothesis_state", description: "Record an L0 hypothesis" },
-  { name: "test_record", description: "Record an L0 test outcome" },
-  { name: "hypothesis_resolve", description: "Resolve a hypothesis as verified or refuted" },
-  { name: "verify", description: "Run an in-process verification method" },
-  { name: "ask_peer", description: "Speak to a peer and await a single reply" },
-  { name: "observe_world", description: "Read-only world query" },
-  { name: "read_artifact", description: "Read an artifact within the same startup's sandbox" },
-];
-
-export async function startMcpProxy(opts: {
-  agentId: string;
-  startupId: string;
-  ws: WorkerHandle;
-}): Promise<void> {
-  const server = new Server({ name: `cliptown-${opts.agentId}`, version: "0.0.1" }, { capabilities: { tools: {} } });
-
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: { type: "object" } }))
-  }));
-
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const corrId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const reply = await callOverWS(opts.ws, {
-      v: 1, type: "mcp_call", corr_id: corrId,
-      tool: req.params.name, args: req.params.arguments
-    });
-    return { content: [{ type: "text", text: JSON.stringify(reply) }] };
-  });
-
-  await server.connect(new StdioServerTransport());
-}
-
-async function callOverWS(ws: WorkerHandle, msg: { corr_id: string } & Record<string, unknown>): Promise<unknown> {
+async function callOverWS(ws: WorkerHandle, msg: { corr_id: string } & Record<string, unknown>, timeoutMs = 60_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("mcp_call_timeout")), 60000);
-    const onMsg = (m: unknown) => {
-      const o = m as { type?: string; corr_id?: string; result?: unknown };
-      if (o?.type === "mcp_reply" && o.corr_id === msg.corr_id) {
-        clearTimeout(t);
-        resolve(o.result);
-      }
+    let onMsg: ((m: unknown) => void) | null = null;
+    let removed = false;
+    const cleanup = () => { if (!removed && onMsg) { ws.offMessage(onMsg); removed = true; } };
+    const t = setTimeout(() => { cleanup(); reject(new Error("mcp_call_timeout")); }, timeoutMs);
+    onMsg = (m: unknown) => {
+      const o = m as { type?: string; corr_id?: string; result?: unknown; code?: string; message?: string };
+      if (o?.corr_id !== msg.corr_id) return;
+      clearTimeout(t); cleanup();
+      if (o.type === "mcp_reply") resolve(o.result);
+      else if (o.type === "mcp_error") reject(Object.assign(new Error(o.message || "mcp_error"), { code: o.code }));
     };
     ws.onMessage(onMsg);
     ws.send(msg);
@@ -2003,1145 +1526,591 @@ async function callOverWS(ws: WorkerHandle, msg: { corr_id: string } & Record<st
 }
 ```
 
-- [ ] **Step 3: Unit test the proxy with a fake WS**
+> Add `offMessage(fn)` to `WorkerHandle`: store listeners in a Set, removable on cleanup. No more per-call accumulation.
 
-`packages/worker/test/mcp.test.ts`:
-```ts
-import { describe, it, expect } from "vitest";
+- [ ] **Step 3: Tests** — timeout cleans listeners; error response cleans listeners; 100 sequential calls do not leak (assert `ws.listenerCount() === 0` after each settles).
 
-describe("mcp proxy basic", () => {
-  it("exports tool list", async () => {
-    const { startMcpProxy } = await import("../src/mcp");
-    expect(typeof startMcpProxy).toBe("function");
-  });
-});
-```
+Commit: `feat(M2.2): MCP proxy with correlation IDs and listener cleanup`.
 
-Run: `pnpm --filter @cliptown/worker test`
-Expected: PASS. (Full end-to-end MCP test will land in M3 with a real fixture CLI.)
+### Task 2.3: World-side MCP routing — full handlers
 
-- [ ] **Step 4: Commit**
+**Effort:** human ~6h / CC ~30 min. **Files:** `crates/world/src/mcp_dispatch.rs`, `crates/world/tests/mcp_handlers.rs`.
 
-```bash
-git add packages/worker pnpm-lock.yaml
-git commit -m "feat(M2.2): in-process MCP proxy with 16 domain tools"
-```
+- [ ] **Step 1: Inside `Cmd::HandleWorkerMsg(McpCall)` arm, dispatch by tool name. Each handler:**
+  - validates permissions (manager-only tools, same-startup only, etc.) — return `mcp_error` if denied
+  - performs the world mutation (transactional in SQLite)
+  - emits resulting events back to relevant workers (`SubtaskProposed`, `Directive`, `MoveComplete`, etc.)
+  - replies with `McpReply { corr_id, result }`
 
-### Task 2.3: World-side MCP call routing
+Tools to implement (all 16 from spec §6.2):
+1. `move_intent` → `move_sys::start_move`; reply with arrival ETA tick
+2. `speak` → append to `messages` table; if `kind: chat`, broadcast to room peers; if `directive`, validate org-graph + send to recipient
+3. `task_done` → re-validate `artifact_path` via `sandbox::resolve` against `workspaces/<startup_id>/`, transition task to `awaiting_review`, emit `subtask_done` to manager
+4. `task_failed` → transition task to `failed`, audit
+5. `subtask_create` → if caller is manager → `queued`; else → `proposed` + `subtask_proposed` to manager
+6. `task_accept` → manager-only, `awaiting_review → done`, propagate `subtask_done` to grand-manager
+7. `task_request_changes` → manager-only, `awaiting_review → changes_requested`, `review_round++`, emit `directive` with feedback
+8. `accept_proposal` → manager-only, `proposed → queued` with assignment
+9. `reject_proposal` → manager-only, `proposed → failed`
+10. `hypothesis_state` → append to `tasks.epistemic_log`
+11. `test_record` → append to `tasks.epistemic_log`
+12. `hypothesis_resolve` → append to `tasks.epistemic_log`
+13. `verify` → execute the verification method server-side (read_assert, lint_markdown, lint_typescript via TS sidecar, lint_json); reply with observation
+14. `ask_peer` → emit `directive`/`chat` and await a single reply within `timeout_ms`; return `{ response | null }`
+15. `observe_world` → read-only world query (peers_in_room, my_position, budget_remaining)
+16. `read_artifact` → same-startup gate; reply with file content
 
-**Files:**
-- Create: `crates/world/src/ws_worker.rs`
-- Modify: `crates/world/src/http.rs`
-- Create: `crates/world/tests/ws_worker_mcp.rs`
+- [ ] **Step 2: Each tool gets a unit test** asserting permission, mutation, and event emission.
 
-- [ ] **Step 1: Define inbound types and dispatch**
+- [ ] **Step 3: Property test** that no MCP call ever causes a state change visible to a different startup.
 
-`crates/world/src/ws_worker.rs`:
-```rust
-use serde::{Deserialize, Serialize};
+Commit: `feat(M2.3): MCP world-side dispatch — all 16 tools with permission gates`.
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-pub enum InboundFromWorker {
-    #[serde(rename = "hello")]
-    Hello { agent_id: String, startup_id: String, secret: String },
-    #[serde(rename = "mcp_call")]
-    McpCall { corr_id: String, tool: String, args: serde_json::Value },
-    #[serde(rename = "report_budget")]
-    ReportBudget { in_tokens: u64, out_tokens: u64, model_id: String, task_id: Option<String> },
-    #[serde(rename = "report_fs_op")]
-    ReportFsOp { op: String, path: String, bytes: i64, ok: bool, error: Option<String> },
-    #[serde(rename = "cli_session_started")]
-    CliSessionStarted { task_id: Option<String>, prompt_hash: String },
-    #[serde(rename = "cli_session_ended")]
-    CliSessionEnded { task_id: Option<String>, exit_code: i32, summary: Option<String> },
-    #[serde(rename = "task_progress")]
-    TaskProgress { task_id: String, note: String },
-}
+### Task 2.4: Deterministic LLM mock
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum OutboundToWorker {
-    #[serde(rename = "mcp_reply")]
-    McpReply { corr_id: String, result: serde_json::Value },
-    #[serde(rename = "task_assigned")]
-    TaskAssigned { task_id: String, title: String, description: String, required_room: Option<String>, parent_id: Option<String> },
-    #[serde(rename = "directive")]
-    Directive { from_agent_id: String, body: String, in_response_to_task: Option<String> },
-}
-```
+**Effort:** human ~1h / CC ~7 min. **Files:** `packages/worker/src/llm_mock.ts`, `packages/worker/test/llm_mock.test.ts`.
 
-- [ ] **Step 2: Wire the dispatch into `http.rs::handle_worker`**
+- [ ] **Step 1: A keyed mock that returns a canned tool_use sequence given a prompt-hash → fixture-name lookup**.
 
-```rust
-async fn handle_worker(mut socket: WebSocket, _state: Arc<AppState>) {
-    use crate::ws_worker::{InboundFromWorker, OutboundToWorker};
-    while let Some(msg) = socket.recv().await {
-        let Ok(axum::extract::ws::Message::Text(txt)) = msg else { continue };
-        let parsed: Result<InboundFromWorker, _> = serde_json::from_str(&txt);
-        match parsed {
-            Ok(InboundFromWorker::Hello { agent_id, .. }) => {
-                tracing::info!(event="worker_hello", agent_id=%agent_id);
-            }
-            Ok(InboundFromWorker::McpCall { corr_id, tool, args }) => {
-                tracing::info!(event="mcp_call", tool=%tool);
-                // Phase 0 stub: echo back an ok result. Real dispatch lands in M5/M6.
-                let reply = OutboundToWorker::McpReply { corr_id, result: serde_json::json!({"ok": true, "tool": tool, "args": args}) };
-                let _ = socket.send(axum::extract::ws::Message::Text(serde_json::to_string(&reply).unwrap().into())).await;
-            }
-            Ok(InboundFromWorker::ReportBudget { .. }) => {}
-            Ok(InboundFromWorker::ReportFsOp { .. }) => {}
-            Ok(InboundFromWorker::CliSessionStarted { .. }) => {}
-            Ok(InboundFromWorker::CliSessionEnded { .. }) => {}
-            Ok(InboundFromWorker::TaskProgress { .. }) => {}
-            Err(e) => tracing::warn!(event="ws_worker_parse_err", err=%e),
-        }
-    }
-}
-```
+- [ ] **Step 2: Fixture format**: `fixtures/<name>.jsonl` — one tool_use per line.
 
-Need to thread `_state` and signature change — adjust `ws_worker` route handler accordingly.
+- [ ] **Step 3: Default fixture for "engineer writes spec.md"** — emits hypothesis_state, writeFile, verify, test_record, hypothesis_resolve, task_done.
 
-`lib.rs`: `pub mod ws_worker;`
+Commit: `feat(M2.4): deterministic LLM mock with fixture replay`.
 
-- [ ] **Step 3: Integration test from the worker side**
+### Task 2.5: Worker entry point + arg parsing
 
-`crates/world/tests/ws_worker_mcp.rs`:
-```rust
-use cliptown_world::{http, loop_, state::World, backend_catalog};
-use futures_util::{SinkExt, StreamExt};
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio_tungstenite::tungstenite::Message;
+**Effort:** human ~1h / CC ~7 min. (Same as v1 M5.4 with proper arg parsing using `node:util`.)
 
-#[tokio::test]
-async fn worker_mcp_call_round_trips() {
-    let h = loop_::spawn(World::default());
-    let catalog = Arc::new(RwLock::new(backend_catalog::probe_all().await));
-    let app = http::router(http::AppState { view: h.view_rx, catalog });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
-
-    let url = format!("ws://{addr}/ws/worker");
-    let (mut s, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-    s.send(Message::Text(r#"{"v":1,"type":"hello","agent_id":"α-eng","startup_id":"α","secret":"x"}"#.into())).await.unwrap();
-    s.send(Message::Text(r#"{"v":1,"type":"mcp_call","corr_id":"c1","tool":"observe_world","args":{}}"#.into())).await.unwrap();
-
-    let reply = s.next().await.unwrap().unwrap().into_text().unwrap();
-    assert!(reply.contains(r#""type":"mcp_reply""#));
-    assert!(reply.contains(r#""corr_id":"c1""#));
-    assert!(reply.contains(r#""ok":true"#));
-}
-```
-
-Run: `cargo test -p cliptown-world --test ws_worker_mcp`
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M2.3): /ws/worker dispatches MCP calls with stub echo"
-```
+Commit: `feat(M2.5): worker entry point with arg parsing`.
 
 ---
 
 ## Milestone 3 — Claude Code Adapter
 
-Goal: the worker can spawn a Claude Code CLI, wire its hooks into normalized events, and the adapter contract test passes against the Claude Code adapter.
+### Task 3.1: Adapter abstraction (with mcp_url)
 
-### Task 3.1: Adapter abstraction
+**Effort:** human ~30 min / CC ~5 min. (Same as v1 M3.1 + `SpawnOpts` includes `mcp_socket_path: string` — the path to the worker's MCP UNIX socket.)
 
-**Files:**
-- Create: `packages/worker/src/adapter.ts`
+Commit: `feat(M3.1): adapter interface — SpawnOpts.mcp_socket_path mandatory`.
 
-- [ ] **Step 1: Define the interface**
+### Task 3.2: Claude Code adapter — real MCP wiring + hooks
 
-```ts
-export type HookKind = "pre_tool" | "post_tool" | "session_stop" | "session_error";
+**Effort:** human ~4h / CC ~20 min. **Files:** `packages/adapters/claude-code/src/index.ts`, `packages/adapters/claude-code/test/hooks.test.ts`.
 
-export interface ToolPolicy {
-  shell: "deny";
-  fs_read_outside_cwd: "deny";
-  fs_write_outside_cwd: "deny";
-  network: "allowlist";
-}
+- [ ] **Step 1: Generate Claude Code config file pointing at the worker's MCP socket**
 
-export interface HookHandlers {
-  on_pre_tool?(e: { tool: string; args: unknown }): Promise<{ allow: boolean; reason?: string }>;
-  on_post_tool?(e: { tool: string; args: unknown; result: unknown; ok: boolean }): Promise<void>;
-  on_session_stop?(e: { exit_code: number; final_message?: string }): Promise<{ block?: { feedback: string } } | void>;
-  on_session_error?(e: { reason: string; stderr?: string }): Promise<void>;
-}
-
-export interface SpawnOpts {
-  cwd: string;
-  env: Record<string, string>;
-  prompt: string;
-  allowed_tools_policy: ToolPolicy;
-  hook_handlers: HookHandlers;
-  network_egress_allowlist: string[];
-  signal: AbortSignal;
-}
-
-export interface SessionHandle {
-  readonly pid: number;
-  wait(): Promise<{ exit_code: number; signal?: string }>;
-}
-
-export interface BackendAdapter {
-  readonly id: "claude_code" | "codex" | "opencode";
-  readonly capabilities: {
-    hooks: HookKind[];
-    inject_context: boolean;
-    block_on_stop: boolean;
-  };
-  spawn(opts: SpawnOpts): Promise<SessionHandle>;
-}
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add packages/worker/src/adapter.ts
-git commit -m "feat(M3.1): adapter interface (BackendAdapter, SpawnOpts, hooks)"
-```
-
-### Task 3.2: Claude Code adapter implementation
-
-**Files:**
-- Modify: `packages/adapters/claude-code/package.json`
-- Create: `packages/adapters/claude-code/tsconfig.json`
-- Create: `packages/adapters/claude-code/src/index.ts`
-- Create: `packages/adapters/claude-code/test/spawn.test.ts`
-
-- [ ] **Step 1: deps**
-
-```json
-{
-  "name": "@cliptown/adapter-claude-code",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "main": "dist/index.js",
-  "scripts": { "build": "tsc -p .", "test": "vitest run" },
-  "dependencies": { "@cliptown/worker": "workspace:*" },
-  "devDependencies": { "typescript": "^5.5", "vitest": "^2", "@types/node": "^20" }
-}
-```
-
-`packages/adapters/claude-code/tsconfig.json`: same as worker.
-
-- [ ] **Step 2: Implement spawn**
-
-`packages/adapters/claude-code/src/index.ts`:
 ```ts
 import { spawn as nodeSpawn } from "node:child_process";
-import type { BackendAdapter, SpawnOpts, SessionHandle } from "@cliptown/worker/dist/adapter.js";
+import { writeFile, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export const claudeCodeAdapter: BackendAdapter = {
   id: "claude_code",
   capabilities: { hooks: ["pre_tool", "post_tool", "session_stop", "session_error"], inject_context: true, block_on_stop: true },
-  async spawn(opts: SpawnOpts): Promise<SessionHandle> {
-    const args = [
-      "--print",
-      opts.prompt,
-      "--allowedTools", "Read,Edit,Write,Glob,Grep",
-      "--mcp-config", "/dev/stdin",
-    ];
-    const child = nodeSpawn(process.env.CLIPTOWN_FIXTURE_CLI || "claude", args, {
-      cwd: opts.cwd,
-      env: opts.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const mcpConfig = JSON.stringify({ mcpServers: { cliptown: { command: process.execPath, args: ["-e", "import('@cliptown/worker').then(({startMcpProxy})=>{})"] } } });
-    child.stdin.write(mcpConfig);
-    child.stdin.end();
-    return {
-      pid: child.pid!,
-      wait: () => new Promise((res) => child.on("exit", (code, sig) => res({ exit_code: code ?? -1, signal: sig ?? undefined })))
-    };
+  async spawn(opts) {
+    const cfgDir = await mkdtemp(join(tmpdir(), "ct-cc-"));
+    const mcpJson = JSON.stringify({ mcpServers: { cliptown: { type: "stdio", command: "nc", args: ["-U", opts.mcp_socket_path] } } });
+    await writeFile(join(cfgDir, "mcp.json"), mcpJson);
+    const allowed = "Read,Edit,Write,Glob,Grep,mcp__cliptown__*";
+    const child = nodeSpawn(process.env.CLIPTOWN_FIXTURE_CLI || "claude", [
+      "--print", opts.prompt,
+      "--allowedTools", allowed,
+      "--mcp-config", join(cfgDir, "mcp.json"),
+      "--strict-mcp-config",
+      // hook script forwarding — Claude Code's settings.json hooks call into the worker's IPC
+    ], { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "pipe"] });
+    // ... handle child events, normalize hooks, etc.
+    return { pid: child.pid!, wait: () => new Promise(r => child.on("exit", (code, sig) => r({ exit_code: code ?? -1, signal: sig ?? undefined }))) };
   }
 };
 ```
 
-> Phase 0 note: this implementation favors observability over wiring real `--mcp-config` plumbing. The MCP proxy is invoked separately by the worker; the adapter focuses on lifecycle. M3.3 wires the contract test that exercises both.
+- [ ] **Step 2: Hooks bridge** — Claude Code reads hook scripts from `settings.json`. Generate a temporary settings file in `cfgDir` whose hook scripts are tiny shell scripts that POST to a localhost worker port. Worker exposes a small HTTP listener for this.
 
-- [ ] **Step 3: Test that spawn returns a handle**
+- [ ] **Step 3: Tests** — spawn fixture CLI under the adapter, assert pre_tool/post_tool/session_stop hooks fire and produce normalized events.
 
-`packages/adapters/claude-code/test/spawn.test.ts`:
-```ts
-import { describe, it, expect } from "vitest";
-import { claudeCodeAdapter } from "../src/index";
+Commit: `feat(M3.2): Claude Code adapter with real MCP config + normalized hook bridge`.
 
-describe("claude code adapter", () => {
-  it("exposes the right id and capabilities", () => {
-    expect(claudeCodeAdapter.id).toBe("claude_code");
-    expect(claudeCodeAdapter.capabilities.block_on_stop).toBe(true);
-  });
-});
-```
+### Task 3.3: Adapter contract test through the adapter
 
-Run: `pnpm --filter @cliptown/adapter-claude-code test`
-Expected: PASS.
+**Effort:** human ~2h / CC ~12 min. **Files:** `packages/worker/src/fixture-cli.ts` (compiled to `dist/fixture-cli.js` so Node can run it), `packages/worker/test/contract.test.ts`.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 1: Fixture CLI compiled** — add `tsx` as devDep; in tests use `npx tsx packages/worker/src/fixture-cli.ts` OR build to `dist/` first via the root `pnpm build`.
 
-```bash
-git add packages/adapters/claude-code pnpm-lock.yaml
-git commit -m "feat(M3.2): claude-code adapter shape + capabilities"
-```
+- [ ] **Step 2: Contract test runs the fixture *through* `claudeCodeAdapter.spawn()`** with `CLIPTOWN_FIXTURE_CLI` pointing at the fixture binary.
 
-### Task 3.3: Adapter contract test (fixture CLI)
+- [ ] **Step 3: Assert hook events arrive in the worker via the bridge** — pre_tool, post_tool, session_stop, with the right payload shape.
 
-**Files:**
-- Create: `packages/worker/src/fixture-cli.ts`
-- Create: `packages/worker/test/contract.test.ts`
+Commit: `feat(M3.3): adapter contract test runs fixture through claude_code adapter`.
 
-- [ ] **Step 1: Build a fake CLI that emits scripted hook events**
+### Task 3.4: TS-side worker supervisor (CLI restart)
 
-`packages/worker/src/fixture-cli.ts`:
-```ts
-#!/usr/bin/env node
-// Reads a script from argv and emits hook events to stdout in MCP-compatible JSON-RPC.
-// Phase 0 stub: print three lines, exit 0.
-const events = [
-  { kind: "pre_tool", tool: "writeFile", args: { path: "artifacts/T1.md" } },
-  { kind: "post_tool", tool: "writeFile", ok: true },
-  { kind: "session_stop", exit_code: 0 }
-];
-for (const e of events) console.log(JSON.stringify(e));
-process.exit(0);
-```
+**Effort:** human ~1.5h / CC ~10 min. (Same as v1 M3.4.)
 
-- [ ] **Step 2: Contract test runs the fixture against each adapter (currently only Claude Code)**
+Commit: `feat(M3.4): worker-side CLI supervisor with backoff`.
 
-`packages/worker/test/contract.test.ts`:
-```ts
-import { describe, it, expect } from "vitest";
-import { spawn } from "node:child_process";
+### Task 3.5: World-side worker process supervisor
 
-describe("adapter contract — fixture CLI", () => {
-  it("emits the expected three hook events in order", async () => {
-    const out: string[] = [];
-    const p = spawn(process.execPath, ["src/fixture-cli.ts"]);
-    p.stdout.on("data", (d) => out.push(String(d)));
-    await new Promise((res) => p.on("exit", res));
-    const lines = out.join("").trim().split("\n").map((l) => JSON.parse(l));
-    expect(lines.map((l) => l.kind)).toEqual(["pre_tool", "post_tool", "session_stop"]);
-  });
-});
-```
+**Effort:** human ~2.5h / CC ~12 min. **Files:** `crates/world/src/agent_supervisor.rs`, `crates/world/tests/agent_supervisor.rs`.
 
-Run: `pnpm --filter @cliptown/worker test`
-Expected: PASS.
+- [ ] **Step 1: After M5.2 creates an agent row, world spawns `node packages/worker/dist/index.js --agent-id ... --startup-id ... --world-url ws://127.0.0.1:<port>/ws/worker` as a child process. Track child handle in a per-agent map keyed by `agent_id`.**
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Detect WS disconnect (worker side) → if child still alive, do nothing; if child died, respawn with backoff [1, 5, 30] up to 3 attempts. After max, emit `system_event { severity: alert, kind: 'worker_dead' }`.**
 
-```bash
-git add packages/worker pnpm-lock.yaml
-git commit -m "feat(M3.3): fixture CLI + adapter contract test"
-```
+- [ ] **Step 3: On startup dissolve, SIGTERM all that startup's workers; 5 s grace then SIGKILL.**
 
-### Task 3.4: Worker supervisor (backoff + respawn)
+- [ ] **Step 4: Tests** — kill a child process, assert respawn; exhaust attempts, assert alert; dissolve, assert kill.
 
-**Files:**
-- Create: `packages/worker/src/supervisor.ts`
-- Create: `packages/worker/test/supervisor.test.ts`
-
-- [ ] **Step 1: Implement backoff**
-
-```ts
-export async function supervise<T>(
-  spawn: () => Promise<T>,
-  isAlive: (h: T) => Promise<boolean>,
-  opts: { backoffSeconds: number[]; maxAttempts: number; abort: AbortSignal }
-): Promise<void> {
-  let attempt = 0;
-  while (!opts.abort.aborted) {
-    let h: T;
-    try { h = await spawn(); } catch { attempt++; if (attempt >= opts.maxAttempts) return; await delay(opts.backoffSeconds[Math.min(attempt - 1, opts.backoffSeconds.length - 1)] * 1000); continue; }
-    while (await isAlive(h)) { await delay(500); }
-    attempt++;
-    if (attempt >= opts.maxAttempts) return;
-    await delay(opts.backoffSeconds[Math.min(attempt - 1, opts.backoffSeconds.length - 1)] * 1000);
-  }
-}
-function delay(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
-```
-
-- [ ] **Step 2: Test backoff sequence**
-
-```ts
-import { describe, it, expect, vi } from "vitest";
-import { supervise } from "../src/supervisor";
-describe("supervisor", () => {
-  it("retries with backoff up to maxAttempts", async () => {
-    let count = 0;
-    const spawn = async () => { count++; throw new Error("fail"); };
-    const ctl = new AbortController();
-    await supervise(spawn, async () => false, { backoffSeconds: [0, 0, 0], maxAttempts: 3, abort: ctl.signal });
-    expect(count).toBe(3);
-  });
-});
-```
-
-Run + commit:
-```bash
-pnpm --filter @cliptown/worker test
-git add packages/worker
-git commit -m "feat(M3.4): worker supervisor with backoff + max attempts"
-```
+Commit: `feat(M3.5): world-side worker supervisor with backoff and dissolve cleanup`.
 
 ---
 
-## Milestone 4 — Frontend skeleton (Lane B)
+## Milestone 4 — Frontend (Lane B)
 
-Goal: Vite + React + Pixi SPA boots, connects to `/ws/console`, renders `/console` (top bar + sidebar empty state) and `/town/:id` (Pixi canvas with one room outline).
+### Task 4.1: Vite + React + Pixi + IBM Plex local font
 
-### Task 4.1: Vite + React skeleton
+**Effort:** human ~2h / CC ~12 min. **Files:** `packages/frontend/{package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx, src/App.tsx, public/fonts/}`.
 
-**Files:**
-- Modify: `packages/frontend/package.json`
-- Create: `packages/frontend/index.html`
-- Create: `packages/frontend/vite.config.ts`
-- Create: `packages/frontend/tsconfig.json`
-- Create: `packages/frontend/src/main.tsx`
-- Create: `packages/frontend/src/App.tsx`
+- [ ] **Step 1: Same setup as v1 M4.1**, plus:
 
-- [ ] **Step 1: deps + scripts**
+`public/fonts/` — drop self-hosted woff2:
+- `IBMPlexSans-Regular.woff2`, `-Medium.woff2`, `-Bold.woff2`
+- `IBMPlexMono-Regular.woff2`, `-Medium.woff2`
 
-```json
-{
-  "name": "@cliptown/frontend",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "@cliptown/protocol": "workspace:*",
-    "react": "^18",
-    "react-dom": "^18",
-    "react-router-dom": "^6",
-    "pixi.js": "^8"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4",
-    "vite": "^5",
-    "vitest": "^2",
-    "typescript": "^5.5",
-    "@types/react": "^18",
-    "@types/react-dom": "^18"
-  }
-}
+`src/styles/fonts.css`:
+```css
+@font-face { font-family: 'IBM Plex Sans'; src: url('/fonts/IBMPlexSans-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'IBM Plex Sans'; src: url('/fonts/IBMPlexSans-Medium.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+@font-face { font-family: 'IBM Plex Sans'; src: url('/fonts/IBMPlexSans-Bold.woff2') format('woff2'); font-weight: 700; font-display: swap; }
+@font-face { font-family: 'IBM Plex Mono'; src: url('/fonts/IBMPlexMono-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'IBM Plex Mono'; src: url('/fonts/IBMPlexMono-Medium.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+:root { --bg: #FAFAFA; --fg: #1A1A1A; --fg-secondary: #6B6B6B; --border: #E5E5E5; --raised: #FFFFFF; }
+body { margin: 0; font-family: 'IBM Plex Sans', sans-serif; color: var(--fg); background: var(--bg); }
+code, .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
 ```
 
-`vite.config.ts`:
-```ts
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-export default defineConfig({ plugins: [react()] });
-```
+`index.html` adds `<link rel="stylesheet" href="/src/styles/fonts.css">` via Vite.
 
-`tsconfig.json`: same shape as worker, `jsx: "react-jsx"`.
+- [ ] **Step 2: Routes for /console and /town/:id**.
 
-`index.html`:
-```html
-<!doctype html><html><head><title>cliptown</title>
-<style>body { margin:0; font-family: 'IBM Plex Sans', system-ui; background:#FAFAFA; color:#1A1A1A; }</style>
-</head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>
-```
+- [ ] **Step 3: Visual smoke** — `pnpm --filter @cliptown/frontend dev`, observe IBM Plex loads (check Network tab).
 
-`src/main.tsx`:
-```tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { App } from "./App";
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode><BrowserRouter><Routes>
-    <Route path="/" element={<App route="console" />} />
-    <Route path="/town/:id" element={<App route="town" />} />
-  </Routes></BrowserRouter></React.StrictMode>
-);
-```
+Commit: `feat(M4.1): Vite/React/Pixi skeleton with self-hosted IBM Plex woff2`.
 
-`src/App.tsx`:
-```tsx
-import React from "react";
-export function App({ route }: { route: "console" | "town" }) {
-  return <div style={{ padding: 16 }}>{route === "console" ? "cliptown / console" : "cliptown / town"}</div>;
-}
-```
+### Task 4.2: WS hook with reconnect + world_view_snapshot handler
 
-- [ ] **Step 2: dev server runs**
+**Effort:** human ~2h / CC ~12 min. **Files:** `packages/frontend/src/{ws.ts, store.ts, hooks/useWorld.ts}`.
 
-Run: `pnpm --filter @cliptown/frontend dev`
-Expected: opens on `http://localhost:5173`, shows "cliptown / console".
+- [ ] **Step 1: Reconnecting WS** (same as v1) plus on connect, send `Hello { operator_token }` from `import.meta.env.VITE_OPERATOR_TOKEN || "dev-token"`.
 
-Stop with Ctrl-C.
+- [ ] **Step 2: Reducer that handles `WorldViewSnapshot`, `WorldViewDelta`, `SystemEvent`, `BackendCatalog`, `Toast`, `Modal`** — typed via `@cliptown/protocol`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Zustand or simple `useReducer` store** holding `{ avatars, startups, tasks, systemEvents, backendCatalog }`.
 
-```bash
-git add packages/frontend pnpm-lock.yaml
-git commit -m "feat(M4.1): vite+react skeleton with /console and /town/:id routes"
-```
+Commit: `feat(M4.2): WS hook + reducer for ConsoleOutbound messages`.
 
-### Task 4.2: WS hook + reconnect
+### Task 4.3: TopBar with system event feed + Recheck
 
-**Files:**
-- Create: `packages/frontend/src/ws.ts`
-- Create: `packages/frontend/src/hooks/useWorld.ts`
+**Effort:** human ~1.5h / CC ~10 min. **Files:** `packages/frontend/src/console/TopBar.tsx`, history modal.
 
-- [ ] **Step 1: WS client with reconnect**
+- [ ] **Step 1: Wordmark + 1-line scrolling event feed (last 1–3 events) + + New Startup button + settings menu with Recheck Backends.**
 
-```ts
-export function connectConsole(url: string, onMessage: (m: unknown) => void): { close: () => void } {
-  let ws: WebSocket | null = null;
-  let backoff = 250; const max = 5000;
-  let closed = false;
-  const open = () => {
-    ws = new WebSocket(url);
-    ws.onmessage = (e) => { try { onMessage(JSON.parse(e.data)); } catch {} };
-    ws.onclose = () => { if (closed) return; setTimeout(open, backoff); backoff = Math.min(max, backoff * 2); };
-    ws.onopen = () => { backoff = 250; };
-  };
-  open();
-  return { close: () => { closed = true; ws?.close(); } };
-}
-```
+Commit: `feat(M4.3): TopBar with system event feed + recheck`.
 
-- [ ] **Step 2: Hook**
+### Task 4.4: Sidebar with recency-sort + FLIP animation + hue accents
 
-```ts
-import { useEffect, useState } from "react";
-import { connectConsole } from "../ws";
-export function useWorld() {
-  const [last, setLast] = useState<unknown>(null);
-  useEffect(() => {
-    const h = connectConsole("ws://127.0.0.1:8080/ws/console", setLast);
-    return () => h.close();
-  }, []);
-  return last;
-}
-```
+**Effort:** human ~2h / CC ~12 min. **Files:** `packages/frontend/src/console/Sidebar.tsx`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 1: Sort startups by `last_event_ts` desc on every store update**, animate position changes with FLIP (use `framer-motion` or hand-rolled).
 
-```bash
-git add packages/frontend
-git commit -m "feat(M4.2): frontend WS hook with reconnect"
-```
+- [ ] **Step 2: Each row has hue accent left edge (8 hues from spec §3.5 palette).**
 
-### Task 4.3: /console layout (top bar + sidebar empty state)
+- [ ] **Step 3: Empty state — "No startups yet" + arrow → top bar.**
 
-**Files:**
-- Create: `packages/frontend/src/console/Console.tsx`
-- Create: `packages/frontend/src/console/Sidebar.tsx`
-- Create: `packages/frontend/src/console/TopBar.tsx`
-- Modify: `packages/frontend/src/App.tsx`
+Commit: `feat(M4.4): Sidebar with recency sort + FLIP animation`.
 
-- [ ] **Step 1: Components**
+### Task 4.5: MainArea Header (budget bar, counts, Open town CTA)
 
-```tsx
-// TopBar.tsx
-export function TopBar({ onNew }: { onNew: () => void }) {
-  return <div style={{ height: 32, borderBottom: "1px solid #E5E5E5", display: "flex", alignItems: "center", padding: "0 12px", background: "#fff" }}>
-    <strong>cliptown</strong>
-    <div style={{ marginLeft: "auto" }}>
-      <button onClick={onNew} style={{ background: "#1A1A1A", color: "#fff", border: 0, padding: "4px 10px", borderRadius: 3 }}>+ New Startup</button>
-    </div>
-  </div>;
-}
-```
+**Effort:** human ~1h / CC ~7 min. (Header band per spec §3.3.)
 
-```tsx
-// Sidebar.tsx
-export function Sidebar({ startups, selected, onSelect }: { startups: { id: string; name: string; goal: string; hue: string }[]; selected: string | null; onSelect: (id: string) => void }) {
-  if (startups.length === 0) return <div style={{ padding: 12, color: "#6B6B6B" }}>No startups yet → top bar</div>;
-  return <div>{startups.map(s =>
-    <div key={s.id} onClick={() => onSelect(s.id)} style={{ padding: 8, borderLeft: `3px solid ${s.hue}`, background: selected === s.id ? "#fff" : "transparent" }}>
-      <div style={{ fontWeight: 600 }}>{s.name}</div>
-      <div style={{ fontSize: 12, color: "#6B6B6B" }}>{s.goal}</div>
-    </div>
-  )}</div>;
-}
-```
+Commit: `feat(M4.5): MainArea header band`.
 
-```tsx
-// Console.tsx
-import { Sidebar } from "./Sidebar";
-import { TopBar } from "./TopBar";
-import { useState } from "react";
-export function Console() {
-  const [sel, setSel] = useState<string | null>(null);
-  return <div style={{ display: "grid", gridTemplateRows: "32px 1fr", height: "100vh" }}>
-    <TopBar onNew={() => alert("new startup modal")} />
-    <div style={{ display: "grid", gridTemplateColumns: "160px 1fr" }}>
-      <Sidebar startups={[]} selected={sel} onSelect={setSel} />
-      <div style={{ padding: 16 }}>{sel ? `selected ${sel}` : "no startup selected"}</div>
-    </div>
-  </div>;
-}
-```
+### Task 4.6: MainArea Kanban — columns + cards + drag-drop + stuck indicators
 
-`App.tsx`: render `<Console />` for the console route.
+**Effort:** human ~5h / CC ~25 min. **Files:** `packages/frontend/src/console/Kanban.tsx`, `Card.tsx`, `dragdrop.ts`.
 
-- [ ] **Step 2: Smoke**
+- [ ] **Step 1: 5 columns** (proposed/queued/in_progress/awaiting_review/done) + footer drawer (failed).
 
-Run: `pnpm --filter @cliptown/frontend dev`
-Expected: top bar with `+ New Startup`, "No startups yet → top bar" in sidebar.
+- [ ] **Step 2: Each card: title + assignee monogram in startup hue + review-round dot + chevron to drop into town.** Stuck-indicator left bar amber/red per `cliptown.toml [kanban]`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Drag-drop allowed transitions only** — call `OperatorAcceptProposal`, `OperatorRejectProposal`, `OperatorForceAccept`, `OperatorForceFail`. Forbidden drops snap back with toast "agent-driven only".
 
-```bash
-git add packages/frontend
-git commit -m "feat(M4.3): /console top bar + sidebar empty state"
-```
+- [ ] **Step 4: Tests** — Playwright drag-drop scenarios for each allowed transition.
 
-### Task 4.4: /town layout (Pixi canvas + room outlines)
+Commit: `feat(M4.6): kanban with operator-only manager-bypass drag-drop`.
 
-**Files:**
-- Create: `packages/frontend/src/town/Town.tsx`
-- Create: `packages/frontend/src/town/PixiStage.tsx`
-- Modify: `packages/frontend/src/App.tsx`
+### Task 4.7: New Startup modal (templated cards + blank + backend selector)
 
-- [ ] **Step 1: Pixi stage with the 7 rooms**
+**Effort:** human ~3h / CC ~15 min. **Files:** `packages/frontend/src/console/NewStartupModal.tsx`.
 
-```tsx
-// PixiStage.tsx
-import { useEffect, useRef } from "react";
-import { Application, Graphics } from "pixi.js";
-const ROOMS = [
-  { id: "suite_1", x: 0, y: 0, w: 224, h: 192, color: 0xFFEBEE },
-  { id: "suite_2", x: 0, y: 192, w: 224, h: 192, color: 0xF3E5F5 },
-  { id: "suite_3", x: 1056, y: 0, w: 224, h: 192, color: 0xFFF3E0 },
-  { id: "suite_4", x: 1056, y: 192, w: 224, h: 192, color: 0xE0F2F1 },
-  { id: "lobby",   x: 224, y: 128, w: 832, h: 128, color: 0xF5F5F5 },
-  { id: "cafe",    x: 224, y: 0,   w: 832, h: 128, color: 0xE8F5E9 },
-  { id: "library", x: 224, y: 256, w: 832, h: 128, color: 0xE3F2FD },
-];
-export function PixiStage() {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const app = new Application();
-    let cancelled = false;
-    (async () => {
-      await app.init({ background: 0xFAFAFA, width: 1280, height: 384 });
-      if (cancelled || !ref.current) return;
-      ref.current.appendChild(app.canvas);
-      for (const r of ROOMS) {
-        const g = new Graphics().rect(r.x, r.y, r.w, r.h).fill(r.color).stroke({ color: 0x333333, width: 1 });
-        app.stage.addChild(g);
-      }
-    })();
-    return () => { cancelled = true; app.destroy(true); };
-  }, []);
-  return <div ref={ref} />;
-}
-```
+- [ ] **Step 1: 3-4 templated cards + Start blank**.
 
-```tsx
-// Town.tsx
-import { PixiStage } from "./PixiStage";
-export function Town() {
-  return <div style={{ display: "grid", gridTemplateRows: "32px 1fr", height: "100vh" }}>
-    <div style={{ height: 32, borderBottom: "1px solid #E5E5E5", padding: "0 12px", display: "flex", alignItems: "center", background: "#fff" }}>
-      <a href="/" style={{ color: "#6B6B6B" }}>← console</a>
-      <strong style={{ marginLeft: 12 }}>α · town_default</strong>
-      <button style={{ marginLeft: "auto", background: "#FF5252", color: "#fff", border: 0, padding: "4px 10px", borderRadius: 3 }}>⚆ POSSESS</button>
-    </div>
-    <div style={{ overflow: "auto" }}><PixiStage /></div>
-  </div>;
-}
-```
+- [ ] **Step 2: Backend selector per role (founder/engineer/designer)** — radio of available backends from `BackendCatalog`. Disabled options strikethrough + install hint.
 
-`App.tsx`: render `<Town />` for the town route.
+- [ ] **Step 3: Submit POSTs to `/api/startups`** then redirects to `/town/:id`.
 
-- [ ] **Step 2: Visual smoke**
+Commit: `feat(M4.7): New Startup modal with backend selector reflecting catalog`.
 
-Run: `pnpm --filter @cliptown/frontend dev`, open `http://localhost:5173/town/anything`. Expected: 7 colored rooms render.
+### Task 4.8: /town TopBar + back + Possess toggle + budget
 
-- [ ] **Step 3: Commit**
+**Effort:** human ~1h / CC ~7 min. (Same as v1 M4.4 with Possess toggle wired to send `OperatorPossess`/`OperatorUnpossess`.)
 
-```bash
-git add packages/frontend
-git commit -m "feat(M4.4): /town Pixi canvas with 7 rooms outlined"
-```
+Commit: `feat(M4.8): /town top bar with possess toggle`.
+
+### Task 4.9: /town Pixi canvas — rooms + avatars + interpolation
+
+**Effort:** human ~6h / CC ~30 min. **Files:** `packages/frontend/src/town/PixiStage.tsx`, `Avatars.tsx`.
+
+- [ ] **Step 1: Renders 7 rooms with their type colors, doors as gaps in walls.**
+
+- [ ] **Step 2: Avatars** — colored circle, 1-letter monogram, ring style per backend. Status overlays (yellow `…`, red `!`, orange `⏸`, green check).
+
+- [ ] **Step 3: Linear interpolation between snapshots** — server publishes `tick_seq`, frontend interpolates `current_pos → target_pos` over 1s tick interval at 60fps.
+
+- [ ] **Step 4: Click avatar → opens popover (M4.11).**
+
+Commit: `feat(M4.9): Pixi canvas with avatars + tick interpolation`.
+
+### Task 4.10: Chat panel — collapsible, room-scoped, cross-startup tag
+
+**Effort:** human ~2h / CC ~12 min.
+
+- [ ] **Step 1: Bottom-right floating, collapsible to chip with unread count.**
+
+- [ ] **Step 2: Filter by room of selected agent or operator's room.** Cross-startup messages tagged with speaker's startup hue.
+
+- [ ] **Step 3: Send box** when operator possessing — sends `OperatorDirective` or `chat` over `/ws/console`.
+
+Commit: `feat(M4.10): floating chat panel with room scope`.
+
+### Task 4.11: Agent popover — name, role, backend, status, task, directive input
+
+**Effort:** human ~2h / CC ~12 min.
+
+(Per spec §3.3 Agent popover spec.) Commit: `feat(M4.11): agent popover with directive input`.
+
+### Task 4.12: Possess transition — camera ease + avatar fade
+
+**Effort:** human ~3h / CC ~15 min. **Files:** `packages/frontend/src/town/possess.ts`.
+
+(Same as v1 M4.5 — but properly placed before M5.) Commit: `feat(M4.12): possess transition camera ease + avatar fade-in`.
+
+### Task 4.13: Keyboard nav
+
+**Effort:** human ~2h / CC ~12 min. **Files:** `packages/frontend/src/keymap.ts`.
+
+- [ ] **Step 1: Implement spec §3.5 keymap** (j/k/Enter/Esc/t/p/c/g+c/slash) with Tab-order across both routes.
+
+- [ ] **Step 2: Visible focus rings.**
+
+Commit: `feat(M4.13): keyboard navigation per spec §3.5`.
 
 ---
 
-## Milestone 5 — End-to-End Walking Skeleton (Lane E begins)
-
-Goal: a single startup boots, two agents spawn, the founder agent can dispatch a task to the engineer, the engineer agent walks to the Library and writes a markdown artifact. Invariants 1–5 verified.
+## Milestone 5 — End-to-End First Task (Lane E begins)
 
-### Task 5.1: Startup creation API
+### Task 5.1: POST /api/startups — founder + engineer + designer
 
-**Files:**
-- Create: `crates/world/src/api_startups.rs`
-- Modify: `crates/world/src/http.rs`
-- Create: `crates/world/tests/api_startups.rs`
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/src/api_startups.rs`, tests.
 
-- [ ] **Step 1: POST /api/startups**
+- [ ] **Step 1: Request schema** — name, goal_text, budget_cap_usd, backends: `{ founder, engineer, designer }`.
 
-```rust
-// api_startups.rs
-use axum::{extract::State, response::Json, http::StatusCode};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use crate::http::AppState;
-
-#[derive(Deserialize)]
-pub struct CreateStartupReq {
-    pub name: String,
-    pub goal_text: String,
-    pub budget_cap_usd: f64,
-    pub backends: BackendsCfg,
-}
-#[derive(Deserialize)]
-pub struct BackendsCfg {
-    pub founder: String,
-    pub engineer: String,
-}
-#[derive(Serialize)]
-pub struct CreateStartupResp {
-    pub startup_id: String,
-}
-
-pub async fn create(State(_s): State<Arc<AppState>>, Json(req): Json<CreateStartupReq>) -> Result<Json<CreateStartupResp>, StatusCode> {
-    // pseudo: claim free suite, insert startup row, insert two agent rows.
-    // Full impl reads suites table for free slot. Phase 0 stub picks suite_1 if available.
-    let id = uuid::Uuid::new_v4().to_string();
-    Ok(Json(CreateStartupResp { startup_id: id }))
-}
-```
-
-Wire route in `http.rs`:
-```rust
-.route("/api/startups", axum::routing::post(api_startups::create))
-```
-
-- [ ] **Step 2: integration test**
+- [ ] **Step 2: Transaction** — claim free suite, insert startup, insert 3 agent rows (founder + engineer + designer; founder is manager_id of the other two), set `home_room_id` to claimed suite, position at home desks. Generate per-agent secrets and persist (in env-mapped form for Phase 0).
 
-Smoke that POST returns 200 with a startup_id; full DB round-trip lands in 5.2 below.
-
-```rust
-#[tokio::test]
-async fn post_startup_returns_id() {
-    // standard axum oneshot pattern; assert status 200 and body shape
-}
-```
-
-Run: `cargo test -p cliptown-world --test api_startups`
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M5.1): POST /api/startups stub"
-```
-
-### Task 5.2: Suite claim + agent rows
-
-**Files:**
-- Modify: `crates/world/src/api_startups.rs`
-- Create: `crates/world/tests/suite_claim.rs`
-
-- [ ] **Step 1: Implement claim transaction**
-
-In `create`: open a transaction, find the first room where `type='office'` AND `private_to_startup_id IS NULL`, assign it to the new startup. Insert `startups` row with `workspace_path = workspaces/<id>/`. Insert two agent rows (founder + engineer) with `home_room_id = <claimed_suite>`. Initial `position_json` to a desk tile inside the suite.
-
-- [ ] **Step 2: workspaces dir creation**
-
-After commit, `mkdir -p workspaces/<startup_id>/artifacts`. Use `tokio::fs::create_dir_all`.
-
-- [ ] **Step 3: Test no two startups get the same suite**
-
-```rust
-#[tokio::test]
-async fn two_creates_claim_different_suites() {
-    // create twice, query rooms for private_to_startup_id, assert 2 distinct suites assigned
-}
-```
+- [ ] **Step 3: After commit, mkdir `workspaces/<id>/artifacts/`.**
 
-Run: `cargo test -p cliptown-world --test suite_claim`
+- [ ] **Step 4: Trigger M3.5 supervisor to spawn 3 workers.**
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Tests** — POST returns 200; DB has 1 startup + 3 agents; 3 workers connected within 5s.
 
-```bash
-git add crates/world Cargo.lock
-git commit -m "feat(M5.2): suite slot claim + founder/engineer agent rows + workspace dir"
-```
-
-### Task 5.3: Worker spawn supervisor in world
-
-**Files:**
-- Create: `crates/world/src/agent_supervisor.rs`
-- Modify: `crates/world/src/main.rs`
-
-- [ ] **Step 1: For each agent in DB, spawn a worker process**
-
-```rust
-// agent_supervisor.rs
-use tokio::process::Command;
-pub async fn spawn_worker(agent_id: &str, startup_id: &str) -> tokio::process::Child {
-    Command::new("node")
-        .args([
-            "packages/worker/dist/index.js",
-            "--agent-id", agent_id,
-            "--startup-id", startup_id,
-            "--world-url", "ws://127.0.0.1:8080/ws/worker",
-        ])
-        .spawn()
-        .expect("worker spawn")
-}
-```
+Commit: `feat(M5.1): startup creation with founder + engineer + designer triple`.
 
-- [ ] **Step 2: On startup creation, kick off both workers; track Child handles in AppState**
+### Task 5.2: Suite slot exhaustion + dissolve
 
-- [ ] **Step 3: Smoke that two workers connect**
+**Effort:** human ~1.5h / CC ~10 min. (Already covered M5.1; here add the 5th create returns 409, the DELETE handler in 5.8 frees a slot.)
 
-```rust
-#[tokio::test]
-async fn creating_a_startup_spawns_two_workers_connected() {
-    // POST /api/startups, then poll AppState's worker registry until count == 2 or timeout
-}
-```
+Commit: `feat(M5.2): suite slot exhaustion guard with 409 response`.
 
-- [ ] **Step 4: Commit**
+### Task 5.3: Dispatcher: directive → subtask → assigned
 
-```bash
-git commit -am "feat(M5.3): agent supervisor spawns one worker per agent row"
-```
+**Effort:** human ~2h / CC ~12 min.
 
-### Task 5.4: Worker entry point + arg parsing
+- [ ] **Step 1: Operator sends `OperatorDirective { to: founder }` via `/ws/console`.**
+- [ ] **Step 2: Founder's CLI sees the directive in next session and emits `subtask_create` MCP.**
+- [ ] **Step 3: Scheduler picks up the queued task, transitions to in_progress, emits `task_assigned` to engineer.**
 
-**Files:**
-- Modify: `packages/worker/src/index.ts`
+Commit: `feat(M5.3): operator directive → founder subtask → engineer assignment`.
 
-- [ ] **Step 1: Wire `connect`, MCP proxy, supervisor**
+### Task 5.4: Engineer writes artifact (fixture)
 
-```ts
-import { connect } from "./ws";
-import { startMcpProxy } from "./mcp";
-const argv = parseArgs(process.argv.slice(2));
-async function main() {
-  const ws = await connect({ url: argv.worldUrl, agentId: argv.agentId, startupId: argv.startupId, secret: process.env.AGENT_SECRET ?? "dev" });
-  await startMcpProxy({ agentId: argv.agentId, startupId: argv.startupId, ws });
-}
-main().catch((e) => { console.error(e); process.exit(1); });
-function parseArgs(a: string[]) { /* trivial flag parser */ return { worldUrl: a[a.indexOf("--world-url")+1], agentId: a[a.indexOf("--agent-id")+1], startupId: a[a.indexOf("--startup-id")+1] }; }
-```
+**Effort:** human ~2h / CC ~12 min.
 
-- [ ] **Step 2: Build + smoke**
+- [ ] **Step 1: Engineer fixture executes the fixture from M2.4** — emits hypothesis_state, writeFile to `artifacts/T<id>.md`, verify (read_assert), test_record pass, hypothesis_resolve verified, task_done.
 
-```bash
-pnpm --filter @cliptown/worker build
-node packages/worker/dist/index.js --agent-id x --startup-id y --world-url ws://127.0.0.1:8080/ws/worker
-```
+- [ ] **Step 2: World validates artifact path is exactly `workspaces/<startup_id>/artifacts/<task_id>.md`** (re-runs `sandbox::resolve` AND checks the path matches the canonical pattern).
 
-- [ ] **Step 3: Commit**
+Commit: `feat(M5.4): engineer fixture writes artifact with epistemic discipline`.
 
-```bash
-git add packages/worker
-git commit -m "feat(M5.4): worker entry point with arg parsing"
-```
+### Task 5.5: Manager review — accept
 
-### Task 5.5: First task lifecycle (founder → directive → engineer task_done)
+**Effort:** human ~1h / CC ~7 min. Founder fixture receives `subtask_done`, calls `read_artifact`, calls `task_accept`. World transitions to `done`.
 
-**Files:**
-- Modify: `crates/world/src/ws_worker.rs` (handle MCP `subtask_create`, `task_done`)
-- Modify: `crates/world/src/persist.rs` (insert task, update task)
-- Create: `crates/world/tests/e2e_first_task.rs`
+Commit: `feat(M5.5): manager accept loop closes invariants 2–5`.
 
-- [ ] **Step 1: Handle the MCP calls in world**
+### Task 5.6: Manager review — request_changes round 2
 
-Add cases for `subtask_create`, `task_done`. On `task_done`, re-validate `artifact_path` via `sandbox::resolve` against `workspaces/<startup_id>/`, then UPDATE `tasks` SET status='awaiting_review', artifact_path=?.
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/tests/e2e_review_cycle.rs`.
 
-- [ ] **Step 2: Send `task_assigned` to the engineer worker on subtask_create**
+- [ ] **Step 1: Founder fixture receives subtask_done and conditionally calls `task_request_changes` (round 1) → world transitions, increments `review_round`, emits directive with feedback.**
 
-- [ ] **Step 3: E2E test using mocked LLM (deterministic stub)**
+- [ ] **Step 2: Engineer fixture sees the directive on next session, revises artifact, emits new task_done.**
 
-The engineer worker, configured with `CLIPTOWN_FIXTURE_CLI=node packages/worker/dist/fixture-cli.js`, receives `task_assigned`, the fixture spawns and writes `artifacts/T<id>.md`, then calls `task_done` MCP. Assert the world's `tasks.status = awaiting_review` and `artifact_path` matches.
+- [ ] **Step 3: Founder accepts in round 2.**
 
-```rust
-#[tokio::test]
-async fn first_task_runs_end_to_end_with_fixture_cli() {
-    // 1. start world
-    // 2. POST /api/startups
-    // 3. wait for two workers connected
-    // 4. inject directive via /ws/console (operator → founder agent)
-    // 5. assert that within N seconds a task row exists with status=awaiting_review
-    //    and the artifact file exists at workspaces/<id>/artifacts/<task>.md
-}
-```
+- [ ] **Step 4: Test asserts** `review_round = 1`, `audit_trail` contains both rounds, final status `done`.
 
-Run: `cargo test -p cliptown-world --test e2e_first_task -- --nocapture`
-Expected: PASS within 30 s (with fixture LLM stub).
+- [ ] **Step 5: Separately test `max_review_rounds = 3`** — fixture configured to always request_changes, after round 3 the world auto-escalates to `escalated`.
 
-- [ ] **Step 4: Commit**
+Commit: `feat(M5.6): full review cycle E2E + max_review_rounds escalation`.
 
-```bash
-git commit -am "feat(M5.5): first end-to-end task — directive → write artifact → awaiting_review"
-```
+### Task 5.7: Permission violation E2E
 
-### Task 5.6: Manager review cycle (task_accept)
+**Effort:** human ~1h / CC ~7 min.
 
-**Files:**
-- Modify: `crates/world/src/ws_worker.rs` (handle `task_accept`, `task_request_changes`)
-- Modify: `crates/world/tests/e2e_first_task.rs` (extend)
+- [ ] **Step 1: α-engineer fixture calls `move_intent { target_room: 'suite_2' }` while β owns suite_2.**
+- [ ] **Step 2: World replies `mcp_error { code: "no_permission" }` and writes a `system_events { severity: 'alert' }` row.**
 
-- [ ] **Step 1: Founder worker, on `subtask_done` event, calls `task_accept` MCP**
+Commit: `feat(M5.7): permission violation rejected with alert event`.
 
-The fixture script for the founder is "if I receive subtask_done, call task_accept on it."
+### Task 5.8: DELETE /api/startups/:id — dissolve
 
-- [ ] **Step 2: Extend the E2E test to assert `status = done` after the founder accepts**
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/src/api_startups.rs`, tests.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 1: Transaction** — mark startup `dissolved`, free its suite (set `private_to_startup_id = NULL`), kill all its workers via M3.5, leave audit history intact.
 
-```bash
-git commit -am "feat(M5.6): manager review accept loop completes invariants 2,3,4,6"
-```
+- [ ] **Step 2: Test** — dissolve frees the slot; new POST succeeds.
 
-### Task 5.7: Hypothesis + test fixture (invariant 5)
-
-**Files:**
-- Modify: `packages/worker/src/fixture-cli.ts`
-- Modify: `crates/world/tests/e2e_first_task.rs`
-
-- [ ] **Step 1: Engineer fixture emits MCP calls in this order:**
-  1. `hypothesis_state` { claim }
-  2. write artifact via fs ops
-  3. `verify` { method: "read_assert", ... }
-  4. `test_record` { outcome: "pass" }
-  5. `hypothesis_resolve` { status: "verified" }
-  6. `task_done`
-
-- [ ] **Step 2: Extend the E2E test to assert epistemic_log has ≥ 1 verified hypothesis with passing test**
-
-- [ ] **Step 3: Commit**
-
-```bash
-git commit -am "feat(M5.7): fixture engineer emits L0 epistemic events (invariant 5)"
-```
+Commit: `feat(M5.8): DELETE /api/startups/:id with worker shutdown and slot release`.
 
 ---
 
 ## Milestone 6 — Multi-tenancy + Isolation (invariant 8)
 
-### Task 6.1: Two startups concurrent
+### Task 6.1: Two startups concurrent — isolation invariant
 
-**Files:**
-- Modify: `crates/world/tests/e2e_first_task.rs` → `e2e_multi_startup.rs`
+**Effort:** human ~1.5h / CC ~10 min. (Same as v1 M6.1.)
 
-- [ ] **Step 1: POST /api/startups twice**, assert distinct suites, distinct workspaces, four workers connected.
+Commit: `test(M6.1): invariant 8 — directive isolation across startups`.
 
-- [ ] **Step 2: Send a directive to startup α's founder. Assert that startup β's agents never receive it.** Inspect each worker's incoming WS log; the directive's `from_agent_id` must never appear in β's worker.
+### Task 6.2: Operator drag-drop accept_proposal flow E2E
 
-- [ ] **Step 3: Property-test the routing function with random sequences** (extend `permissions_property.rs` if needed).
+**Effort:** human ~2h / CC ~12 min.
 
-Commit: `git commit -am "test(M6.1): invariant 8 — directive isolation across startups"`
+- [ ] **Step 1: Engineer fixture (non-manager) calls `subtask_create` → world creates `proposed`, emits `subtask_proposed` to founder + `WorldViewDelta` with the new card.**
+- [ ] **Step 2: Operator drags from proposed to queued in /console (Playwright simulates drag). Frontend sends `OperatorAcceptProposal`.**
+- [ ] **Step 3: World transitions to queued, scheduler picks up, etc.**
+- [ ] **Step 4: Audit row carries `actor=operator`.**
 
-### Task 6.2: Suite slot exhaustion
+Commit: `feat(M6.2): operator drag-drop proposal acceptance E2E`.
 
-- [ ] **Step 1: POST 5 startups, assert 5th returns 409 Conflict with body `max_active_startups_reached`**.
-- [ ] **Step 2: Dissolve a startup (DELETE /api/startups/:id) — frees the slot**.
-- [ ] **Step 3: Re-create succeeds**.
+### Task 6.3: Operator force_accept and force_fail
 
-Commit: `git commit -am "feat(M6.2): suite slot exhaustion + dissolve releases"`
+**Effort:** human ~1.5h / CC ~10 min. Drag from awaiting_review → done; drag → failed with required note.
 
-### Task 6.3: Operator dispatcher (proposed → queued via /ws/console drop)
-
-- [ ] **Step 1: Frontend sends `accept_proposal` over /ws/console** when operator drops a card from `proposed` to `queued`.
-- [ ] **Step 2: Audit row written with actor='operator'**.
-- [ ] **Step 3: E2E test: non-manager engineer calls subtask_create, operator drops, world transitions to queued**.
-
-Commit: `git commit -am "feat(M6.3): kanban drag → accept_proposal flows through /ws/console"`
+Commit: `feat(M6.3): operator force_accept and force_fail kanban actions`.
 
 ---
 
 ## Milestone 7 — Cross-startup proximity (invariant 7)
 
-### Task 7.1: Proximity tick implementation
+### Task 7.1: Proximity tick — group avatars by room
 
-**Files:**
-- Modify: `crates/world/src/state.rs`
-- Modify: `crates/world/src/loop_.rs`
+**Effort:** human ~1h / CC ~7 min. (Same as v1 M7.1, plus the worker out-bus from M1.13 broadcasts `proximity_tick` to each member's worker.)
 
-- [ ] **Step 1: At each tick, group avatars by `room_id`. For any room with ≥ 2 occupants, emit `proximity_tick` to each occupant's worker.**
-- [ ] **Step 2: Property test: for any random configuration, every agent in the same room as another receives a proximity_tick that lists the others.**
+Commit: `feat(M7.1): proximity_tick groups + emits to workers`.
 
-Commit: `git commit -am "feat(M7.1): proximity tick groups + emits to co-located workers"`
+### Task 7.2: Cross-startup chat in cafe — invariant 7
 
-### Task 7.2: Cross-startup chat in cafe
+**Effort:** human ~2h / CC ~12 min. **Files:** `crates/world/tests/e2e_cafe.rs`.
 
-**Files:**
-- Modify: `crates/world/src/ws_worker.rs` (handle MCP `speak`)
-- Create: `crates/world/tests/e2e_cafe.rs`
+- [ ] **Step 1: α-engineer and β-designer fixtures both emit `move_intent { target_room: cafe }`.**
+- [ ] **Step 2: After both arrive, α-engineer's fixture emits `speak { kind: chat, body: "anyone tried mdast?" }`.**
+- [ ] **Step 3: Assert β-designer's worker receives `chat_received` with α's body.**
 
-- [ ] **Step 1: `speak { kind: "chat" }` emits `chat_received` to every avatar in the same room, regardless of startup.**
-- [ ] **Step 2: E2E: α-engineer and β-designer both move to cafe via fixture sequence; α-engineer speaks; β-designer's worker receives.**
-
-Commit: `git commit -am "test(M7.2): invariant 7 — cross-startup cafe chat delivered"`
+Commit: `test(M7.2): invariant 7 — cross-startup cafe chat delivered`.
 
 ---
 
-## Milestone 8 — Codex + opencode adapters
+## Milestone 8 — Codex + opencode adapters (invariant 9)
 
 ### Task 8.1: Codex adapter
 
-**Files:**
-- Modify: `packages/adapters/codex/package.json`
-- Create: `packages/adapters/codex/src/index.ts`
-- Create: `packages/adapters/codex/test/spawn.test.ts`
+**Effort:** human ~3h / CC ~15 min. (Same shape as M3.2 with Codex CLI specifics; capability `block_on_stop: false`.)
 
-- [ ] **Step 1: Implement `spawn` for `codex` CLI.** Capabilities: `block_on_stop: false`. Hooks: best-effort via stdout event subscription.
-- [ ] **Step 2: Pass the same fixture-CLI contract test as Claude Code.**
-- [ ] **Step 3: Commit.**
+Commit: `feat(M8.1): Codex CLI adapter with best-effort hook bridge`.
 
 ### Task 8.2: opencode adapter
 
-Same shape as 8.1. Capabilities: `block_on_stop: false`, `inject_context: true` (via session resume). Provider routing supports OpenAI-compatible endpoints; the adapter exports `network_egress_allowlist` from the active provider config.
+**Effort:** human ~3h / CC ~15 min. (Provider routing, `inject_context: true` via session resume.)
 
-### Task 8.3: Multi-adapter E2E (invariant 9)
+Commit: `feat(M8.2): opencode adapter with provider routing`.
 
-**Files:**
-- Create: `e2e/playwright.config.ts`
-- Create: `e2e/multi-adapter.spec.ts`
+### Task 8.3: Adapter contract test runs across all 3
 
-- [ ] **Step 1: Spawn 3 startups, each agent on a different backend.**
-- [ ] **Step 2: Each agent completes a task end-to-end via the fixture CLI for its backend.**
-- [ ] **Step 3: Assert all 3 backends produce a `task_done` accepted by their manager.**
+**Effort:** human ~1h / CC ~7 min. Extend M3.3 to loop over `[claudeCodeAdapter, codexAdapter, opencodeAdapter]`, asserting normalized hooks for each.
 
-Commit: `git commit -am "test(M8.3): invariant 9 — all three adapters complete a task"`
+Commit: `test(M8.3): adapter contract test passes for all 3 adapters`.
 
 ---
 
-## Milestone 9 — Ship gate E2E + benchmarks
+## Milestone 9 — Ship gate (Playwright)
 
-### Task 9.1: Playwright suite for invariants 1–9
+### Task 9.1: inv-1 — multiple startups, all 3 adapters connected
 
-**Files:**
-- Create: `e2e/inv-1.spec.ts` ... `e2e/inv-9.spec.ts`
+**Effort:** human ~2h / CC ~12 min. **Files:** `e2e/inv-1-spawn.spec.ts`.
 
-Each spec is a thin wrapper that drives the world via HTTP/WS and the frontend via Playwright. Mock LLM by default; real LLM via env `E2E_LLM=real`. Every spec must complete in < 60 s with mocked LLM.
+- [ ] **Step 1: Playwright drives Console UI, creates 3 startups (α/β/γ) with different default backends per role mix.**
+- [ ] **Step 2: Asserts 9 workers (3 startups × 3 agents) connected within 30s.**
+- [ ] **Step 3: Asserts each backend type has at least one CLI session started (from `cli_session_started` audit).**
 
-- [ ] **Step 1: Write each spec from §11 of the design doc.**
-- [ ] **Step 2: Add `pnpm test:e2e` and `pnpm test:e2e:real` scripts at repo root.**
-- [ ] **Step 3: Add a CI job that runs the mocked suite on every PR; real-LLM job is opt-in.**
+Commit: `test(M9.1): invariant 1 — 3 startups + 9 workers + all 3 adapters`.
 
-Commit: `git commit -am "test(M9.1): ship-gate playwright suite covering 9 invariants"`
+### Task 9.2: inv-2 — directive → subtask_create → task_assigned
 
-### Task 9.2: Benchmarks
+**Effort:** human ~1h / CC ~7 min.
 
-**Files:**
-- Create: `packages/frontend/bench/`
+Commit: `test(M9.2): invariant 2`.
 
-- [ ] **Step 1: Establish baselines for FCP `/console` (300 ms), `/town/:id` (500 ms).**
-- [ ] **Step 2: Establish backend baselines: tick latency, mpsc inbox throughput, SQLite write rate.**
-- [ ] **Step 3: CI fails on > 20 % regression vs `bench/baselines.json`.**
+### Task 9.3: inv-3 — required_room walk
 
-Commit: `git commit -am "test(M9.2): performance baselines + regression gate"`
+**Effort:** human ~1.5h / CC ~10 min. Asserts engineer avatar moves through Lobby tiles to Library, A* respects doors.
 
-### Task 9.3: Documentation pass
+Commit: `test(M9.3): invariant 3`.
 
-**Files:**
-- Create: `README.md`
-- Create: `CONTRIBUTING.md`
+### Task 9.4: inv-4 — artifact at exact path
 
-- [ ] **Step 1: README — what cliptown is, quickstart (`make dev`), link to the spec.**
-- [ ] **Step 2: CONTRIBUTING — workspace layout, test commands, ts-rs regenerate workflow.**
+**Effort:** human ~1h / CC ~7 min.
 
-Commit: `git commit -am "docs(M9.3): README + CONTRIBUTING for Phase 0"`
+Commit: `test(M9.4): invariant 4`.
+
+### Task 9.5: inv-5 — epistemic_log has verified hypothesis
+
+**Effort:** human ~1h / CC ~7 min.
+
+Commit: `test(M9.5): invariant 5`.
+
+### Task 9.6: inv-6 — review cycle
+
+**Effort:** human ~1h / CC ~7 min. Reuses M5.6 logic via Playwright UI assertions.
+
+Commit: `test(M9.6): invariant 6`.
+
+### Task 9.7: inv-7 — cross-startup cafe chat
+
+**Effort:** human ~1h / CC ~7 min.
+
+Commit: `test(M9.7): invariant 7`.
+
+### Task 9.8: inv-8 — multi-tenant isolation
+
+**Effort:** human ~1.5h / CC ~10 min.
+
+Commit: `test(M9.8): invariant 8`.
+
+### Task 9.9: inv-9 — all 3 adapters complete a task
+
+**Effort:** human ~1h / CC ~7 min.
+
+Commit: `test(M9.9): invariant 9 — three adapters each ship a task`.
+
+### Task 9.10: Real-LLM opt-in job + budget cap
+
+**Effort:** human ~2h / CC ~12 min. **Files:** `.github/workflows/e2e-real-llm.yml`.
+
+- [ ] **Step 1: Workflow gated on `workflow_dispatch` only.**
+- [ ] **Step 2: Sets `E2E_LLM=real`, exports per-run budget cap of $0.50; if breach, fail the run.**
+
+Commit: `ci(M9.10): real-LLM opt-in E2E with budget cap`.
 
 ---
 
-## Self-Review
+## Milestone 10 — Benchmarks + docs
 
-After writing this plan, I checked it against the spec at commit `62f2f0e`:
+### Task 10.1: Benchmarks + baseline + 20% regression gate
 
-**Spec coverage:**
-- §3.1 World server architecture: M1.1–M1.4 (boot, tick, WS, catalog) ✓
-- §3.2 Worker thin model: M2.1–M2.2, M3.1–M3.4 ✓
-- §3.3 Frontend layout: M4.1–M4.4 ✓
-- §3.4 Backend adapter interface: M3.1, M3.2, M8.1, M8.2 ✓
-- §3.5 Repo layout, ts-rs, cliptown.toml, logging, audit_trail vs epistemic_log: M0.1, M0.3, M0.4 + protocol crate carries the boundary ✓
-- §4 Data model + WAL pragmas: M0.2, M1.10 ✓
-- §5 WeWork map + permissions: M1.5, M1.7 ✓
-- §6 Worker contract + MCP tools: M2.1–M2.3, M5.5 ✓
-- §7 Iteration model (L0–L3): L0 covered in M5.7; L1 is implicit in CLI; L2 in M5.6; L3 (chat-received injection) in M7.2 ✓
-- §8 Operator: possess transition + camera ease — placeholder in M4.4, full implementation should land in M4.5 (gap)
-- §9 Resilience matrix: supervisor in M3.4, sandbox in M1.9, world rehydrate in M1.10 ✓
-- §10 Test strategy + sandbox battery + adapter contract: M1.7, M1.9, M3.3 ✓
-- §10.5 Performance budget: M9.2 ✓
-- §11 Ship gate: M5.5–M5.7 (1–6), M6.1 (8), M7.2 (7), M8.3 (9), M9.1 (all in CI) ✓
-- §11.5 Parallelization: lanes A/B/C/D/E mapped to M1/M4/M2/M3,M8/M5,M6,M7,M9 ✓
-- §12 Phase roadmap: out of scope here, covered in spec ✓
+**Effort:** human ~3h / CC ~15 min. **Files:** `packages/frontend/bench/`, `crates/world/benches/`.
 
-**Gaps found and added:**
-- **M4.5 — Possess transition**: I omitted the camera-ease + avatar fade-in implementation in the original task list. Adding it now.
+- [ ] **Step 1: Frontend bench** — record FCP for /console (target ≤300 ms) and /town/:id (≤500 ms).
+- [ ] **Step 2: World bench** — tick latency, mpsc throughput, SQLite write rate.
+- [ ] **Step 3: `bench/baselines.json` checked in.** CI runs bench on every PR; fail if any metric regresses >20%.
 
-**Placeholder scan:** Several `// pseudo` comments in M5.1, M5.2, M5.3 — these are intentional skeletons because the full implementation is several hundred lines. The plan describes the contract and tests; the implementing agent fills the body.
+Commit: `test(M10.1): performance baselines + 20% regression gate`.
 
-**Type consistency:** Reviewed — `BackendAdapter`, `SpawnOpts`, `HookHandlers`, `SessionHandle`, `TaskStatus`, `Transition`, `AppState` are consistent across tasks.
+### Task 10.2: README + CONTRIBUTING
 
-### Task 4.5 (added during self-review): Possess transition
+**Effort:** human ~1.5h / CC ~10 min. (Same as v1 M9.3.)
 
-**Files:**
-- Modify: `packages/frontend/src/town/PixiStage.tsx`
-- Create: `packages/frontend/src/town/possess.ts`
-- Create: `packages/frontend/test/possess.test.ts`
+Commit: `docs(M10.2): README + CONTRIBUTING`.
 
-- [ ] **Step 1: Camera tween + avatar fade**
+---
 
-```ts
-import { Application, Graphics } from "pixi.js";
-export async function enterPossession(app: Application, lobbySpawn: { x: number; y: number }) {
-  // 600ms ease: viewport pivot from (640, 192) → (lobbySpawn.x, lobbySpawn.y), zoom 1 → 1.4
-  // operator avatar fade-in alpha 0 → 1 over 400ms after camera starts
-  // total 600ms
-}
-export async function exitPossession(app: Application) {
-  // 400ms reverse
-}
-```
+## Self-Review (v2)
 
-- [ ] **Step 2: Wire into `Town.tsx` — `p` key + Possess button toggle invokes `enterPossession` / `exitPossession`.**
+Re-checked spec coverage against the v2 plan with the codex findings as a checklist:
 
-- [ ] **Step 3: Test**
+| Codex finding | Resolution in v2 |
+|---|---|
+| Single-thread mpsc invariant violated | M1.2 + M1.3 — every WS message becomes a `Cmd` on the inbox; handlers do not touch state. Auth probe runs in handler before dispatch. |
+| TS execution (`node src/fixture-cli.ts`) | M3.3 — fixture compiled to `dist/` via `pnpm build` order; `tsx` for dev runs. |
+| Build ordering missing | M0.5 + root `package.json` `test` chains build before tests. |
+| Cross-language schema codegen missing | M0.3 wires `cargo test --ignored ts_rs_export` into `pnpm build:rust`. |
+| Designer role missing | M5.1 spawns founder + engineer + designer. |
+| Possess transition placement | M4.12, before any M5/E2E task. |
+| Operator input handling | M1.12 dedicated task. |
+| DELETE /api/startups/:id | M5.8. |
+| Movement subsystem | M1.13 dedicated task; M2.3 dispatches `move_intent`. |
+| Task scheduler | M1.14 dedicated task. |
+| Budget enforcement | M1.15 dedicated task. |
+| MCP world handlers full set | M2.3 implements all 16 tools. |
+| Frontend depth | M4.1–M4.13 broken into 13 per-component tasks. |
+| Review cycle invariant 6 untested | M5.6 explicitly tests round++ + escalation. |
+| Sandbox battery additions | M1.9 adds Windows abs, RTL, NFC, trailing-dot, and TS replay. |
+| Adapter contract test fake | M3.3 runs through the adapter; M8.3 loops over all 3. |
+| Worker MCP listener leak | M2.2 with `offMessage` cleanup + sequential 100-call test. |
+| Determinism contract missing | M0.6 lands first; later tasks reference it. |
+| Logging required fields | M1.1 + CI grep step enforces. |
+| Operator session-token + agent secret auth | M1.3 with M0.6 deterministic UUIDs and per-agent env-mapped secrets. |
+| World view snapshot + chunk | M1.11 dedicated task. |
+| BackendCatalog SIGHUP/timer/Recheck | M1.4 boot + 5-min timer + SIGHUP + POST recheck endpoint + UI menu in M4.3. |
+| Per-step commit overhead | Removed; v2 commits per task at the end. |
+| Time estimates | Every task carries `human / CC` scales reflecting reality. |
+| Task numbering for ship gate | M9.1–M9.9 (one per invariant) + M9.10 (real-LLM) + M10. |
 
-```ts
-import { describe, it, expect } from "vitest";
-import { enterPossession } from "../src/town/possess";
-describe("possess transition", () => {
-  it("completes within ~600ms", async () => {
-    const t = Date.now();
-    await enterPossession({} as any, { x: 100, y: 100 });
-    expect(Date.now() - t).toBeLessThan(800);
-  });
-});
-```
+**Spec coverage gaps remaining:** none identified.
 
-- [ ] **Step 4: Commit**
+**Placeholder scan:** v2 still has `// pseudo` comments in M5.3 dispatcher and M2.3 handlers' permission/audit emission. These are intentional skeletons; the real implementations are several hundred lines each and must follow the spec's typed enums (already defined in M0.3 protocol module).
 
-```bash
-git commit -am "feat(M4.5): possess transition camera ease + avatar fade-in"
-```
+**Type consistency check:** `WorldView`, `AvatarView`, `BackendInfo`, `WorkerInbound`/`Outbound`, `ConsoleInbound`/`Outbound`, `BackendAdapter`, `SpawnOpts`, `HookHandlers`, `SessionHandle`, `TaskStatus`, `Transition`, `AppState`, `Handle`, `Cmd`, `DetCtx` — all defined in M0–M2 and used consistently in later tasks. No naming drift detected.
 
 ---
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-05-07-cliptown-phase-0.md`. Two execution options:
+Plan v2 saved to `docs/superpowers/plans/2026-05-07-cliptown-phase-0.md` (replaces v1; v1 preserved in commit `fbe5b9f`). Two execution options:
 
-**1. Subagent-Driven (recommended)** — fresh subagent per task, two-stage review between tasks, fast iteration. Each milestone's tasks dispatched in order; lanes A/B/C/D/E parallelized after M0 freezes the protocol crate.
+**1. Subagent-Driven (recommended)** — fresh subagent per task, two-stage review between tasks. After M0 freezes the protocol module + determinism contract, lanes A (M1), C (M2), B (M4) can run in parallel worktrees. Lane D (M3, M8) joins after M2 contract is set. Lane E (M5–M9) integrates everything.
 
 **2. Inline Execution** — execute tasks in this session using executing-plans, batch checkpoints at milestone boundaries.
 
