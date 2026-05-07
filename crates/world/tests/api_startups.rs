@@ -130,6 +130,105 @@ async fn post_409_when_no_free_suite() {
 }
 
 #[tokio::test]
+async fn fifth_post_returns_409_after_4_succeed() {
+    let state = fixture().await;
+
+    let mut workspaces = Vec::new();
+    for i in 0..4 {
+        let app = router(state.clone());
+        let body = serde_json::json!({
+            "name": format!("startup-{}", i),
+            "goal_text": "x",
+            "budget_cap_usd": 5.0,
+            "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/startups")
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "create #{} should succeed", i);
+
+        let body = to_bytes(res.into_body(), 4096).await.unwrap();
+        let resp_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let id = resp_json.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+        let workspace: (String,) = sqlx::query_as("SELECT workspace_path FROM startups WHERE id = ?")
+            .bind(&id).fetch_one(&state.pool).await.unwrap();
+        workspaces.push(workspace.0);
+    }
+
+    // 5th create — no free suites left.
+    let app = router(state.clone());
+    let body = serde_json::json!({
+        "name": "fifth",
+        "goal_text": "x",
+        "budget_cap_usd": 5.0,
+        "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Verify exactly 4 startups + 12 agents in DB.
+    let s_count: (i64,) = sqlx::query_as("SELECT count(*) FROM startups")
+        .fetch_one(&state.pool).await.unwrap();
+    assert_eq!(s_count.0, 4);
+    let a_count: (i64,) = sqlx::query_as("SELECT count(*) FROM agents")
+        .fetch_one(&state.pool).await.unwrap();
+    assert_eq!(a_count.0, 12);
+
+    // All 4 suites are claimed.
+    let claimed: (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM rooms WHERE type = 'office' AND private_to_startup_id IS NOT NULL"
+    ).fetch_one(&state.pool).await.unwrap();
+    assert_eq!(claimed.0, 4);
+
+    // Cleanup workspace dirs from the 4 successful creates.
+    for ws in workspaces {
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+}
+
+#[tokio::test]
+async fn rejected_create_leaves_no_orphan_rows() {
+    let state = fixture().await;
+    // Pre-claim all 4 suites.
+    sqlx::query("UPDATE rooms SET private_to_startup_id = 'placeholder' WHERE type = 'office'")
+        .execute(&state.pool).await.unwrap();
+    let app = router(state.clone());
+
+    let body = serde_json::json!({
+        "name": "doomed",
+        "goal_text": "x",
+        "budget_cap_usd": 5.0,
+        "backends": { "founder": "claude_code", "engineer": "claude_code", "designer": "claude_code" }
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/startups")
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // No partial writes — startups + agents both empty.
+    let s_count: (i64,) = sqlx::query_as("SELECT count(*) FROM startups")
+        .fetch_one(&state.pool).await.unwrap();
+    assert_eq!(s_count.0, 0);
+    let a_count: (i64,) = sqlx::query_as("SELECT count(*) FROM agents")
+        .fetch_one(&state.pool).await.unwrap();
+    assert_eq!(a_count.0, 0);
+}
+
+#[tokio::test]
 async fn post_400_on_invalid_backend() {
     let state = fixture().await;
     let app = router(state.clone());
