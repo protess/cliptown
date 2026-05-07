@@ -1,5 +1,6 @@
 import { useParams } from "react-router-dom";
 import { TownTopBar } from "./TownTopBar.js";
+import { PixiStage } from "./PixiStage.js";
 
 export function Town() {
   const { id } = useParams<{ id: string }>();
@@ -13,10 +14,16 @@ export function Town() {
       }}
     >
       <TownTopBar startupId={id} />
-      <main
-        style={{ flex: 1, padding: 24, color: "var(--fg-secondary)" }}
-      >
-        Pixi canvas lands in M4.9.
+      <main style={{ flex: 1, padding: 24, background: "var(--bg)" }}>
+        <PixiStage
+          startupId={id}
+          onAvatarClick={(agentId) => {
+            // M4.11 wires the agent popover; for now we just log so the click
+            // wire-through is observable in dev.
+            // eslint-disable-next-line no-console
+            console.log("[town] avatar clicked:", agentId);
+          }}
+        />
       </main>
     </div>
   );
