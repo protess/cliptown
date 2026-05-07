@@ -191,11 +191,46 @@ async fn dispatched_task_pushes_task_assigned_to_out_bus() {
     let msg = rx
         .try_recv()
         .expect("task_assigned should have been pushed to out_bus");
-    assert_eq!(msg["type"], "task_assigned");
-    assert_eq!(msg["v"], 1);
-    assert_eq!(msg["task_id"], "T1");
-    // required_room is null/None on this task.
-    assert!(msg["required_room"].is_null());
+    // Round-trip via the protocol type — this is the contract a real worker uses.
+    let parsed: cliptown_world::protocol::WorkerOutbound =
+        serde_json::from_value(msg).expect("payload must deserialize as WorkerOutbound");
+    match parsed {
+        cliptown_world::protocol::WorkerOutbound::TaskAssigned {
+            v,
+            task_id,
+            title,
+            description,
+            required_room,
+            parent_id,
+        } => {
+            assert_eq!(v, 1);
+            assert_eq!(task_id, "T1");
+            assert_eq!(title, "task");
+            assert_eq!(description, "desc");
+            assert!(required_room.is_none());
+            assert!(parent_id.is_none());
+        }
+        other => panic!("expected TaskAssigned, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn dispatched_task_writes_audit_trail() {
+    let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;
+    sqlx::query(
+        "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, created_at, updated_at) \
+         VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', unixepoch(), unixepoch())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let _ = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let row: (String,) = sqlx::query_as("SELECT audit_trail FROM tasks WHERE id='T1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(row.0.contains("task_assigned"));
+    assert!(row.0.contains("scheduler"));
 }
 
 #[tokio::test]

@@ -16,6 +16,7 @@
 
 use crate::move_sys::{self, PathStore};
 use crate::path::RoomGraph;
+use crate::protocol::WorkerOutbound;
 use crate::seed::TownLayout;
 use crate::state::WorldView;
 use serde_json::json;
@@ -26,8 +27,11 @@ use tokio::sync::mpsc;
 #[derive(Debug, sqlx::FromRow)]
 struct QueuedTask {
     id: String,
+    title: String,
+    description: String,
     assignee_agent_id: String,
     required_room: Option<String>,
+    parent_id: Option<String>,
 }
 
 /// Run one scheduler tick. Returns the number of tasks dispatched
@@ -41,7 +45,7 @@ pub async fn tick(
     pool: &SqlitePool,
 ) -> usize {
     let queued: Vec<QueuedTask> = match sqlx::query_as(
-        "SELECT id, assignee_agent_id, required_room FROM tasks \
+        "SELECT id, title, description, assignee_agent_id, required_room, parent_id FROM tasks \
          WHERE status = 'queued' AND assignee_agent_id IS NOT NULL",
     )
     .fetch_all(pool)
@@ -101,14 +105,34 @@ pub async fn tick(
             a.status = "working".to_string();
         }
 
-        if let Some(tx) = out_bus.get(&agent_id) {
-            let payload = json!({
-                "type": "task_assigned",
-                "v": 1,
-                "task_id": task.id,
+        // Record the dispatch in the task's audit_trail. Spec §3 lists
+        // `task_assigned` as an audit event used by the /console event feed
+        // and post-mortem replay.
+        let _ = crate::persist::append_audit(
+            pool,
+            &task.id,
+            &json!({
+                "actor": "scheduler",
+                "kind": "task_assigned",
+                "agent_id": agent_id,
                 "required_room": task.required_room,
-            });
-            if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx.try_send(payload) {
+            })
+            .to_string(),
+        )
+        .await;
+
+        if let Some(tx) = out_bus.get(&agent_id) {
+            let payload = WorkerOutbound::TaskAssigned {
+                v: 1,
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                description: task.description.clone(),
+                required_room: task.required_room.clone(),
+                parent_id: task.parent_id.clone(),
+            };
+            let payload_json = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
+            if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx.try_send(payload_json)
+            {
                 tracing::warn!(agent_id = %agent_id, "out_bus full, dropping task_assigned");
             }
         }
