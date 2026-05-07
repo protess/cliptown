@@ -1,5 +1,9 @@
 use axum::body::to_bytes;
-use cliptown_world::{http, loop_, state::WorldView, storage};
+use cliptown_world::{
+    agent_supervisor::{AgentSupervisor, SupervisorConfig},
+    http, loop_, state::WorldView, storage,
+};
+use std::sync::Arc;
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -8,7 +12,8 @@ async fn health_returns_ok_json() {
     let pool = storage::open(dir.path().join("test.db").to_str().unwrap()).await.unwrap();
     let handle = loop_::spawn(WorldView::default(), pool.clone());
     let catalog = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
-    let app = http::router(http::AppState { pool, handle, catalog });
+    let supervisor = Arc::new(AgentSupervisor::new(SupervisorConfig::default(), pool.clone()));
+    let app = http::router(http::AppState { pool, handle, catalog, supervisor });
     let req = axum::http::Request::builder().uri("/health").body(axum::body::Body::empty()).unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 200);

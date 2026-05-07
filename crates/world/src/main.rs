@@ -1,5 +1,10 @@
 use anyhow::Result;
-use cliptown_world::{backend_catalog, config, http, loop_, seed, state::WorldView, storage};
+use cliptown_world::{
+    agent_supervisor::{AgentSupervisor, SupervisorConfig},
+    backend_catalog, config, http, loop_, seed,
+    state::WorldView, storage,
+};
+use std::sync::Arc;
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
@@ -82,7 +87,8 @@ async fn main() -> Result<()> {
         });
     }
 
-    let app = http::router(http::AppState { pool, handle, catalog });
+    let supervisor = Arc::new(AgentSupervisor::new(SupervisorConfig::default(), pool.clone()));
+    let app = http::router(http::AppState { pool, handle, catalog, supervisor });
     let addr = std::env::var("CLIPTOWN_ADDR").unwrap_or_else(|_| "127.0.0.1:0".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let bound = listener.local_addr()?;

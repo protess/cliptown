@@ -1,5 +1,9 @@
-use cliptown_world::{http, loop_, state::WorldView, storage};
+use cliptown_world::{
+    agent_supervisor::{AgentSupervisor, SupervisorConfig},
+    http, loop_, state::WorldView, storage,
+};
 use futures_util::{SinkExt, StreamExt};
+use std::sync::Arc;
 use tokio_tungstenite::tungstenite::Message;
 
 async fn boot() -> std::net::SocketAddr {
@@ -12,7 +16,8 @@ async fn boot() -> std::net::SocketAddr {
     sqlx::query("INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status) VALUES ('a1', 's', 'A1', 'founder', 'claude_code', 'claude-3-5-sonnet', '{}', 'r', 'idle')").execute(&pool).await.unwrap();
     let handle = loop_::spawn(WorldView::default(), pool.clone());
     let catalog = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
-    let app = http::router(http::AppState { pool, handle, catalog });
+    let supervisor = Arc::new(AgentSupervisor::new(SupervisorConfig::default(), pool.clone()));
+    let app = http::router(http::AppState { pool, handle, catalog, supervisor });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

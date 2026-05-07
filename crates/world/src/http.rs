@@ -10,6 +10,7 @@ use serde_json::json;
 use std::sync::Arc;
 use sqlx::SqlitePool;
 use tokio::sync::{mpsc, oneshot};
+use crate::agent_supervisor::AgentSupervisor;
 use crate::loop_::{Cmd, Handle};
 
 #[derive(Clone)]
@@ -17,6 +18,7 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub handle: Handle,
     pub catalog: Arc<tokio::sync::RwLock<std::collections::HashMap<String, serde_json::Value>>>,
+    pub supervisor: Arc<AgentSupervisor>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -24,6 +26,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(|| async { Json(json!({"ok": true})) }))
         .route("/api/backend-catalog", get(api_catalog))
         .route("/api/backend-catalog/recheck", post(api_recheck))
+        .route("/api/startups", post(crate::api_startups::create_startup))
         .route("/api/startups/:id", patch(patch_startup))
         .route("/ws/console", get(ws_console))
         .route("/ws/worker", get(ws_worker))
