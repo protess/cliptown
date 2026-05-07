@@ -10,7 +10,7 @@ async fn boot() -> std::net::SocketAddr {
     sqlx::query("INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) VALUES ('s', 'S', 'g', 1.0, 't', '/tmp/s', 'active', 0)").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO rooms (id, town_id, name, type, bounds) VALUES ('r', 't', 'R', 'office', '{}')").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status) VALUES ('a1', 's', 'A1', 'founder', 'claude_code', 'claude-3-5-sonnet', '{}', 'r', 'idle')").execute(&pool).await.unwrap();
-    let handle = loop_::spawn(WorldView::default());
+    let handle = loop_::spawn(WorldView::default(), pool.clone());
     let catalog = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
     let app = http::router(http::AppState { pool, handle, catalog });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

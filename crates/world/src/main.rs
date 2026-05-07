@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
     seed::seed_if_empty(&pool).await?;
     tracing::info!(component = "world", event = "town_seeded", town_id = "town_default");
 
-    let handle = loop_::spawn(WorldView::default());
+    let handle = loop_::spawn(WorldView::default(), pool.clone());
     tracing::info!(component = "world", event = "loop_started");
 
     // Boot probe — populate catalog before serving traffic
