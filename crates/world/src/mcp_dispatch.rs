@@ -30,6 +30,10 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+/// Phase 0 hard cap on review rounds before the world auto-escalates.
+/// M9 hardening should move this to `cliptown.toml [supervisor] max_review_rounds`.
+const MAX_REVIEW_ROUNDS: u32 = 3;
+
 type HandlerResult = Result<Value, (String, String)>;
 
 pub async fn dispatch(
@@ -676,6 +680,56 @@ async fn handle_task_request_changes(
             "task_request_changes is manager-only".into(),
         ));
     }
+
+    // Phase 0 max-rounds enforcement (spec §6.3 / M5.6): once the task has
+    // already cycled through `MAX_REVIEW_ROUNDS` rounds of changes, the world
+    // refuses to bounce it back yet again and instead auto-escalates. Routed
+    // through `task_sm::next(Escalate)` so the SM stays the single source of
+    // truth on legal transitions.
+    if task.review_round >= MAX_REVIEW_ROUNDS {
+        let escalated = next(task.status, &Transition::Escalate)
+            .map_err(|r| ("illegal_transition".to_string(), r.to_string()))?;
+        sqlx::query("UPDATE tasks SET status = ?, updated_at = unixepoch() WHERE id = ?")
+            .bind(status_to_str(escalated))
+            .bind(&task_id)
+            .execute(pool)
+            .await
+            .map_err(|e| ("sql".to_string(), e.to_string()))?;
+        let _ = persist::append_audit(
+            pool,
+            &task_id,
+            &json!({
+                "actor": "system",
+                "kind": "escalated",
+                "reason": "max_review_rounds_exceeded",
+                "at_round": task.review_round,
+                "triggered_by": caller.agent_id,
+            })
+            .to_string(),
+        )
+        .await;
+        let _ = persist::record_system_event(
+            pool,
+            Some(&caller.startup_id),
+            "task_escalated",
+            &json!({
+                "task_id": task_id,
+                "rounds": task.review_round,
+                "feedback": feedback,
+            })
+            .to_string(),
+            "alert",
+        )
+        .await;
+        return Ok(json!({
+            "task_id": task_id,
+            "new_status": status_to_str(escalated),
+            "status": status_to_str(escalated),
+            "review_round": task.review_round,
+            "reason": "max_review_rounds_exceeded",
+        }));
+    }
+
     let new_status = next(task.status, &Transition::RequestChanges)
         .map_err(|r| ("illegal_transition".to_string(), r.to_string()))?;
     sqlx::query(
