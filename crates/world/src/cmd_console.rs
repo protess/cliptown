@@ -7,14 +7,21 @@ use crate::state::{AvatarView, WorldView};
 use crate::task_sm::{next, Actor, TaskStatus, Transition};
 use serde_json::json;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
+use tokio::sync::mpsc;
 
 const OPERATOR_AVATAR_ID: &str = "__operator__";
 
 /// Dispatch a single console message. Mutates `world` and writes to `pool`.
 /// Returns a JSON value that becomes the WS reply.
+///
+/// `out_bus` is the world's per-agent worker outbound channel map; the
+/// OperatorDirective arm pushes a `directive` event to the recipient so the
+/// founder's CLI sees the directive on its next session boot (M5.3).
 pub async fn dispatch(
     world: &mut WorldView,
     pool: &SqlitePool,
+    out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
     msg: serde_json::Value,
 ) -> serde_json::Value {
     let inbound: ConsoleInbound = match serde_json::from_value(msg.clone()) {
@@ -58,7 +65,9 @@ pub async fn dispatch(
             json!({"type":"ok","kind":"operator_unpossess"})
         }
         ConsoleInbound::OperatorDirective { to_agent_id, body, .. } => {
-            // Insert a directive message in SQLite. M1.13+ will route it to the worker.
+            // Insert a directive message in SQLite, then push the directive
+            // to the recipient's worker out_bus so the founder's CLI sees it
+            // on the next session boot (M5.3 chain step 1).
             let id = uuid::Uuid::new_v4().to_string();
             let r = sqlx::query(
                 "INSERT INTO messages (id, startup_id, room_id, author_id, body, kind, ts) \
@@ -70,7 +79,30 @@ pub async fn dispatch(
             .execute(pool)
             .await;
             match r {
-                Ok(_) => json!({"type":"ok","kind":"operator_directive","message_id":id}),
+                Ok(_) => {
+                    // Mirror the MCP `speak` directive shape (mcp_dispatch.rs)
+                    // and the WorkerOutbound::Directive protocol type:
+                    // `from_agent_id` distinguishes operator-sourced directives
+                    // (sentinel id "operator") from peer-sourced directives.
+                    if let Some(tx) = out_bus.get(&to_agent_id) {
+                        let payload = json!({
+                            "type": "directive",
+                            "v": 1,
+                            "from_agent_id": "operator",
+                            "body": body,
+                            "message_id": id,
+                        });
+                        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
+                            tx.try_send(payload)
+                        {
+                            tracing::warn!(
+                                agent_id = %to_agent_id,
+                                "out_bus full, dropping operator directive"
+                            );
+                        }
+                    }
+                    json!({"type":"ok","kind":"operator_directive","message_id":id})
+                }
                 Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
             }
         }

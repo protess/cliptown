@@ -82,7 +82,7 @@ pub fn spawn_with_layout(
                     let _ = view_tx.send(w.clone());
                 }
                 Cmd::HandleConsoleMsg { msg, reply } => {
-                    let result = crate::cmd_console::dispatch(&mut w, &pool, msg).await;
+                    let result = crate::cmd_console::dispatch(&mut w, &pool, &out_bus, msg).await;
                     let _ = view_tx.send(w.clone());
                     let _ = reply.send(result);
                 }

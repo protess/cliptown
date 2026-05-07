@@ -1,5 +1,7 @@
 use cliptown_world::{cmd_console, seed, state::WorldView, storage};
-use serde_json::json;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use tokio::sync::mpsc;
 
 async fn fresh() -> (WorldView, sqlx::SqlitePool) {
     let dir = tempfile::tempdir().unwrap();
@@ -8,6 +10,11 @@ async fn fresh() -> (WorldView, sqlx::SqlitePool) {
     seed::seed_if_empty(&pool).await.unwrap();
     std::mem::forget(dir);
     (WorldView::default(), pool)
+}
+
+/// Empty out_bus for tests that don't care about worker outbound delivery.
+fn empty_bus() -> HashMap<String, mpsc::Sender<Value>> {
+    HashMap::new()
 }
 
 async fn insert_startup_agent_task(pool: &sqlx::SqlitePool, task_status: &str) {
@@ -28,7 +35,8 @@ async fn insert_startup_agent_task(pool: &sqlx::SqlitePool, task_status: &str) {
 #[tokio::test]
 async fn possess_inserts_operator_avatar() {
     let (mut w, pool) = fresh().await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_possess","v":1,"startup_id":"s1"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -38,10 +46,11 @@ async fn possess_inserts_operator_avatar() {
 #[tokio::test]
 async fn unpossess_removes_operator_avatar() {
     let (mut w, pool) = fresh().await;
-    cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_possess","v":1,"startup_id":"s1"
     })).await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_unpossess","v":1
     })).await;
     assert_eq!(r["type"], "ok");
@@ -51,7 +60,8 @@ async fn unpossess_removes_operator_avatar() {
 #[tokio::test]
 async fn move_without_possess_errors() {
     let (mut w, pool) = fresh().await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_move","v":1,"target_x":5,"target_y":3
     })).await;
     assert_eq!(r["type"], "error");
@@ -62,7 +72,8 @@ async fn move_without_possess_errors() {
 async fn directive_inserts_message_row() {
     let (mut w, pool) = fresh().await;
     insert_startup_agent_task(&pool, "queued").await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_directive","v":1,"to_agent_id":"a1","body":"hi"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -75,7 +86,8 @@ async fn directive_inserts_message_row() {
 async fn accept_proposal_transitions_to_queued() {
     let (mut w, pool) = fresh().await;
     insert_startup_agent_task(&pool, "proposed").await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_accept_proposal","v":1,"task_id":"T1","assignee_agent_id":"a1"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -88,7 +100,8 @@ async fn accept_proposal_transitions_to_queued() {
 async fn reject_proposal_transitions_to_failed() {
     let (mut w, pool) = fresh().await;
     insert_startup_agent_task(&pool, "proposed").await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_reject_proposal","v":1,"task_id":"T1","reason":"bad scope"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -101,7 +114,8 @@ async fn reject_proposal_transitions_to_failed() {
 async fn force_accept_only_from_awaiting_review() {
     let (mut w, pool) = fresh().await;
     insert_startup_agent_task(&pool, "in_progress").await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_force_accept","v":1,"task_id":"T1"
     })).await;
     assert_eq!(r["type"], "error");
@@ -112,7 +126,8 @@ async fn force_accept_only_from_awaiting_review() {
 async fn force_accept_succeeds_from_awaiting_review() {
     let (mut w, pool) = fresh().await;
     insert_startup_agent_task(&pool, "awaiting_review").await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_force_accept","v":1,"task_id":"T1"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -125,7 +140,8 @@ async fn force_accept_succeeds_from_awaiting_review() {
 async fn force_fail_with_note_writes_audit() {
     let (mut w, pool) = fresh().await;
     insert_startup_agent_task(&pool, "queued").await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"operator_force_fail","v":1,"task_id":"T1","note":"abandoned"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -139,7 +155,8 @@ async fn force_fail_with_note_writes_audit() {
 #[tokio::test]
 async fn parse_error_returns_error_reply() {
     let (mut w, pool) = fresh().await;
-    let r = cmd_console::dispatch(&mut w, &pool, json!({
+    let bus = empty_bus();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, json!({
         "type":"unknown_op","v":1
     })).await;
     assert_eq!(r["type"], "error");
