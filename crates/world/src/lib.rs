@@ -6,6 +6,7 @@ pub mod http;
 pub mod loop_;
 pub mod path;
 pub mod permissions;
+pub mod persist;
 pub mod protocol;
 pub mod sandbox;
 pub mod seed;
