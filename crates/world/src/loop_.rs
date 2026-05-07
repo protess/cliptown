@@ -75,6 +75,10 @@ pub fn spawn_with_layout(
                             }
                         }
                     }
+                    let _ = crate::scheduler::tick(
+                        &mut w, &mut paths, &layout, &graph, &out_bus, &pool,
+                    )
+                    .await;
                     let _ = view_tx.send(w.clone());
                 }
                 Cmd::HandleConsoleMsg { msg, reply } => {

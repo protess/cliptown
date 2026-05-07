@@ -12,6 +12,7 @@ pub mod permissions;
 pub mod persist;
 pub mod protocol;
 pub mod sandbox;
+pub mod scheduler;
 pub mod seed;
 pub mod state;
 pub mod storage;

@@ -1,0 +1,129 @@
+//! Task scheduler. Runs once per `Cmd::Tick` (1Hz).
+//!
+//! Picks queued tasks whose assignee is idle, transitions them to `in_progress`,
+//! and dispatches `task_assigned` to the assignee's worker via `out_bus`. If the
+//! task has a `required_room` and the agent isn't in it, the scheduler kicks
+//! off a move toward that room (via `move_sys::start_move`) and leaves the
+//! task in `queued` state — a subsequent tick (after arrival) will dispatch.
+//!
+//! Phase-0 design notes:
+//! - Stateless: re-queries SQL each tick; no in-memory dedup. The fact that an
+//!   agent's status flips to `working` after dispatch keeps re-dispatch from
+//!   firing twice in the same lifecycle.
+//! - Out-of-band: this runs after `move_sys::step_all` in the tick handler,
+//!   so a `move_complete` from this tick is already reflected in `room_id`
+//!   before the scheduler checks `required_room`.
+
+use crate::move_sys::{self, PathStore};
+use crate::path::RoomGraph;
+use crate::seed::TownLayout;
+use crate::state::WorldView;
+use serde_json::json;
+use sqlx::SqlitePool;
+use std::collections::HashMap;
+use tokio::sync::mpsc;
+
+#[derive(Debug, sqlx::FromRow)]
+struct QueuedTask {
+    id: String,
+    assignee_agent_id: String,
+    required_room: Option<String>,
+}
+
+/// Run one scheduler tick. Returns the number of tasks dispatched
+/// (transitioned to `in_progress` and pushed to the worker out_bus).
+pub async fn tick(
+    world: &mut WorldView,
+    paths: &mut PathStore,
+    layout: &TownLayout,
+    graph: &RoomGraph,
+    out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
+    pool: &SqlitePool,
+) -> usize {
+    let queued: Vec<QueuedTask> = match sqlx::query_as(
+        "SELECT id, assignee_agent_id, required_room FROM tasks \
+         WHERE status = 'queued' AND assignee_agent_id IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "scheduler: query failed");
+            return 0;
+        }
+    };
+
+    let mut dispatched = 0usize;
+    for task in queued {
+        let agent_id = task.assignee_agent_id.clone();
+
+        // Snapshot the avatar's status/room before any mutation.
+        let (avatar_status, avatar_room) = match world.avatars.get(&agent_id) {
+            Some(a) => (a.status.clone(), a.room_id.clone()),
+            None => continue, // agent not yet connected; retry next tick.
+        };
+
+        if avatar_status != "idle" {
+            continue; // agent is busy; wait until it finishes its current work.
+        }
+
+        // If a required_room is set and the agent is not in it, kick off a
+        // move toward that room. Skip dispatch this tick; a future tick (post
+        // arrival, where status returns to idle) will retry.
+        if let Some(room) = task.required_room.as_deref() {
+            if avatar_room != room {
+                if let Some((cx, cy)) = pick_room_center(layout, room) {
+                    let _ = move_sys::start_move(
+                        world, paths, layout, graph, &agent_id, room, cx, cy,
+                    );
+                }
+                continue;
+            }
+        }
+
+        // Agent is idle and (if required) already in the right room.
+        // Transition the task and notify the worker.
+        let r = sqlx::query(
+            "UPDATE tasks SET status = 'in_progress', updated_at = unixepoch() WHERE id = ?",
+        )
+        .bind(&task.id)
+        .execute(pool)
+        .await;
+        if let Err(e) = r {
+            tracing::warn!(task_id = %task.id, error = %e, "scheduler: status update failed");
+            continue;
+        }
+
+        // Mark the avatar busy in-memory; the worker will report further
+        // status changes (e.g. back to idle on completion).
+        if let Some(a) = world.avatars.get_mut(&agent_id) {
+            a.status = "working".to_string();
+        }
+
+        if let Some(tx) = out_bus.get(&agent_id) {
+            let payload = json!({
+                "type": "task_assigned",
+                "v": 1,
+                "task_id": task.id,
+                "required_room": task.required_room,
+            });
+            if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx.try_send(payload) {
+                tracing::warn!(agent_id = %agent_id, "out_bus full, dropping task_assigned");
+            }
+        }
+        dispatched += 1;
+    }
+    dispatched
+}
+
+/// Returns the center tile of `room_id`'s bounds, or `None` if the room
+/// doesn't exist in the layout. Used as a movement target when a task has
+/// a `required_room` and the agent must move there.
+fn pick_room_center(layout: &TownLayout, room_id: &str) -> Option<(i32, i32)> {
+    layout.room(room_id).map(|r| {
+        let cx = r.bounds.0 + r.bounds.2 / 2;
+        let cy = r.bounds.1 + r.bounds.3 / 2;
+        (cx, cy)
+    })
+}
