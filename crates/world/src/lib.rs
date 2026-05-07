@@ -5,6 +5,7 @@ pub mod det;
 pub mod http;
 pub mod loop_;
 pub mod path;
+pub mod permissions;
 pub mod protocol;
 pub mod seed;
 pub mod state;
