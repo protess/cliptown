@@ -14,9 +14,14 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 ts-rs.workspace = true
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+uuid = { version = "1", features = ["v4"] }
 
 [build-dependencies]
 ts-rs.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
 
 [lib]
 path = "src/lib.rs"
