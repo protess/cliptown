@@ -17,19 +17,19 @@ The product *cliptown* is inspired by paperclip (AI company orchestration) and G
 
 ### In scope
 
-- Single building (one town instance, hardcoded JSON map)
-- 2 startups running concurrently, each in a private suite
-- 4 agents total (per startup: founder + one direct report)
-- 1 backend adapter: **Claude Code CLI**
+- Single building (one town instance, hardcoded JSON map with M fixed suite slots; Phase 0 uses M = 4)
+- **Multiple concurrent startups** — multi-tenancy is a first-class concern from day 0; CI exercises at least 3 startups
+- Per startup: a founder agent + one direct report (so total agents = 2 × number of active startups)
+- **Two backend adapters**: **Claude Code CLI** and **Codex CLI**, with per-agent backend selection
 - Hybrid spatial model: org graph for directives, proximity for chat
 - Operator: god view + "possess" into any town as avatar
 - Real artifacts: agents write Markdown into a per-startup sandbox dir
 - 4-level iteration discipline (epistemic / agentic / review / serendipity)
-- 8 ship-gate invariants pass
+- 9 ship-gate invariants pass
 
 ### Out of scope (deferred to later phases)
 
-- Additional adapters (opencode, Codex CLI, local-LLM-via-opencode) → Phase 1
+- Additional adapters (opencode, local-LLM-via-opencode endpoint) → Phase 1
 - External integrations (GitHub repo, email, Slack) → Phase 2
 - Map editor, multi-building, sprite art → Phase 3
 - Docker per-startup, TLS, observability → Phase 4
@@ -80,18 +80,19 @@ One Node process per agent. Spawned and killed by the world. Its job is **infras
 
 Responsibilities:
 - WS connect to world; handle `hello`, `world_state`, `task_assigned`, `directive`, `proximity_tick`, `chat_received`, `pause`, `shutdown`.
-- Spawn the chosen CLI (Claude Code CLI in Phase 0) as a child process with:
+- Determine the CLI to spawn from the agent's `backend` field and dispatch through the corresponding **backend adapter** (§3.4). Adapters configure:
   - `cwd` = `<repo>/workspaces/<startup_id>/`
-  - Restricted env (only `ANTHROPIC_API_KEY` and an `MCP_WORLD_URL` pointing at the per-agent MCP socket)
-  - Network egress allowlist (Anthropic endpoint only)
-  - `allowedTools` config blocking `Bash` for Phase 0
+  - Restricted env (the LLM provider key for that backend and an `MCP_WORLD_URL` pointing at the per-agent MCP socket)
+  - Network egress allowlist (the backend's LLM endpoint only)
+  - Tool restrictions blocking shell execution for Phase 0
   - Initial prompt = system prompt (agent identity, role, current task or directive) + reference to MCP tools
-- Wire **Claude Code hooks**:
-  - `PreToolUse` → sandbox policy enforcement (deny path-escape, deny `Bash`, deny non-allowlisted tools), audit log entry, and budget gate (deny LLM-using tools when the startup's budget is at 100 % of cap)
-  - `PostToolUse` → audit log, `report_fs_op` to world for write-class tools
-  - `Stop` → final state collection; **block-and-feedback** if the task is non-trivial (any task whose `description` exceeds N tokens, configurable) and zero hypotheses are recorded
-- Translate CLI lifecycle → world IPC: `task_progress`, `task_done`, `task_failed`, `report_budget`.
-- Inject mid-conversation context when async events arrive (`proximity_tick`, `chat_received`) — Claude Code accepts user-message append mid-session.
+- Wire **normalized hook events** through the adapter (the adapter maps each CLI's native hook surface to a common event vocabulary):
+  - `pre_tool` → sandbox policy enforcement (deny path-escape, deny shell, deny non-allowlisted tools), audit log entry, and budget gate (deny LLM-using tools when the startup's budget is at 100 % of cap)
+  - `post_tool` → audit log, `report_fs_op` to world for write-class tools
+  - `session_stop` → final state collection; **block-and-feedback** if the task is non-trivial (any task whose `description` exceeds N tokens, configurable) and zero hypotheses are recorded — adapters that cannot block at session-stop fall back to post-hoc rejection (the world refuses `task_done` and re-emits `directive` with the same feedback)
+  - `session_error` → escalate as `cli_session_ended { exit_code }` plus a `system_events` row
+- Translate CLI lifecycle → world IPC: `cli_session_started`, `cli_session_ended`, `task_progress`, `report_budget`, `report_fs_op`.
+- Inject mid-conversation context when async events arrive (`proximity_tick`, `chat_received`) — adapters expose a `inject_context` capability where supported; otherwise the worker queues the message for the next CLI session.
 
 The worker has no LLM loop of its own. The CLI does. The worker is a supervisor + bridge.
 
@@ -101,6 +102,53 @@ Vite + React + Pixi.js, single SPA, single WS channel.
 
 - `/console` — Founder Console (god view): list of startups, KPIs, create/configure, navigate into a town.
 - `/town/:startupId` — Pixi canvas + chat panel + "Possess" toggle. When possessed, the operator avatar enters the town with `kind: 'operator'` and movement is driven by client clicks.
+
+### 3.4 Backend adapters
+
+Each backend (Claude Code CLI in Phase 0; also Codex CLI in Phase 0) is wrapped by an adapter that exposes a uniform interface to the worker. Adapters live inside the worker process.
+
+**Adapter interface (TypeScript, conceptual):**
+
+```ts
+interface BackendAdapter {
+  readonly id: 'claude_code' | 'codex'
+  readonly capabilities: {
+    hooks: ('pre_tool' | 'post_tool' | 'session_stop' | 'session_error')[]
+    inject_context: boolean   // can a running session receive a new user message?
+    block_on_stop: boolean    // can session_stop hook return a blocking feedback to the model?
+  }
+  spawn(opts: SpawnOpts): Promise<SessionHandle>
+}
+
+interface SpawnOpts {
+  cwd: string                 // sandbox dir
+  env: Record<string, string> // LLM provider key + MCP_WORLD_URL only
+  prompt: string              // system + task framing
+  mcp_url: string             // stdio MCP endpoint exposed by the worker
+  allowed_tools_policy: ToolPolicy
+  hook_handlers: HookHandlers // worker callbacks for normalized events
+  network_egress_allowlist: string[]
+}
+```
+
+**Phase 0 adapters and their capability differences:**
+
+| Capability | Claude Code adapter | Codex CLI adapter |
+|---|---|---|
+| `pre_tool` hook | Native | Best-effort (event subscription) |
+| `post_tool` hook | Native | Best-effort |
+| `session_stop` hook | Native, **blocking feedback supported** | Native, **non-blocking** — fallback to post-hoc rejection |
+| `inject_context` mid-session | Yes | Limited — uses a queued context handoff between sessions |
+
+The worker code paths above never branch on the backend identity; everything goes through the adapter. Branching, where unavoidable, lives inside each adapter implementation.
+
+**Adapter responsibilities:**
+
+1. Translate the `SpawnOpts` into the CLI's command-line flags, config files, and stdin prompt format.
+2. Connect the CLI to the per-agent MCP server at `mcp_url` so the domain tools in §6.2 are available natively.
+3. Subscribe to the CLI's native event surface (hooks, tool-call notifications, exit) and emit normalized hook events upstream.
+4. Enforce the `allowed_tools_policy` (deny shell, deny non-allowlisted) at the strongest layer the CLI offers; defense-in-depth via the worker's MCP-side checks otherwise.
+5. Surface session lifecycle so the worker can reliably emit `cli_session_started` / `cli_session_ended`.
 
 ## 4. Data model
 
@@ -112,7 +160,7 @@ SQLite tables (Phase 0). Every domain row outside `towns` and `rooms` is multi-t
 | `rooms` | `id, town_id, name, type, bounds, private_to_startup_id?` | `private_to_startup_id` null = common, set = suite |
 | `room_doors` | `id, town_id, room_a, room_b, tile_x, tile_y` | A* connectivity |
 | `startups` | `id, name, goal_text, budget_cap_usd, budget_spent_usd, town_id, workspace_path, status` | Tenant root |
-| `agents` | `id, startup_id, name, role, backend, model_id, position_json, home_room_id, manager_id?, status` | `manager_id` self-FK; `backend` enum (`claude_code` only in Phase 0) |
+| `agents` | `id, startup_id, name, role, backend, model_id, position_json, home_room_id, manager_id?, status` | `manager_id` self-FK; `backend` enum is `claude_code` or `codex` in Phase 0 |
 | `tasks` | `id, startup_id, parent_id?, title, description, assignee_agent_id, required_room?, status, review_round, audit_trail jsonb, epistemic_log jsonb, artifact_path?` | See task state machine below |
 | `messages` | `id, startup_id, room_id?, author_id, body, kind, ts` | `room_id` null for org-graph directives |
 | `budget_events` | `id, startup_id, agent_id, task_id?, in_tokens, out_tokens, cost_usd, model_id, ts` | Append-only |
@@ -127,17 +175,16 @@ SQLite tables (Phase 0). Every domain row outside `towns` and `rooms` is multi-t
 
 ### 5.1 Map (hardcoded JSON)
 
-Five rooms in `town_default` (40 × 24 tiles, 1 tile = 32 px):
+The building has **M fixed private suite slots** plus three common rooms. Phase 0 uses M = 4. A startup claims a free suite at creation; if all M are claimed, startup creation is refused (`max_active_startups_reached`). Dissolving a startup releases its suite back to the pool.
 
-| Room | Type | `private_to_startup_id` | Purpose |
-|---|---|---|---|
-| Suite A | office | startup_α | Startup α private suite |
-| Suite B | office | startup_β | Startup β private suite |
-| Lobby | transit | null | Building spine; spawn point for operator possession |
-| Cafe | social | null | Cross-startup proximity zone (serendipity primary site) |
-| Library | focus | null | `required_room` for research-class tasks |
+| Room kind | Count (Phase 0) | Type | `private_to_startup_id` | Purpose |
+|---|---|---|---|---|
+| Suite slot | M = 4 | office | set when claimed, null when free | Per-startup private working area |
+| Lobby | 1 | transit | null | Building spine; spawn point for operator possession |
+| Cafe | 1 | social | null | Cross-startup proximity zone (serendipity primary site) |
+| Library | 1 | focus | null | `required_room` for research-class tasks |
 
-Doors connect each suite to the Lobby and the Lobby to Cafe and Library. No suite-to-suite door (intentional).
+Total rooms in Phase 0 = M + 3 = 7. The map JSON is hardcoded — adding more suite slots in the future requires editing the map (or, in Phase 3, using the in-app editor). Doors connect each suite to the Lobby and the Lobby to the Cafe and the Library. No suite-to-suite doors (intentional).
 
 ### 5.2 Movement and pathfinding
 
@@ -151,13 +198,13 @@ Doors connect each suite to the Lobby and the Lobby to Cafe and Library. No suit
 
 ### 5.3 Permission model
 
-| Subject | Suite A | Suite B | Lobby / Cafe / Library |
-|---|:-:|:-:|:-:|
-| α agent | ✓ | ✗ | ✓ |
-| β agent | ✗ | ✓ | ✓ |
-| Operator (possessing) | ✓ | ✓ | ✓ |
+For any agent A and any room R:
 
-Violations from a worker's `move_intent` → world responds `move_failed { reason: "no_permission" }` and emits an audit event.
+- A may enter R when `R.private_to_startup_id` is null (common room) or equals `A.startup_id` (own suite).
+- A may **never** enter a suite owned by a different startup.
+- The operator avatar (`kind = 'operator'`) may enter any room — they own the building.
+
+Worker `move_intent` violations → world responds `move_failed { reason: "no_permission" }` and emits an audit event with `severity = alert`. The same predicate gates message routing: `chat` is delivered only to avatars currently inside the room of utterance, and `directive` is gated by the org-graph rule (manager → direct report) which is intra-startup by construction.
 
 ### 5.4 Message channels (hybrid model)
 
@@ -224,11 +271,18 @@ Permission violations return MCP errors and emit audit events.
 
 ### 6.3 Sandbox model
 
-- **Filesystem**: CLI's native Read / Edit / Write tools operate inside `cwd`. Worker's PreToolUse hook rejects any path that resolves outside `cwd` after symlink resolution.
-- **Shell**: `Bash` tool is **denied** in Phase 0 via `allowedTools` config.
-- **Network**: process-level egress allowlist (Anthropic endpoint only). MCP loopback explicitly allowed.
-- **In-process verification**: the test methods listed below are implemented inside the worker (or invoked via MCP tools) without spawning shell.
-- **Audit**: every PreToolUse and PostToolUse fires an audit record. Any denial is also a `system_events` row at severity `warn` or `alert`.
+The sandbox **invariants** are uniform across backends; each adapter enforces them at the strongest layer its CLI offers, with the worker providing defense-in-depth at the MCP and OS layers.
+
+| Invariant | Enforcement layers (in order of preference) |
+|---|---|
+| **Filesystem stays within `cwd`** | Adapter restricts the CLI's native Read/Edit/Write to `cwd`; `pre_tool` hook rejects path-escape (post-symlink resolution); MCP `read_artifact` re-validates path |
+| **No shell execution** | Adapter blocks shell tools via tool allowlist; `pre_tool` hook denies any shell-class call; OS-level: child process not given a shell wrapper |
+| **Network egress allowlist** | Adapter env scoped to one LLM endpoint; OS-level egress restriction via the worker spawning the CLI under a network policy (when available); MCP loopback explicitly allowed |
+| **No secret leakage** | Adapter env contains only the LLM key for that backend and `MCP_WORLD_URL`; the operator's other credentials never reach the CLI |
+
+**In-process verification**: the test methods listed in §6.4 run inside the worker process (or via MCP tools) without spawning a shell, regardless of backend.
+
+**Audit**: every `pre_tool` and `post_tool` event from any adapter fires an audit record. Denials also write a `system_events` row at severity `warn` or `alert`. When a backend cannot deliver fine-grained tool events (e.g., a future adapter without `pre_tool` support), the world enforces equivalent invariants at the MCP boundary and the audit becomes coarser — this trade-off is documented per adapter in §3.4.
 
 ### 6.4 L0 epistemic test methods (no shell)
 
@@ -305,27 +359,28 @@ Design principle: **the world only dies when it dies; workers die freely**. All 
 - Default: deterministic LLM mock (no real API calls).
 - Real-LLM E2E only on `E2E_LLM=real` opt-in jobs, with a per-run budget cap (e.g. $0.50). Exceeding the cap fails the run.
 
-## 11. Ship gate — 8 invariants
+## 11. Ship gate — 9 invariants
 
-Phase 0 is complete when all eight pass simultaneously:
+Phase 0 is complete when all nine pass simultaneously:
 
-1. Two startups auto-spawn; four workers connect via WS; each worker spawns a Claude Code CLI session bound to its sandbox dir.
+1. **Multiple startups (≥ 3) auto-spawn**, each claiming a free suite slot; their workers connect via WS; each worker spawns the CLI determined by the agent's `backend` field (Claude Code CLI or Codex CLI) bound to its sandbox dir.
 2. Operator sends a `directive` to a startup's founder; the founder's CLI emits `subtask_create` (MCP) and the world routes a `task_assigned` to the direct report.
 3. A task with `required_room: library` causes the assignee's avatar to walk from its suite to the Library along the A* path.
 4. The assignee's CLI produces an artifact at exactly `workspaces/<startup_id>/artifacts/<task_id>.md` and emits `task_done` (MCP). World re-validates path before recording.
 5. The task's `epistemic_log` contains at least one hypothesis with `status = verified` and at least one passing `test_record`.
 6. Manager calls `task_request_changes`; world increments `review_round`; the assignee's next CLI session receives the feedback as a directive and re-submits a refined `task_done`.
-7. **Cross-startup serendipity**: when an α agent and a β agent are both in the Cafe within the same tick, a `proximity_tick` event reaches both workers; if either's CLI emits `speak { kind: "chat" }`, the message is delivered to the other's CLI as `chat_received`.
-8. **Multi-tenant isolation**: a `directive` sent inside Suite A is never delivered to any agent of startup β, regardless of timing or room transitions.
+7. **Cross-startup serendipity**: when agents from any two distinct startups are both in the Cafe within the same tick, a `proximity_tick` event reaches both workers; if either's CLI emits `speak { kind: "chat" }`, the message is delivered to the other's CLI as `chat_received`.
+8. **Multi-tenant isolation**: a `directive` sent inside one startup's suite is never delivered to any agent of any other startup, regardless of timing, room transitions, or backend type.
+9. **Both adapters exercised**: at least one Claude-Code-backed agent and at least one Codex-backed agent each independently complete a task end-to-end (`task_assigned` → `task_done` accepted by manager) within the same E2E run.
 
-(7) and (8) are the soul of cliptown. If either fails, the slice is not done.
+(7) and (8) are the soul of cliptown — they are the architectural claims about hybrid space and multi-tenancy. (9) is the soul of the adapter abstraction — without it, "Phase 0 supports two adapters" is unverified.
 
 ## 12. Phase roadmap
 
 | Phase | Theme | OOS items graduating in |
 |---|---|---|
 | 0 (this spec) | Walking skeleton | — |
-| 1 | Adapter expansion | opencode adapter (incl. local-OpenAI endpoint), Codex CLI adapter, per-agent backend selection |
+| 1 | Adapter expansion | opencode adapter (including local-OpenAI-compatible endpoint via opencode config) |
 | 2 | Real artifact integration | GitHub repo per startup, secrets vault, email and Slack outbound as MCP tools |
 | 3 | Map / multi-town | In-app map editor, multiple buildings, sprite art, idle wander |
 | 4 | Operations | Docker per startup, TLS / WSS, observability dashboards, automated backup |
@@ -335,11 +390,12 @@ Each phase gets its own design spec, plan, and implementation cycle.
 
 ## 13. Open questions / known unknowns
 
-- **MCP transport choice**: stdio per spawned CLI is the default; revisit if multiple CLI brands need a different transport.
-- **Hooks for non-Claude-Code adapters**: opencode and Codex CLI's hook surfaces differ. Phase 1 must define an adapter interface that abstracts hook capabilities.
-- **Operator directive injection mid-CLI-session**: Claude Code accepts mid-session user messages; verify behavior with hooks and confirm interleaving works in practice.
+- **MCP transport choice**: stdio per spawned CLI is the default; revisit if a future adapter needs a different transport.
+- **Codex CLI hook parity**: the adapter contract in §3.4 assumes the Codex CLI exposes `pre_tool` / `post_tool` / `session_stop` analogues. Verify the actual surface during the first implementation milestone and, if `session_stop` cannot block, confirm the post-hoc rejection fallback is acceptable in practice.
+- **Mid-session context injection per backend**: Claude Code accepts user-message append mid-session; the Codex adapter falls back to a queued handoff between sessions. Quantify how often this fallback fires for `chat_received` and `proximity_tick` events under realistic loads.
 - **`chat_received` injection latency**: how stale can context be before injection feels broken? Likely pick a small queue with last-write-wins.
 - **Artifact format beyond Markdown**: even in Phase 0, agents may produce JSON, code stubs, etc. Validate that `artifact_path` semantics generalize (or restrict to Markdown for the slice).
+- **Suite slot exhaustion behavior**: when all M slots are claimed, startup creation is refused. Decide whether the operator gets a queue, an explicit error, or whether dissolving an inactive startup auto-frees its slot.
 
 ## 14. Glossary
 
