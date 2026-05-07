@@ -7,6 +7,7 @@ pub mod loop_;
 pub mod path;
 pub mod permissions;
 pub mod protocol;
+pub mod sandbox;
 pub mod seed;
 pub mod state;
 pub mod storage;
