@@ -66,7 +66,9 @@ pub async fn dispatch(
     };
 
     let result: HandlerResult = match tool.as_str() {
-        "move_intent" => handle_move_intent(world, paths, layout, graph, &caller, args).await,
+        "move_intent" => {
+            handle_move_intent(world, paths, layout, graph, pool, &caller, args).await
+        }
         "speak" => handle_speak(world, out_bus, pool, &caller, args).await,
         "task_done" => handle_task_done(out_bus, pool, &caller, args).await,
         "task_failed" => handle_task_failed(pool, &caller, args).await,
@@ -237,6 +239,7 @@ async fn handle_move_intent(
     paths: &mut PathStore,
     layout: &TownLayout,
     graph: &RoomGraph,
+    pool: &SqlitePool,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
@@ -286,10 +289,29 @@ async fn handle_move_intent(
                 .unwrap_or(0),
         })),
         StartMoveResult::NoPath => Err(("no_path".into(), "no path to target".into())),
-        StartMoveResult::PermissionDenied => Err((
-            "no_permission".into(),
-            "cannot enter target room".into(),
-        )),
+        StartMoveResult::PermissionDenied => {
+            // M5.7: cross-startup room access is a permission violation. The
+            // mcp_error keeps the wire contract; the system_events alert row
+            // gives the operator console a durable audit trail of who tried
+            // to enter what so we can spot misbehaving agents over time.
+            let _ = persist::record_system_event(
+                pool,
+                Some(&caller.startup_id),
+                "permission_violation",
+                &json!({
+                    "agent_id": caller.agent_id,
+                    "kind": "move_intent_denied",
+                    "target_room": room,
+                })
+                .to_string(),
+                "alert",
+            )
+            .await;
+            Err((
+                "no_permission".into(),
+                "cannot enter target room".into(),
+            ))
+        }
         StartMoveResult::NoSuchAgent => Err(("unknown_agent".into(), "agent not found".into())),
     }
 }
