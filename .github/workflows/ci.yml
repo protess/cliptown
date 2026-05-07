@@ -12,6 +12,9 @@ jobs:
       - uses: pnpm/action-setup@v4
         with: { version: 9 }
       - run: pnpm install --frozen-lockfile
+      - name: Enforce log shape
+        run: |
+          ! rg -n 'tracing::(info|warn|error)' crates/ | rg -v 'component\s*=' || (echo "Missing component= field" && exit 1)
       - name: Build (Rust → TS)
         run: pnpm build
       - name: Rust tests
