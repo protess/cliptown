@@ -76,14 +76,14 @@ const RADIUS = TILE * 0.7;
 
 export function buildAvatarSprite(
   data: AvatarSnapshot,
-  onClick: (agentId: string) => void,
+  onClick: (agentId: string, gx: number, gy: number) => void,
 ): AvatarSprite {
   const c = new Container();
   c.eventMode = "static";
   c.cursor = "pointer";
   c.on("pointerdown", (e: FederatedPointerEvent) => {
     e.stopPropagation();
-    onClick(data.agent_id);
+    onClick(data.agent_id, e.global.x, e.global.y);
   });
 
   // Backend ring (outer)

@@ -25,7 +25,7 @@ import {
 
 interface PixiStageProps {
   startupId: string;
-  onAvatarClick?: (agentId: string) => void;
+  onAvatarClick?: (agentId: string, screenX: number, screenY: number) => void;
 }
 
 export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
@@ -107,7 +107,15 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
       if (existing) {
         updateAvatarTargets(existing, a.current_pos, a.target_pos);
       } else {
-        const sprite = buildAvatarSprite(a, (id) => onClickRef.current?.(id));
+        const sprite = buildAvatarSprite(a, (id, gx, gy) => {
+          const cb = onClickRef.current;
+          if (!cb) return;
+          // Translate canvas-local Pixi coords to viewport coords so the
+          // popover can position itself with `position: fixed`.
+          const canvas = appRef.current?.canvas;
+          const r = canvas?.getBoundingClientRect();
+          cb(id, (r?.left ?? 0) + gx, (r?.top ?? 0) + gy);
+        });
         spritesRef.current.set(a.agent_id, sprite);
         layer.addChild(sprite.container);
       }

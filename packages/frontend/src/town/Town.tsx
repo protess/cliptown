@@ -1,10 +1,19 @@
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { TownTopBar } from "./TownTopBar.js";
 import { PixiStage } from "./PixiStage.js";
 import { ChatPanel } from "../console/ChatPanel.js";
+import { AgentPopover } from "./AgentPopover.js";
+
+interface PopoverState {
+  agentId: string;
+  x: number;
+  y: number;
+}
 
 export function Town() {
   const { id } = useParams<{ id: string }>();
+  const [popover, setPopover] = useState<PopoverState | null>(null);
   if (!id) return <p style={{ padding: 24 }}>Missing town id.</p>;
   return (
     <div
@@ -18,15 +27,18 @@ export function Town() {
       <main style={{ flex: 1, padding: 24, background: "var(--bg)" }}>
         <PixiStage
           startupId={id}
-          onAvatarClick={(agentId) => {
-            // M4.11 wires the agent popover; for now we just log so the click
-            // wire-through is observable in dev.
-            // eslint-disable-next-line no-console
-            console.log("[town] avatar clicked:", agentId);
-          }}
+          onAvatarClick={(agentId, x, y) => setPopover({ agentId, x, y })}
         />
       </main>
-      <ChatPanel />
+      <ChatPanel selectedAgentId={popover?.agentId ?? null} />
+      {popover && (
+        <AgentPopover
+          agentId={popover.agentId}
+          anchorX={popover.x}
+          anchorY={popover.y}
+          onClose={() => setPopover(null)}
+        />
+      )}
     </div>
   );
 }
