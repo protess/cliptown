@@ -102,35 +102,40 @@ pub async fn dispatch(
             .bind(&task_id)
             .execute(pool)
             .await;
-            let _ = persist::append_audit(
-                pool,
-                &task_id,
-                &json!({"actor":"operator","kind":"operator_accept_proposal"}).to_string(),
-            )
-            .await;
             match r {
-                Ok(_) => json!({"type":"ok","kind":"operator_accept_proposal","task_id":task_id}),
+                Ok(_) => {
+                    let _ = persist::append_audit(
+                        pool,
+                        &task_id,
+                        &json!({"actor":"operator","kind":"accept_proposal"}).to_string(),
+                    )
+                    .await;
+                    json!({"type":"ok","kind":"operator_accept_proposal","task_id":task_id})
+                }
                 Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
             }
         }
         ConsoleInbound::OperatorRejectProposal { task_id, reason, .. } => {
-            // Append audit before transitioning.
-            let _ = persist::append_audit(
-                pool,
-                &task_id,
-                &json!({
-                    "actor":"operator","kind":"reject_proposal","reason":reason
-                })
-                .to_string(),
-            )
-            .await;
-            apply_status_only_transition(
+            let result = apply_status_only_transition(
                 pool,
                 &task_id,
                 &Transition::RejectProposal { caller: Actor::Operator },
                 "operator_reject_proposal",
             )
-            .await
+            .await;
+            // Only write the audit on a successful transition.
+            if result["type"] == "ok" {
+                let _ = persist::append_audit(
+                    pool,
+                    &task_id,
+                    &json!({
+                        "actor":"operator","kind":"reject_proposal","reason":reason
+                    })
+                    .to_string(),
+                )
+                .await;
+            }
+            result
         }
         ConsoleInbound::OperatorForceAccept { task_id, .. } => {
             let result = apply_status_only_transition(
