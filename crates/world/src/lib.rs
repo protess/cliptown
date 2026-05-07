@@ -13,6 +13,7 @@ pub mod seed;
 pub mod state;
 pub mod storage;
 pub mod task_sm;
+pub mod view;
 
 #[cfg(test)]
 mod ts_export {
