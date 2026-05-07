@@ -23,6 +23,16 @@ pub async fn dispatch(
     agent_id: &str,
     msg: serde_json::Value,
 ) -> serde_json::Value {
+    // M2.3: MCP frames have their own envelope (`mcp_call` → `mcp_reply` /
+    // `mcp_error`) and are dispatched by `mcp_dispatch`. Sniffing the type
+    // first means the existing `WorkerInbound` deserializer doesn't have to
+    // know about every MCP tool variant.
+    if msg.get("type") == Some(&serde_json::Value::String("mcp_call".to_string())) {
+        return crate::mcp_dispatch::dispatch(
+            world, paths, layout, graph, out_bus, pool, agent_id, msg,
+        )
+        .await;
+    }
     let inbound: WorkerInbound = match serde_json::from_value(msg) {
         Ok(v) => v,
         Err(e) => return json!({"type":"error","reason":"parse","detail":e.to_string()}),
