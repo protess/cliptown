@@ -406,12 +406,29 @@ async fn handle_task_done(
         return Err(("no_permission".into(), "task_done requires assignee".into()));
     }
 
-    // Re-validate artifact path against the startup's workspace root. This is
-    // the world-side defense-in-depth gate; the worker also enforces in
-    // `sandbox::resolve` before exposing the path back, but Phase 0 spec is
-    // explicit that the world must re-check (see §6.3).
+    // Spec §5.4: artifact path must be exactly
+    // `workspaces/<startup_id>/artifacts/<task_id>.md`. Fast-fail on the
+    // canonical pattern *before* sandbox::resolve so we never canonicalize a
+    // path that doesn't match the contract; sandbox::resolve still runs as
+    // belt-and-suspenders to defeat any symlink/traversal trick that could
+    // otherwise sneak past a string compare.
+    let canonical = format!(
+        "workspaces/{}/artifacts/{}.md",
+        caller.startup_id, task_id
+    );
+    if artifact_path != canonical {
+        return Err((
+            "bad_artifact_path".into(),
+            format!("expected {canonical}, got {artifact_path}"),
+        ));
+    }
+
+    // The canonical pattern is rooted at `workspaces/<startup_id>/`, so the
+    // path we hand sandbox::resolve is the artifacts/<task_id>.md tail. This
+    // also matches the per-startup workspace_root used by every other tool.
     let workspace_root = std::path::PathBuf::from(format!("workspaces/{}", caller.startup_id));
-    sandbox::resolve(&workspace_root, &artifact_path)
+    let inside = format!("artifacts/{task_id}.md");
+    sandbox::resolve(&workspace_root, &inside)
         .map_err(|e| ("sandbox_violation".to_string(), format!("{e}")))?;
 
     let new_status = next(task.status, &Transition::TaskDoneMcp)

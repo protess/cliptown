@@ -228,16 +228,17 @@ async fn speak_directive_requires_manager_relationship() {
 #[tokio::test]
 async fn task_done_assignee_only_and_emits_subtask_done() {
     let mut fx = fixture().await;
-    // Create a workspace dir so sandbox::resolve doesn't reject an absent root.
-    let ws = std::path::PathBuf::from("workspaces/s1");
+    // M5.4: artifact_path must be exactly workspaces/<sid>/artifacts/<tid>.md.
+    // Create the canonical file so sandbox::resolve doesn't reject an absent root.
+    let ws = std::path::PathBuf::from("workspaces/s1/artifacts");
     let _ = std::fs::create_dir_all(&ws);
-    let _ = std::fs::write(ws.join("artifact.md"), "ok");
+    let _ = std::fs::write(ws.join("T1.md"), "ok");
     fx.make_rx("m1");
     let r = fx
         .call(
             "e1",
             "task_done",
-            json!({"task_id":"T1","artifact_path":"artifact.md"}),
+            json!({"task_id":"T1","artifact_path":"workspaces/s1/artifacts/T1.md"}),
         )
         .await;
     assert_eq!(r["type"], "mcp_reply", "{r}");
