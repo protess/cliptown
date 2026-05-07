@@ -100,8 +100,81 @@ The worker has no LLM loop of its own. The CLI does. The worker is a supervisor 
 
 Vite + React + Pixi.js, single SPA, single WS channel.
 
-- `/console` — Founder Console (god view): list of startups, KPIs, create/configure, navigate into a town.
-- `/town/:startupId` — Pixi canvas + chat panel + "Possess" toggle. When possessed, the operator avatar enters the town with `kind: 'operator'` and movement is driven by client clicks.
+#### `/console` — Founder Console (god view)
+
+Layout: **top bar + left sidebar + main area**. Linear / Vercel dashboard family.
+
+- **Top bar** (~32 px tall): cliptown wordmark on the left, compact global system-event feed in the middle (1-line scroll showing last 1–3 events; clicking expands a history modal), `+ New Startup` button on the right.
+- **Left sidebar** (~160 px wide): "Startups" header followed by a list of currently active startups (Phase 0 supports up to M = 4). Each row carries a hue accent on its left edge encoding startup identity, the startup short name, and the first ~30 characters of its goal. The selected row inverts to a white background; others remain muted. **Order**: most recent `system_event.ts` first; the list re-sorts on tick with a soft animation (~150 ms FLIP) so an erupting startup floats to the top without yanking the eye. **Empty state** (zero startups): the sidebar shows a centered prompt — "No startups yet" plus a small arrow indicator pointing to the `+ New Startup` button in the top bar.
+- **Main area**: detail view of the selected startup. Shows the full goal, budget bar with `$spent / $cap` in monospace, agent count (active / total), task counts (`in_progress · awaiting_review · done · failed`), last system-event timestamp, and an "Open town →" CTA. With no startup selected, the main area shows a welcome card containing a one-line positioning sentence and the same `+ New Startup` CTA.
+- **First-run main area** (operator has never created a startup): replaces the empty welcome with a **gallery of 3–4 templated example startups** ("Build a docs site for the SDK", "Run market research on competitors", "Automate first-line customer support", "Draft a launch announcement"). Each card is a one-click claim that pre-fills the goal field; a `Start blank` card sits alongside them. Choosing any card immediately spawns the startup and redirects to its `/town/:id` so the first emotional beat is watching agents walk into the suite.
+
+#### `/town/:startupId` — Town view
+
+Layout: **top bar + full-bleed Pixi canvas + floating panels**. Maximal-canvas, gather.town family.
+
+- **Top bar** (~32 px): `← console` back action on the left, startup short name + town name on the center-left, at-a-glance budget number (monospace, color-coded by % used) on the center-right, `⚆ Possess` toggle on the right (pulses when active).
+- **Pixi canvas**: occupies the rest of the viewport. Renders the WeWork map (Phase 0: 5 rooms) and avatars. **Avatar visual**: filled circle whose fill color encodes startup identity; a one-letter monogram in the center encodes the agent's role; an outer thin ring encodes backend (`claude_code` / `codex` / `opencode` — three discrete ring styles, see §8.2). The operator avatar uses a distinct neutral color and an unmistakable monogram (e.g., `⚆`).
+- **Floating chat panel**: fixed bottom-right, collapsed by default to a chip that shows unread count and most-recent room name. Expanded shows messages from the room currently in focus (the room of the selected agent, or the room the operator is in when possessing). Cross-startup chat in common rooms is visually tagged by the speaker's startup hue. When neither possessing nor an agent is selected, the panel filters to "all rooms touched by this startup's agents".
+- **Agent popover**: opens when an avatar is clicked. Anchors near the avatar and shows: name, role, backend, status, current task with progress, the agent's budget contribution, and a `Send directive` text input that emits a `directive { from: 'operator' }`. Closes on outside-click or `Escape`.
+
+#### Interaction states
+
+Every screen and major component specifies its loading, empty, error, success, and partial states. The implementer may not silently fall back to default browser strings.
+
+| Feature | Loading | Empty | Error | Success | Partial |
+|---|---|---|---|---|---|
+| `/console` boot | "Connecting to world…" centered, fades on first `world_state` | (handled per-region below) | "World offline — retry in {N}s" with manual retry button | (silent transition into UI) | — |
+| Sidebar list | 3 skeleton rows | "No startups yet" + arrow indicator → `+ New Startup` | inherits boot error | (silent transition) | — |
+| Startup detail (main) | skeleton blocks for goal / budget / counts | with no startup selected: welcome card with one-line positioning + `+ New Startup` CTA | "Failed to load startup" + retry | (silent transition) | shows a `changes_requested` count badge if any task is in that state |
+| `/town` canvas | "Loading map…" overlay until first tick lands; persistent spinner overlay during long A* | "All agents offline" centered grey state with retry-respawn CTA | "World disconnected" top banner with retry countdown | (silent transition) | — |
+| Avatar (per agent) | — | absent from canvas if `status = offline` | red `!` overlay when offline; orange `⏸` when budget-paused | none | yellow `…` glow while an LLM call is in flight (between `pre_tool` and `post_tool` hook events) |
+| Chat panel | 3 skeleton lines | "No messages in this room yet" | (chat is a read-stream — no error UI; reconnection handled at world level) | new message slides in from below | — |
+| Task lifecycle (god-view side) | — | — | red corner badge on the relevant agent on `task_failed` | green check + epistemic_log preview popover on `task_done` | yellow `↻` icon while in `changes_requested` |
+| Budget | — | — | red banner across top bar at 100 %; 80 % / 95 % as toast | — | budget bar turns orange in 80–94 % band |
+
+**System event surfacing tiers** (decided in D3):
+
+| Severity | Surfacing |
+|---|---|
+| `info` | top-bar feed only (1-line scroll, last 1–3 events; click expands history modal) |
+| `warn` | top-bar feed + toast (8 s, dismissable) |
+| `alert` | top-bar feed + toast (sticky until dismissed) + brief border flash on the affected startup's sidebar row |
+| `critical` (security violations only) | blocking modal with audit context and a single "Acknowledge" action |
+
+#### Minimum design tokens (Phase 0)
+
+Phase 0 ships with a deliberately small design system. A full pass with `/design-consultation` is queued for the front of Phase 1. Until then, **these tokens are non-optional**: the implementer may not silently fall back to system defaults.
+
+- **Typography**:
+  - **UI face**: `IBM Plex Sans` (weights 400/500/700). Loaded via local self-hosted woff2 — never CDN. **Forbidden**: Inter, Roboto, system-ui, `-apple-system`, Tailwind defaults. Reason: Inter as primary display font is the canonical AI-slop signal.
+  - **Mono face** (KPIs, budget numerics, audit log, IPC schema in tooltips): `IBM Plex Mono` (400/500). Same loading rules.
+- **Color**:
+  - **Surfaces**: `#FAFAFA` background, `#FFFFFF` raised, `#1A1A1A` primary text, `#6B6B6B` secondary text, `#E5E5E5` borders. No purple, indigo, or violet anywhere in the chrome.
+  - **Startup hue palette** (8 distinct hues, assigned in suite-claim order — so the first 8 startups across the lifetime of a town each get a distinct color and stay color-stable): `#D32F2F` (red), `#7B1FA2` (purple), `#1976D2` (blue), `#00796B` (teal), `#388E3C` (green), `#F57C00` (amber), `#C2185B` (pink), `#303F9F` (indigo). The palette is the **only** place these hues appear; chrome never uses them as decoration.
+  - **Severity**: `#F57C00` (warn), `#D32F2F` (alert), `#B71C1C` (critical). Distinct from the startup palette by use context.
+- **Border radius**: 3 px on cards / panels; 2 px on inline controls. No `rounded-2xl` or larger. Reason: cliptown is a tool, not a toy.
+- **Iconography**: text-glyph-first (e.g., `+`, `←`, `⚆`, `↻`, `…`, `!`, `⏸`). No icon library in Phase 0. Reason: an icon set is a vocabulary, and choosing one is a `/design-consultation` decision.
+- **Motion**: 150 ms FLIP for sidebar re-sort, 200 ms ease-out on toast slide-in. No springy or bouncy curves.
+
+**Out of scope for the Phase 0 token set** (graduates with `/design-consultation`): full type scale, spacing scale, dark mode, motion language, illustration system, voice/tone guidelines.
+
+#### Keyboard navigation (Phase 0 minimum)
+
+cliptown is fleet-ops software, not a CRUD app. Hands-on-keyboard is non-optional. Phase 0 ships these primitives; the full command-palette / ARIA pass graduates with `/design-consultation` in Phase 1.
+
+| Key | Where | Action |
+|---|---|---|
+| `j` / `k` | `/console` sidebar | Move selection down / up |
+| `Enter` | sidebar selection | Open the selected startup's town |
+| `Esc` | any modal / popover | Close |
+| `t` | `/console` (startup focused) | Enter the focused startup's `/town` |
+| `g` then `c` | anywhere | Go back to `/console` |
+| `p` | `/town` | Toggle Possess |
+| `c` | `/town` | Focus the chat panel input |
+| `/` | anywhere | Focus the global event-feed search (Phase 1: command palette) |
+
+Tab order across `/console`: top-bar (left → right) → sidebar list → main detail. Across `/town`: top-bar → canvas (focusable agents tabbable in startup-then-role order) → chat panel → floating panels. Visible focus rings on every interactive surface — never `outline: none` without a replacement.
 
 ### 3.4 Backend adapters
 
@@ -327,6 +400,71 @@ When a `chat_received` arrives during an assignee's active task, the worker inje
 - **Possess flow**: click a town → enter `/town/:startupId` → "Possess" button spawns an operator avatar in the Lobby. Movement via tile clicks. Click an agent avatar → side panel; type a directive → world emits `directive { from: 'operator' }` to that agent's worker (org-graph routing rules bypassed; operator is owner).
 - **Despawn**: 30 s WS keepalive timeout drops the operator avatar.
 
+### 8.1 User journey storyboards
+
+The operator's three canonical experiences:
+
+**Storyboard A — First-run (zero startups → first startup → first task done)**
+
+| Step | What happens | What the operator feels (Norman 3-level) |
+|---|---|---|
+| 0–5 s | Lands on `/console`. Empty state in sidebar; main area shows welcome card with one-line positioning ("AI autonomous startups, observed and guided") and a single `+ Start your first startup` CTA | Visceral: clean, intentional, not overwhelming |
+| ~10 s | Clicks CTA → modal with one goal text input, placeholder showing an example (e.g., "Build a docs site for the SDK") | Behavioral: low friction, "I just type what I want" |
+| ~15 s | Submits → immediate redirect to `/town/:newStartupId`; canvas fades in; founder avatar spawns at home desk in Suite α; engineer avatar spawns next to it | Visceral: **agents are real and they are here**. This beat is the moment cliptown becomes cliptown |
+| ~30 s | Founder avatar walks to engineer's desk; chat panel slides up first directive (founder → eng); engineer walks toward Library | Behavioral: "they are doing things without me" |
+| ~5 min | First `task_done` system event toast; epistemic_log preview pops; artifact path shown clickable | Reflective: "this is actually producing output. I wasn't sure if it would" |
+
+**Storyboard B — Daily operator (returning, 3 startups running)**
+
+| Step | What happens | What the operator feels |
+|---|---|---|
+| 0–5 s | Lands on `/console`. Sidebar shows 3 startups already sorted with α at the top (most recent event). Main area auto-selects α | Visceral: "I know where to look first" |
+| ~30 s | Scans budget bars (α at 38 %, β at 71 %, γ at 12 %); sees β's bar is orange | Behavioral: "β needs attention" |
+| ~1 min | Clicks β → `/town/:β` → opens chat history for last hour → reads a thread of `request_changes` cycles between β-founder and β-designer | Behavioral: investigative, "what is β stuck on" |
+| ~3 min | Possesses → walks operator avatar to β-designer's desk → sends a directive: "stop optimizing for novelty, ship what we have" | Reflective: agency, "I can still steer" |
+
+**Storyboard C — Crisis intervention (security violation in γ at 03:14)**
+
+| Step | What happens | What the operator feels |
+|---|---|---|
+| t = 0 | `critical` system event fires (γ-engineer attempted path-escape). Worker auto-denies. World writes audit row | (operator may be elsewhere) |
+| t + 1 s | Modal blocks the UI: "Security: γ-engineer attempted to write outside its sandbox. Auto-denied. Acknowledge and review audit?" | Visceral: alarm, but "I am still in control — the system blocked it" |
+| t + 5 s | Operator clicks Acknowledge → drops into γ town with γ-engineer pre-selected → audit panel open with the offending tool call | Behavioral: forensic clarity, evidence at hand |
+| t + 30 s | Operator chooses: pause γ, escalate to manual review, or dissolve γ entirely | Reflective: power, "the building is mine" |
+
+### 8.2 Avatar visual identity
+
+Every avatar in `/town` encodes three facts at a glance:
+
+- **Fill color** = startup identity (each startup has a distinct hue used here, in the sidebar accent, and in chat tags). Operator avatar uses a neutral `#444`.
+- **Center monogram** (1 letter, white) = role. Phase 0: `F` (founder), `E` (engineer), `D` (designer). Operator avatar uses `⚆` glyph.
+- **Outer ring style** = backend adapter. Phase 0: solid ring (`claude_code`), dashed ring (`codex`), double thin ring (`opencode`). The ring style is the only piece of a-glance backend telemetry — without it, the operator cannot tell adapters apart from across the room.
+
+**Status overlays** (composable on top of the base avatar):
+- yellow `…` glow during an active LLM call (between `pre_tool` and `post_tool` hooks)
+- red `!` corner when `status = offline`
+- orange `⏸` corner when budget-paused
+- green check fade-in for ~1 s on `task_done`
+
+### 8.3 Possess transition
+
+The handoff between god view and avatar embodiment is the strongest emotional beat in the operator's loop and must read as an intentional camera move, not a popup.
+
+**Entering possession** (`p` or click `⚆ Possess`): ~600 ms total.
+- The camera (Pixi viewport) eases from a wide overhead frame to a tighter frame centered on the Lobby spawn point.
+- Simultaneously, the operator avatar fades in at the spawn tile.
+- The top bar's `⚆ Possess` toggle pulses subtly to signal active state; the canvas border shifts to a thin neutral accent.
+- Movement controls swap: clicks on the canvas now route to operator-avatar `move_intent`; hover-to-inspect still works on other agents.
+
+**Exiting possession** (`p` again, `Esc`, or click toggle): ~400 ms.
+- The operator avatar fades out at its current tile (no walk-to-Lobby animation — they simply leave).
+- Camera eases back to the wide overhead frame.
+- Top-bar pulse stops; canvas border returns to its default.
+
+**Disconnect-while-possessing**: WS keepalive timeout (30 s) triggers the same exit transition as a normal exit. A brief toast — "You were disconnected. Possession ended." — surfaces at `info` severity.
+
+**Implementation note**: the camera animation is a single Pixi tween on the viewport; the avatar fade is a sprite alpha tween. No layout reflow on the React side, so the chrome stays stable while the canvas does the cinematic work.
+
 ## 9. Resilience
 
 | Failure | Recovery | Automatic? |
@@ -381,7 +519,7 @@ Phase 0 is complete when all nine pass simultaneously:
 | Phase | Theme | OOS items graduating in |
 |---|---|---|
 | 0 (this spec) | Walking skeleton | — |
-| 1 | Real artifact integration | GitHub repo per startup, secrets vault, email and Slack outbound as MCP tools |
+| 1 | Real artifact integration + design system | GitHub repo per startup, secrets vault, email and Slack outbound as MCP tools, full `DESIGN.md` via `/design-consultation` (type scale, spacing, motion language, iconography, voice / tone) |
 | 2 | Map / multi-town | In-app map editor, multiple buildings, sprite art, idle wander |
 | 3 | Operations | Docker per startup, TLS / WSS, observability dashboards, automated backup |
 | 4 | Multi-user / cloud | Authentication, deployment infrastructure, horizontal scaling |
@@ -397,7 +535,29 @@ Each phase gets its own design spec, plan, and implementation cycle.
 - **Artifact format beyond Markdown**: even in Phase 0, agents may produce JSON, code stubs, etc. Validate that `artifact_path` semantics generalize (or restrict to Markdown for the slice).
 - **Suite slot exhaustion behavior**: when all M slots are claimed, startup creation is refused. Decide whether the operator gets a queue, an explicit error, or whether dissolving an inactive startup auto-frees its slot.
 
-## 14. Glossary
+## 14. Approved Mockups (from `/plan-design-review` 2026-05-07)
+
+| Screen | Variant | Direction | Reference |
+|---|---|---|---|
+| `/console` | A | Linear-style left sidebar (startup list with hue accents, recency-sorted) + main detail area + top bar with global event feed and `+ New Startup` | `~/.gstack/projects/protess-cliptown/designs/cliptown-20260507/approved.json` |
+| `/town/:startupId` | B | Full-bleed Pixi canvas + collapsible floating chat panel (bottom-right) + click-to-open agent popovers + Possess toggle in top bar | same as above |
+
+Mockups were produced as HTML wireframes via the Visual Companion (the gstack designer was available but no OpenAI key was configured). The implementer reads §3.3 + §8 of this spec for the canonical visual contract; `approved.json` captures the directional choice for archival.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|---|---|---|---|---|---|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | not run |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | not run |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | — | not run |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | CLEAR (FULL) | score: 3/10 → 9/10, 7 decisions added (sidebar IA, sidebar ordering, state matrix + tier surfacing, first-run cards, design tokens, keyboard primitives, Possess transition) |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | not run |
+
+**UNRESOLVED:** 0
+**VERDICT:** DESIGN CLEARED — eng review still required before implementation.
+
+## 15. Glossary
 
 - **Town**: a building (Phase 0 has one, `town_default`).
 - **Suite**: a room with `private_to_startup_id` set; only that startup's agents may enter.
