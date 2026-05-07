@@ -21,6 +21,7 @@ const OPERATOR_TOKEN: string =
 interface WorldContextValue {
   state: WorldState;
   send: (msg: object) => void;
+  addToast: (severity: string, body: string, sticky?: boolean) => void;
 }
 
 const WorldContext = createContext<WorldContextValue | null>(null);

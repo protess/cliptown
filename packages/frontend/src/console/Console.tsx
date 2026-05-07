@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { useWorld } from "../hooks/useWorld.js";
 import { TopBar } from "./TopBar.js";
 import { Sidebar } from "./Sidebar.js";
 import { MainHeader } from "./MainHeader.js";
+import { Kanban } from "./Kanban.js";
 
 export function Console() {
-  const { state } = useWorld();
   const [selected, setSelected] = useState<string | null>(null);
   return (
     <div
@@ -30,10 +29,8 @@ export function Console() {
           }}
         >
           <MainHeader startupId={selected} />
-          <div style={{ padding: 24, overflow: "auto", flex: 1 }}>
-            <p style={{ color: "var(--fg-secondary)" }}>
-              Status: <code>{state.status}</code> · Kanban lands in M4.6.
-            </p>
+          <div style={{ overflow: "auto", flex: 1 }}>
+            <Kanban startupId={selected} />
           </div>
         </main>
       </div>

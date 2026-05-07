@@ -101,7 +101,8 @@ type Msg = Record<string, unknown> & { type?: unknown };
 
 type Action =
   | { kind: "status"; status: ConnectionStatus }
-  | { kind: "msg"; msg: Msg };
+  | { kind: "msg"; msg: Msg }
+  | { kind: "localToast"; severity: string; body: string; sticky?: boolean };
 
 function asObject(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v)
@@ -248,6 +249,18 @@ function severityFromString(s: unknown): SystemEventVM["severity"] {
 
 function reducer(state: WorldState, action: Action): WorldState {
   if (action.kind === "status") return { ...state, status: action.status };
+  if (action.kind === "localToast") {
+    const t: ToastVM = {
+      id: newId(),
+      ts: Date.now(),
+      severity: action.severity,
+      body: action.body,
+      sticky: action.sticky ?? false,
+    };
+    const next = [...state.toasts, t];
+    if (next.length > MAX_TOASTS) next.splice(0, next.length - MAX_TOASTS);
+    return { ...state, toasts: next };
+  }
   const m = action.msg;
   switch (m.type) {
     case "world_view_snapshot": {
@@ -323,6 +336,14 @@ export interface UseConsoleOpts {
 export interface UseConsoleResult {
   state: WorldState;
   send: (msg: object) => void;
+  /**
+   * Phase 0 stand-in: pushes a toast directly into local state without going
+   * through the world. M4.6 uses this for "agent-driven only" snap-back
+   * feedback. The world will eventually publish authoritative toasts via
+   * ConsoleOutbound::Toast (case "toast" in the reducer); this helper is for
+   * UI-side ephemeral feedback only.
+   */
+  addToast: (severity: string, body: string, sticky?: boolean) => void;
 }
 
 export function useConsole(opts: UseConsoleOpts): UseConsoleResult {
@@ -347,5 +368,7 @@ export function useConsole(opts: UseConsoleOpts): UseConsoleResult {
   return {
     state,
     send: (msg) => clientRef.current?.send(msg),
+    addToast: (severity, body, sticky) =>
+      dispatch({ kind: "localToast", severity, body, sticky }),
   };
 }
