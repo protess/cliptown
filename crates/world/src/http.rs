@@ -19,6 +19,7 @@ pub struct AppState {
     pub handle: Handle,
     pub catalog: Arc<tokio::sync::RwLock<std::collections::HashMap<String, serde_json::Value>>>,
     pub supervisor: Arc<AgentSupervisor>,
+    pub max_review_rounds: u32,
 }
 
 pub fn router(state: AppState) -> Router {

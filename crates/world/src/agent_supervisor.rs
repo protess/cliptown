@@ -80,15 +80,22 @@ pub struct AgentSupervisor {
     /// consults this on child exit to suppress respawn. Cleared when the
     /// watch loop has acted on it.
     tombstones: Arc<Mutex<HashSet<String>>>,
+    #[allow(dead_code)]
+    event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
 }
 
 impl AgentSupervisor {
-    pub fn new(config: SupervisorConfig, pool: SqlitePool) -> Self {
+    pub fn new(
+        config: SupervisorConfig,
+        pool: SqlitePool,
+        event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    ) -> Self {
         Self {
             config,
             pool,
             agents: Arc::new(Mutex::new(HashMap::new())),
             tombstones: Arc::new(Mutex::new(HashSet::new())),
+            event_tx,
         }
     }
 

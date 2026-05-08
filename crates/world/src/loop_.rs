@@ -59,12 +59,17 @@ pub enum Cmd {
 pub struct Handle {
     pub tx: mpsc::Sender<Cmd>,
     pub view_rx: watch::Receiver<WorldView>,
+    pub event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
 }
 
-pub fn spawn(initial: WorldView, pool: SqlitePool) -> Handle {
+pub fn spawn(
+    initial: WorldView,
+    pool: SqlitePool,
+    event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+) -> Handle {
     let layout = TownLayout::default_town();
     let graph = move_sys::graph_from_layout(&layout);
-    spawn_with_layout(initial, pool, layout, graph)
+    spawn_with_layout(initial, pool, layout, graph, event_tx)
 }
 
 pub fn spawn_with_layout(
@@ -72,6 +77,7 @@ pub fn spawn_with_layout(
     pool: SqlitePool,
     layout: TownLayout,
     graph: RoomGraph,
+    event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
 ) -> Handle {
     let (tx, mut rx) = mpsc::channel::<Cmd>(1024);
     let (view_tx, view_rx) = watch::channel(initial.clone());
@@ -85,6 +91,7 @@ pub fn spawn_with_layout(
     // of the process.
     let mut layout = layout;
 
+    let _event_tx_owned = event_tx.clone();
     tokio::spawn(async move {
         while let Some(cmd) = rx.recv().await {
             match cmd {
@@ -180,5 +187,6 @@ pub fn spawn_with_layout(
         }
     });
 
-    Handle { tx, view_rx }
+    Handle { tx, view_rx, event_tx }
 }
+
