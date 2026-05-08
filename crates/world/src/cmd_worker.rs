@@ -24,7 +24,6 @@ pub async fn dispatch(
     agent_id: &str,
     msg: serde_json::Value,
 ) -> serde_json::Value {
-    let _ = event_tx;
     // M2.3: MCP frames have their own envelope (`mcp_call` → `mcp_reply` /
     // `mcp_error`) and are dispatched by `mcp_dispatch`. Sniffing the type
     // first means the existing `WorkerInbound` deserializer doesn't have to
@@ -59,17 +58,15 @@ pub async fn dispatch(
             {
                 Ok((new_spent, cap, threshold)) => {
                     if let Some(t) = threshold {
-                        if let Err(e) = crate::budget::record_threshold_event(
+                        crate::budget::record_threshold_event(
                             pool,
+                            event_tx,
                             &startup_id,
                             t,
                             new_spent,
                             cap,
                         )
-                        .await
-                        {
-                            tracing::warn!(component = "cmd_worker", error = %e, "record_threshold_event failed");
-                        }
+                        .await;
                         match t {
                             crate::budget::Threshold::Warn80
                             | crate::budget::Threshold::Warn95 => {

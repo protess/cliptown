@@ -68,7 +68,7 @@ pub async fn dispatch(
 
     let result: HandlerResult = match tool.as_str() {
         "move_intent" => {
-            handle_move_intent(world, paths, layout, graph, pool, &caller, args).await
+            handle_move_intent(world, paths, layout, graph, pool, event_tx, &caller, args).await
         }
         "speak" => handle_speak(world, out_bus, pool, event_tx, &caller, args).await,
         "task_done" => handle_task_done(world, out_bus, pool, &caller, args).await,
@@ -250,6 +250,7 @@ async fn handle_move_intent(
     layout: &TownLayout,
     graph: &RoomGraph,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
@@ -320,8 +321,9 @@ async fn handle_move_intent(
             // mcp_error keeps the wire contract; the system_events alert row
             // gives the operator console a durable audit trail of who tried
             // to enter what so we can spot misbehaving agents over time.
-            let _ = persist::record_system_event(
+            if let Err(e) = crate::emit::emit_system_event(
                 pool,
+                event_tx,
                 Some(&caller.startup_id),
                 "permission_violation",
                 &json!({
@@ -332,7 +334,10 @@ async fn handle_move_intent(
                 .to_string(),
                 "alert",
             )
-            .await;
+            .await
+            {
+                tracing::error!(component = "mcp_dispatch", agent_id = %caller.agent_id, err = %e, "failed to emit permission_violation system_event");
+            }
             Err((
                 "no_permission".into(),
                 "cannot enter target room".into(),

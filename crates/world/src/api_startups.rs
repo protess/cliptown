@@ -389,17 +389,21 @@ pub async fn delete_startup(
         .send(Cmd::ReleaseSuite { startup_id: id.clone() })
         .await;
 
-    // Audit trail: emit a system_events row at `warn`. Best-effort; a logging
-    // failure shouldn't fail the user-facing DELETE since the dissolve is
-    // already committed.
-    let _ = crate::persist::record_system_event(
+    // Audit trail: emit a system_events row at `warn` and broadcast to the
+    // operator console. Best-effort; a logging failure shouldn't fail the
+    // user-facing DELETE since the dissolve is already committed.
+    if let Err(e) = crate::emit::emit_system_event(
         &s.pool,
+        &s.handle.event_tx,
         Some(&id),
         "startup_dissolved",
         &json!({"startup_id": id}).to_string(),
         "warn",
     )
-    .await;
+    .await
+    {
+        tracing::error!(component = "api_startups", startup_id = %id, err = %e, "failed to emit startup_dissolved system_event");
+    }
 
     Json(json!({"ok": true, "id": id, "status": "dissolved"})).into_response()
 }

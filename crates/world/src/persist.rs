@@ -86,6 +86,11 @@ pub async fn record_budget_event(
     Ok(())
 }
 
+/// DEPRECATED for new callers — prefer `crate::emit::emit_system_event`,
+/// which broadcasts a `ConsoleOutbound::SystemEvent` frame to operator
+/// consoles in addition to writing the SQL row. Existing callers may keep
+/// using this for SQL-only persistence; new callers must migrate.
+///
 /// Insert a row into `system_events`. Used for severity-tiered surfacing (info/warn/alert/critical).
 pub async fn record_system_event(
     pool: &SqlitePool,

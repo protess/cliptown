@@ -22,7 +22,7 @@ use crate::state::WorldView;
 use serde_json::json;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 /// Reason code embedded in `WorkerOutbound::Pause`. Phase 0 only emits
 /// `budget_exhausted` (from the 100% threshold); future phases may add other
@@ -213,16 +213,17 @@ pub fn warn_startup(
     sent
 }
 
-/// Record a `system_events` row for a tripped threshold. 80/95 fire as
-/// `severity=warn`; 100 fires as `severity=alert`. Console event feed (M2)
-/// will surface these as toasts.
+/// Record a `system_events` row for a tripped threshold and broadcast a
+/// `ConsoleOutbound::SystemEvent` frame so the operator console sees it live.
+/// 80/95 fire as `severity=warn`; 100 fires as `severity=alert`.
 pub async fn record_threshold_event(
     pool: &SqlitePool,
+    event_tx: &broadcast::Sender<crate::protocol::ConsoleOutbound>,
     startup_id: &str,
     threshold: Threshold,
     spent: f64,
     cap: f64,
-) -> Result<(), anyhow::Error> {
+) {
     let (severity, kind) = match threshold {
         Threshold::Warn80 => ("warn", "budget_warn_80"),
         Threshold::Warn95 => ("warn", "budget_warn_95"),
@@ -234,5 +235,7 @@ pub async fn record_threshold_event(
         "cap_usd": cap,
     })
     .to_string();
-    persist::record_system_event(pool, Some(startup_id), kind, &payload, severity).await
+    if let Err(e) = crate::emit::emit_system_event(pool, event_tx, Some(startup_id), kind, &payload, severity).await {
+        tracing::error!(component = "budget", err = %e, startup_id = %startup_id, kind = %kind, "failed to emit budget threshold system_event");
+    }
 }

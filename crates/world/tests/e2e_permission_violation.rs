@@ -150,7 +150,15 @@ async fn alpha_engineer_cannot_enter_beta_suite() {
     assert_eq!(payload["agent_id"], "alpha_eng", "payload missing agent_id: {}", row.0);
     assert_eq!(payload["target_room"], "suite_2", "payload missing target_room: {}", row.0);
     assert_eq!(row.1.as_deref(), Some("s_alpha"), "alert should be tagged to caller's startup");
-    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
+
+    // Caller-path assertion (M16): emit_system_event broadcasts a frame to the
+    // operator console in addition to writing the SQL row.
+    let frame = event_rx.try_recv().expect("expected SystemEvent broadcast for permission_violation");
+    let ConsoleOutbound::SystemEvent { kind, severity, .. } = frame else {
+        panic!("expected SystemEvent, got something else");
+    };
+    assert_eq!(kind, "permission_violation");
+    assert_eq!(severity, "alert");
 }
 
 #[tokio::test]
