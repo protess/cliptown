@@ -195,6 +195,19 @@ export function ChatPanel({ selectedAgentId }: ChatPanelProps = {}) {
   );
 }
 
+// Sentinel ids like `operator` (cmd_console.rs writes this for
+// operator-sourced directives) and `__operator__` (the avatar id) stay
+// readable; real agent UUIDs (36-char, dashes at positions 8/13/18/23)
+// get the Sidebar/MainHeader/TownTopBar 6-char + title pattern.
+function looksLikeUuid(id: string): boolean {
+  return id.length === 36 && id.charAt(8) === "-" && id.charAt(13) === "-";
+}
+function AuthorId({ id }: { id: string }) {
+  if (!id) return <code>?</code>;
+  if (!looksLikeUuid(id)) return <code>{id}</code>;
+  return <code title={id}>{id.slice(0, 6)}</code>;
+}
+
 function Bubble({
   m,
   scopedStartup,
@@ -226,9 +239,14 @@ function Bubble({
             opacity: cross ? 1 : 0.6,
           }}
         />
-        <code>{m.author_id || "?"}</code>
+        <AuthorId id={m.author_id} />
         {cross && (
-          <span style={{ color: hue, fontWeight: 600 }}>{m.startup_id}</span>
+          <span
+            title={m.startup_id}
+            style={{ color: hue, fontWeight: 600 }}
+          >
+            {m.startup_id.slice(0, 6)}
+          </span>
         )}
         <span>{tag}</span>
         <span>{new Date(m.ts).toLocaleTimeString()}</span>
