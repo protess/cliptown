@@ -48,11 +48,13 @@ export interface TaskVM {
   status: string;
   assignee_agent_id?: string | null;
   required_room?: string | null;
+  review_round?: number;
+  max_review_rounds?: number;
 }
 
 export interface SystemEventVM {
   ts: number;
-  severity: "info" | "warn" | "alert";
+  severity: "info" | "warn" | "alert" | "critical";
   kind: string;
   startup_id: string | null;
   payload: unknown;
@@ -242,6 +244,8 @@ function indexTasks(raw: unknown): Record<string, TaskVM> {
           typeof t.assignee_agent_id === "string" ? t.assignee_agent_id : null,
         required_room:
           typeof t.required_room === "string" ? t.required_room : null,
+        review_round: typeof t.review_round === "number" ? t.review_round : undefined,
+        max_review_rounds: typeof t.max_review_rounds === "number" ? t.max_review_rounds : undefined,
       };
     }
   } else {
@@ -259,6 +263,8 @@ function indexTasks(raw: unknown): Record<string, TaskVM> {
             typeof t.assignee_agent_id === "string" ? t.assignee_agent_id : null,
           required_room:
             typeof t.required_room === "string" ? t.required_room : null,
+          review_round: typeof t.review_round === "number" ? t.review_round : undefined,
+          max_review_rounds: typeof t.max_review_rounds === "number" ? t.max_review_rounds : undefined,
         };
       }
     }
@@ -267,7 +273,7 @@ function indexTasks(raw: unknown): Record<string, TaskVM> {
 }
 
 function severityFromString(s: unknown): SystemEventVM["severity"] {
-  if (s === "warn" || s === "alert") return s;
+  if (s === "warn" || s === "alert" || s === "critical") return s;
   return "info";
 }
 
@@ -366,7 +372,18 @@ function reducer(state: WorldState, action: Action): WorldState {
       // emitting them (M5+), this reducer appends them to `messages` for the
       // floating ChatPanel from M4.10. Until then the panel renders empty.
       const kind = m.type === "directive" ? "directive" : "chat";
-      const id = typeof m.id === "string" || typeof m.id === "number" ? String(m.id) : newId();
+      // Codex M20: prefer protocol field message_id; fall back to m.id for the
+      // synthetic-frame test path in e2e/ship-gate.spec.ts which still passes id.
+      const id = typeof m.message_id === "string"
+        ? m.message_id
+        : typeof m.id === "string" || typeof m.id === "number"
+          ? String(m.id)
+          : newId();
+      // Dedup: skip if we've already seen this id. Costs O(N) per append but
+      // prevents future double-emission or retry-storm dupes (Codex NIT #20).
+      if (state.messages.some(x => x.id === id)) {
+        return state;
+      }
       const recipient =
         typeof m.to_agent_id === "string"
           ? m.to_agent_id

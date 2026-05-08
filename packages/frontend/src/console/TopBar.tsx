@@ -196,9 +196,11 @@ const menuItemStyle: CSSProperties = {
   font: "inherit",
 };
 
-function SeverityDot({ severity }: { severity: "info" | "warn" | "alert" }) {
+function SeverityDot({ severity }: { severity: "info" | "warn" | "alert" | "critical" }) {
   const color =
-    severity === "alert"
+    severity === "critical"
+      ? "#8B0000"
+      : severity === "alert"
       ? "#D62828"
       : severity === "warn"
       ? "#E69F00"
