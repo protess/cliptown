@@ -138,8 +138,11 @@ export function Sidebar({
                 {budgetLabel(s)}
               </div>
             </div>
-            <code style={{ fontSize: 11, color: "var(--fg-secondary)" }}>
-              {s.id}
+            <code
+              style={{ fontSize: 11, color: "var(--fg-secondary)" }}
+              title={s.id}
+            >
+              {s.id.slice(0, 6)}
             </code>
           </div>
         ))}

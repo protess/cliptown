@@ -97,9 +97,14 @@ export function buildAvatarSprite(
   body.circle(0, 0, RADIUS).fill(hueFor(data.startup_id));
   c.addChild(body);
 
-  // Monogram letter
+  // Monogram letter. Operator avatar is special-cased to a star instead of
+  // the literal first char of `__operator__` (which renders as "_").
+  const monoText =
+    data.agent_id === "__operator__"
+      ? "★"
+      : (data.agent_id.slice(0, 1) || "?").toUpperCase();
   const mono = new Text({
-    text: (data.agent_id.slice(0, 1) || "?").toUpperCase(),
+    text: monoText,
     style: {
       fontFamily: "IBM Plex Sans",
       fontSize: 14,
