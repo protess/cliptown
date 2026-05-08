@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 
 /// Phase 0 hard cap on review rounds before the world auto-escalates.
 /// M9 hardening should move this to `cliptown.toml [supervisor] max_review_rounds`.
-const MAX_REVIEW_ROUNDS: u32 = 3;
+pub(crate) const MAX_REVIEW_ROUNDS: u32 = 3;
 
 type HandlerResult = Result<Value, (String, String)>;
 

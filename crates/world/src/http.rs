@@ -121,9 +121,10 @@ async fn ws_worker(ws: WebSocketUpgrade, State(s): State<Arc<AppState>>) -> Resp
 /// tiny (a few startups, dozens of tasks) so the cost is negligible, but
 /// this is a TODO for caching once tick rates climb past a few Hz —
 /// e.g. memoize on `tick_seq` + a cheap "tasks dirty" counter.
-async fn build_console_snapshot(
+pub async fn build_console_snapshot(
     pool: &SqlitePool,
     view: &crate::state::WorldView,
+    max_review_rounds: u32,
 ) -> serde_json::Value {
     // Active startups, plus the most recent system_event ts so the sidebar
     // can flag stale runs at a glance. Falls back to `created_at` when no
@@ -155,16 +156,16 @@ async fn build_console_snapshot(
     // the kanban shows the live work surface without flooding on history.
     let tasks: Vec<serde_json::Value> = sqlx::query_as::<
         _,
-        (String, String, String, String, Option<String>, Option<String>),
+        (String, String, String, String, Option<String>, Option<String>, i64),
     >(
-        "SELECT id, startup_id, title, status, assignee_agent_id, required_room \
+        "SELECT id, startup_id, title, status, assignee_agent_id, required_room, review_round \
          FROM tasks WHERE status NOT IN ('done', 'failed')",
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(id, startup_id, title, status, assignee, required_room)| {
+    .map(|(id, startup_id, title, status, assignee, required_room, review_round)| {
         json!({
             "id": id,
             "startup_id": startup_id,
@@ -172,6 +173,8 @@ async fn build_console_snapshot(
             "status": status,
             "assignee_agent_id": assignee,
             "required_room": required_room,
+            "review_round": review_round,
+            "max_review_rounds": max_review_rounds,
         })
     })
     .collect();
@@ -216,7 +219,7 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
     // already enforced for worker view fans.
     {
         let view = state.handle.view_rx.borrow().clone();
-        let frame = build_console_snapshot(&state.pool, &view).await;
+        let frame = build_console_snapshot(&state.pool, &view, state.max_review_rounds).await;
         if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
             return;
         }
@@ -247,7 +250,7 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
             changed = view_rx.changed() => {
                 if changed.is_err() { break; }
                 let view = view_rx.borrow_and_update().clone();
-                let frame = build_console_snapshot(&state.pool, &view).await;
+                let frame = build_console_snapshot(&state.pool, &view, state.max_review_rounds).await;
                 if sender.send(Message::Text(frame.to_string().into())).await.is_err() {
                     break;
                 }
