@@ -218,6 +218,34 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
     }
   }, [state.avatars, startupId]);
 
+  // Dev-only test hook for Playwright. Lets `e2e/ship-gate.spec.ts § 11.7+`
+  // peek at avatar sprite positions inside the Pixi tree (which is otherwise
+  // opaque to DOM-based assertions). Returns the live screen-pixel position
+  // of `agent_id`'s sprite, or null when the sprite isn't mounted yet.
+  // Tree-shakes away in production builds — `import.meta.env.DEV` is `false`.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const w = window as typeof window & {
+      __cliptownInspectAvatarSprite?: (id: string) => {
+        x: number;
+        y: number;
+        alpha: number;
+      } | null;
+    };
+    w.__cliptownInspectAvatarSprite = (id) => {
+      const s = spritesRef.current.get(id);
+      if (!s) return null;
+      return {
+        x: s.container.position.x,
+        y: s.container.position.y,
+        alpha: s.container.alpha,
+      };
+    };
+    return () => {
+      delete w.__cliptownInspectAvatarSprite;
+    };
+  }, []);
+
   return (
     <div
       ref={hostRef}

@@ -296,4 +296,147 @@ test.describe("ship gate § 11", () => {
     await expect(main.getByText("TASK-ALPHA-WRITE-SPEC")).toHaveCount(0);
     await expect(main.getByText("TASK-ALPHA-RESEARCH")).toHaveCount(0);
   });
+
+  // § 11.3 — A task with required_room: library causes the assignee's avatar
+  // to walk from its suite to the Library along the A* path. Spec § 11.3.
+  //
+  // The full A* + door routing claim lives in the rust-layer
+  // `crates/world/tests/movement.rs`. This UI proof asserts the operator's
+  // visual side: when the world publishes a snapshot with a new `target_pos`
+  // for an agent, the Pixi sprite animates toward that target. Without that
+  // animation, the operator can't see the walk happen and the spec's "watch
+  // it walk" guarantee is invisible.
+  //
+  // Pixi sprites aren't in the DOM, so the assertion uses the dev-only
+  // `__cliptownInspectAvatarSprite` hook (PixiStage.tsx) which returns the
+  // live screen-pixel position of an agent's sprite. The hook tree-shakes
+  // away in production builds.
+  test("§ 11.3 — sprite animates toward target_pos when world publishes a path step", async ({
+    page,
+  }) => {
+    const STARTUP = "abcd1234-abcd-4123-abcd-123456789012";
+    const AGENT = "engr1111-engr-4111-engr-111111111111";
+    const TILE = 20;
+    const HALF = TILE / 2;
+    const initialTile: [number, number] = [3, 3];
+    const targetTile: [number, number] = [15, 10];
+
+    await page.goto(`/town/${STARTUP}`);
+    await stopWS(page);
+
+    // Pixi.Application.init is async — wait for the sprite-inspector hook
+    // and the avatar layer to come online. The hook is a `function` once
+    // PixiStage's effect mounts AND the DEV-only block has wired it up.
+    await page.waitForFunction(
+      () =>
+        typeof (window as unknown as {
+          __cliptownInspectAvatarSprite?: unknown;
+        }).__cliptownInspectAvatarSprite === "function",
+    );
+
+    // Place the agent in suite_1 with no target — sprite should mount at
+    // the centered tile pixel coords.
+    await dispatch(page, {
+      type: "world_view_snapshot",
+      snapshot: {
+        avatars: [
+          {
+            agent_id: AGENT,
+            startup_id: STARTUP,
+            role: "engineer",
+            backend: "claude_code",
+            current_pos: initialTile,
+            target_pos: null,
+            room_id: "suite_1",
+            status: "idle",
+          },
+        ],
+      },
+    });
+
+    // Wait for the sprite to mount and snap to the initial pixel position.
+    const initialPx = {
+      x: initialTile[0] * TILE + HALF,
+      y: initialTile[1] * TILE + HALF,
+    };
+    await page.waitForFunction(
+      ({ id, want }) => {
+        const w = window as unknown as {
+          __cliptownInspectAvatarSprite: (
+            id: string,
+          ) => { x: number; y: number; alpha: number } | null;
+        };
+        const s = w.__cliptownInspectAvatarSprite(id);
+        return (
+          s != null &&
+          Math.abs(s.x - want.x) < 2 &&
+          Math.abs(s.y - want.y) < 2
+        );
+      },
+      { id: AGENT, want: initialPx },
+    );
+
+    // World publishes a movement step — target_pos in the library. The Pixi
+    // ticker (Avatars.tsx interpolatePosition over TICK_DURATION_MS=1000ms)
+    // lerps the sprite from current toward target.
+    await dispatch(page, {
+      type: "world_view_snapshot",
+      snapshot: {
+        avatars: [
+          {
+            agent_id: AGENT,
+            startup_id: STARTUP,
+            role: "engineer",
+            backend: "claude_code",
+            current_pos: initialTile,
+            target_pos: targetTile,
+            room_id: "suite_1",
+            status: "working",
+          },
+        ],
+      },
+    });
+
+    // Sprite must measurably advance past the initial x within the
+    // animation window. This catches the "sprite doesn't animate" failure
+    // mode (e.g., updateAvatarTargets regresses, or the ticker stalls).
+    await page.waitForFunction(
+      ({ id, beyondX }) => {
+        const w = window as unknown as {
+          __cliptownInspectAvatarSprite: (
+            id: string,
+          ) => { x: number; y: number; alpha: number } | null;
+        };
+        const s = w.__cliptownInspectAvatarSprite(id);
+        return s != null && s.x > beyondX;
+      },
+      { id: AGENT, beyondX: initialPx.x + TILE }, // moved at least one full tile
+      { timeout: 3_000 },
+    );
+
+    // After the full TICK_DURATION_MS the sprite should be at (or within
+    // 2px of) the target. Generous tolerance because the lerp is clamped
+    // but headless ticker timing varies.
+    const targetPx = {
+      x: targetTile[0] * TILE + HALF,
+      y: targetTile[1] * TILE + HALF,
+    };
+    await page.waitForFunction(
+      ({ id, want }) => {
+        const w = window as unknown as {
+          __cliptownInspectAvatarSprite: (
+            id: string,
+          ) => { x: number; y: number; alpha: number } | null;
+        };
+        const s = w.__cliptownInspectAvatarSprite(id);
+        return (
+          s != null &&
+          Math.abs(s.x - want.x) < 2 &&
+          Math.abs(s.y - want.y) < 2
+        );
+      },
+      { id: AGENT, want: targetPx },
+      { timeout: 3_000 },
+    );
+  });
 });
