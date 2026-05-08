@@ -429,6 +429,31 @@ export function useConsole(opts: UseConsoleOpts): UseConsoleResult {
     };
   }, [opts.url, opts.operatorToken]);
 
+  // Dev-only test hooks for Playwright. The pair lets `e2e/ship-gate.spec.ts`
+  // take over the store deterministically: `__cliptownStopWS` disconnects the
+  // live world so its snapshots stop racing the test, and `__cliptownDispatch`
+  // injects synthetic ConsoleOutbound frames (snapshots, chat/directive) that
+  // exercise UI surfaces whose world emit path ships later (M5+ owns the
+  // chat/directive frame protocol; ship-gate § 11.7 needs to assert the
+  // ChatPanel rendering NOW). `import.meta.env.DEV` is `false` in production
+  // builds, so this entire block tree-shakes away.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const w = window as typeof window & {
+      __cliptownDispatch?: (msg: unknown) => void;
+      __cliptownStopWS?: () => void;
+    };
+    w.__cliptownDispatch = (msg) => dispatch({ kind: "msg", msg: msg as Msg });
+    w.__cliptownStopWS = () => {
+      clientRef.current?.close();
+      clientRef.current = null;
+    };
+    return () => {
+      delete w.__cliptownDispatch;
+      delete w.__cliptownStopWS;
+    };
+  }, []);
+
   return {
     state,
     send: (msg) => clientRef.current?.send(msg),

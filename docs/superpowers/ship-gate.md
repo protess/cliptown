@@ -13,7 +13,7 @@ proofs for each invariant; Phase 1 lifts each to a Playwright UI proof.
 | 4 | Artifact lands at exact canonical path | M9.4 / M5.4 | `crates/world/tests/e2e_engineer_artifact.rs` | _n/a — filesystem invariant_ |
 | 5 | Epistemic discipline (hypothesis_state → test_record → resolve) | M9.5 / M5.4 | `crates/world/tests/e2e_engineer_artifact.rs` (asserts 3 epistemic_log entries) | _n/a — DB invariant_ |
 | 6 | Review cycle (round++ + max-rounds escalation) | M9.6 / M5.6 | `crates/world/tests/e2e_review_cycle.rs` | _(Phase 1)_ |
-| 7 | Cross-startup chat in cafe (public room) | M9.7 / M7.2 | `crates/world/tests/e2e_cafe.rs` | _(Phase 1)_ |
+| 7 | Cross-startup chat in cafe (public room) | M9.7 / M7.2 | `crates/world/tests/e2e_cafe.rs` (routing) | `packages/frontend/e2e/ship-gate.spec.ts` § 11.7 (rendering) |
 | 8 | Multi-tenant isolation | M9.8 / M6.1 | `crates/world/tests/e2e_isolation.rs` | _(Phase 1)_ |
 | 9 | All 3 adapters complete a task end-to-end | M9.9 / M8.3 | `packages/worker/test/contract.test.ts` (cross-adapter shape) | _real-LLM only — M9.10_ |
 
@@ -31,7 +31,9 @@ cd packages/frontend
 pnpm e2e:install   # one-time
 pnpm e2e
 ```
-6 tests pass: 3 smoke (redirect, status indicator, town back link), 2 keymap regression (input suppression, Esc-dismiss), 1 ship-gate invariant (§ 11.1). Phase 1 lifts the remaining UI-amenable invariants (#2, #3, #6, #7, #8) one PR at a time. #4 and #5 stay rust-only (filesystem / DB invariants); #9 is real-LLM only.
+7 tests pass: 3 smoke (redirect, status indicator, town back link), 2 keymap regression (input suppression, Esc-dismiss), 2 ship-gate invariants (§ 11.1, § 11.7). Phase 1 lifts the remaining UI-amenable invariants (#2, #3, #6, #8) one PR at a time. #4 and #5 stay rust-only (filesystem / DB invariants); #9 is real-LLM only.
+
+UI proofs that need synthetic ConsoleOutbound frames (§ 11.7 today, future cases that surface state ahead of the world emit path) use the dev-only `__cliptownDispatch` / `__cliptownStopWS` hooks installed by `store.ts:useConsole`. Both are `import.meta.env.DEV`-gated and tree-shake away in production builds.
 
 ## Real-LLM run (M9.10)
 
