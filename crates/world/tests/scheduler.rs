@@ -67,7 +67,11 @@ async fn fixture() -> (
 
 #[tokio::test]
 async fn queued_idle_transitions_to_in_progress() {
-    let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    // Codex round-5 P1#1: scheduler now requires a live out_bus entry
+    // before flipping a task to in_progress.
+    let (tx, mut _rx) = mpsc::channel::<serde_json::Value>(8);
+    out_bus.insert("a1".to_string(), tx);
     sqlx::query(
         "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, created_at, updated_at) \
          VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', unixepoch(), unixepoch())",
@@ -146,7 +150,9 @@ async fn required_room_triggers_move_not_dispatch() {
 
 #[tokio::test]
 async fn required_room_already_satisfied_dispatches() {
-    let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (tx, mut _rx) = mpsc::channel::<serde_json::Value>(8);
+    out_bus.insert("a1".to_string(), tx);
     if let Some(a) = w.avatars.get_mut("a1") {
         a.room_id = "library".to_string();
         a.current_pos = (15, 10);
@@ -216,7 +222,9 @@ async fn dispatched_task_pushes_task_assigned_to_out_bus() {
 
 #[tokio::test]
 async fn dispatched_task_writes_audit_trail() {
-    let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (tx, mut _rx) = mpsc::channel::<serde_json::Value>(8);
+    out_bus.insert("a1".to_string(), tx);
     sqlx::query(
         "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, created_at, updated_at) \
          VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', unixepoch(), unixepoch())",
@@ -272,6 +280,59 @@ async fn unreachable_required_room_logs_warn_and_skips_dispatch() {
         .await
         .unwrap();
     assert_eq!(s.0, "queued");
+}
+
+/// Codex round-5 P1#1: scheduler must not flip a task to `in_progress`
+/// unless a live worker channel exists for the assignee. Otherwise the task
+/// wedges in `in_progress` while the worker never receives the assignment.
+#[tokio::test]
+async fn dispatch_skips_when_no_out_bus_entry() {
+    let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;
+    sqlx::query(
+        "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, created_at, updated_at) \
+         VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', unixepoch(), unixepoch())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // out_bus is empty — worker hasn't registered yet.
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    assert_eq!(n, 0);
+    let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(s.0, "queued");
+    // Avatar must remain idle so a future tick can re-attempt dispatch.
+    assert_eq!(w.avatars["a1"].status, "idle");
+}
+
+/// Codex round-5 P1#1: when the worker channel exists but is full at
+/// dispatch time, the scheduler must roll the task back to `queued` and
+/// reset the avatar to `idle` so the next tick retries.
+#[tokio::test]
+async fn dispatch_rolls_back_when_out_bus_full() {
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    // Capacity 1, pre-fill it so try_send returns Full.
+    let (tx, mut _rx) = mpsc::channel::<serde_json::Value>(1);
+    tx.try_send(serde_json::json!({"filler": true})).unwrap();
+    out_bus.insert("a1".to_string(), tx);
+
+    sqlx::query(
+        "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, created_at, updated_at) \
+         VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', unixepoch(), unixepoch())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    assert_eq!(n, 0);
+    let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(s.0, "queued");
+    assert_eq!(w.avatars["a1"].status, "idle");
 }
 
 #[tokio::test]

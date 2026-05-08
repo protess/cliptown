@@ -122,7 +122,18 @@ pub async fn tick(
             }
         }
 
-        // Agent is idle and (if required) already in the right room.
+        // Codex round-5 P1#1: gate the transition on a live delivery target.
+        // Without this, a worker that's still connecting (or that just
+        // disconnected) ends up with a task wedged in `in_progress` in SQL
+        // while no `task_assigned` ever arrives — the scheduler only re-queries
+        // `queued` tasks, so it never re-dispatches. Skip this iteration; the
+        // task stays `queued` and the next tick will retry once the worker
+        // registers.
+        if !out_bus.contains_key(&agent_id) {
+            continue;
+        }
+
+        // Agent is idle, in the right room, and the worker is registered.
         // Transition the task and notify the worker.
         let r = sqlx::query(
             "UPDATE tasks SET status = 'in_progress', updated_at = unixepoch() WHERE id = ?",
@@ -157,20 +168,46 @@ pub async fn tick(
         )
         .await;
 
-        if let Some(tx) = out_bus.get(&agent_id) {
-            let payload = WorkerOutbound::TaskAssigned {
-                v: 1,
-                task_id: task.id.clone(),
-                title: task.title.clone(),
-                description: task.description.clone(),
-                required_room: task.required_room.clone(),
-                parent_id: task.parent_id.clone(),
+        let payload = WorkerOutbound::TaskAssigned {
+            v: 1,
+            task_id: task.id.clone(),
+            title: task.title.clone(),
+            description: task.description.clone(),
+            required_room: task.required_room.clone(),
+            parent_id: task.parent_id.clone(),
+        };
+        let payload_json = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
+        // The contains_key check above is racy w.r.t. a worker disconnect
+        // between then and now; treat a missing entry the same as a closed
+        // channel and roll back.
+        let send_result = match out_bus.get(&agent_id) {
+            Some(tx) => tx.try_send(payload_json),
+            None => Err(tokio::sync::mpsc::error::TrySendError::Closed(json!({}))),
+        };
+        if let Err(err) = send_result {
+            // Channel full or closed — roll back the SQL transition and the
+            // in-memory avatar status so the next tick re-attempts dispatch.
+            let kind = match err {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => "full",
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => "closed",
             };
-            let payload_json = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
-            if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx.try_send(payload_json)
-            {
-                tracing::warn!(component = "scheduler", agent_id = %agent_id, "out_bus full, dropping task_assigned");
+            let _ = sqlx::query(
+                "UPDATE tasks SET status = 'queued', updated_at = unixepoch() WHERE id = ?",
+            )
+            .bind(&task.id)
+            .execute(pool)
+            .await;
+            if let Some(a) = world.avatars.get_mut(&agent_id) {
+                a.status = "idle".to_string();
             }
+            tracing::warn!(
+                component = "scheduler",
+                agent_id = %agent_id,
+                task_id = %task.id,
+                reason = kind,
+                "out_bus delivery failed, rolled back to queued"
+            );
+            continue;
         }
         dispatched += 1;
     }

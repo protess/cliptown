@@ -277,6 +277,22 @@ async fn handle_move_intent(
             let cy = room_def.bounds.1 + room_def.bounds.3 / 2;
             (r.to_string(), cx, cy)
         }
+        (None, Some(t)) => {
+            // Codex round-5 P2#3: tile-only — move within the caller's
+            // current room. The spec allows omitting `target_room` when the
+            // agent just wants to walk to a different tile in the same room.
+            let x = t
+                .get("x")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| ("bad_args".to_string(), "target_tile.x missing".to_string()))?
+                as i32;
+            let y = t
+                .get("y")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| ("bad_args".to_string(), "target_tile.y missing".to_string()))?
+                as i32;
+            (caller.room_id.clone(), x, y)
+        }
         _ => {
             return Err((
                 "bad_args".to_string(),
@@ -614,6 +630,34 @@ async fn handle_subtask_create(
 
     // Non-managers can't pick the assignee — null it out (spec §6.2).
     let assignee = if is_manager { requested_assignee } else { None };
+    // Codex round-5 P1#2: when the manager picks an explicit assignee, that
+    // agent must belong to the caller's startup. Same bug class as round-3
+    // P2#4 (accept_proposal) — without this gate the scheduler would dispatch
+    // the foreign task to the wrong-startup worker, and `task_done` would
+    // later reject it cross-startup, wedging the task forever.
+    if let Some(aid) = assignee.as_deref() {
+        let r: Option<(String,)> =
+            sqlx::query_as("SELECT startup_id FROM agents WHERE id = ?")
+                .bind(aid)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| ("sql".to_string(), e.to_string()))?;
+        let assignee_sid = match r {
+            Some((s,)) => s,
+            None => {
+                return Err((
+                    "unknown_assignee".into(),
+                    "no such agent".into(),
+                ));
+            }
+        };
+        if assignee_sid != caller.startup_id {
+            return Err((
+                "cross_startup".into(),
+                "assignee in different startup".into(),
+            ));
+        }
+    }
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO tasks (id, startup_id, parent_id, title, description, status, \

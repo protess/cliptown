@@ -293,14 +293,24 @@ function reducer(state: WorldState, action: Action): WorldState {
       // the field is non-null.
       const snap = asObject(m.snapshot) ?? {};
       const avatars = indexAvatars(snap.avatars);
-      const startups = indexStartups(snap.startups);
-      const tasks = indexTasks(snap.tasks);
       const catalog = asObject(snap.backend_catalog) ?? {};
+      // Codex round-5 P2#4: distinguish "field absent" (preserve previous
+      // state) from "field present but empty" (clear). The previous code
+      // collapsed both cases via `Object.keys(...).length > 0`, so a
+      // last-task-terminal or last-startup-dissolved snapshot left ghost
+      // entries in the UI forever. Only fall back to previous state when
+      // the snapshot genuinely omits the field.
+      const startupsField = (snap as Record<string, unknown>).startups;
+      const tasksField = (snap as Record<string, unknown>).tasks;
+      const startups =
+        startupsField === undefined ? state.startups : indexStartups(startupsField);
+      const tasks =
+        tasksField === undefined ? state.tasks : indexTasks(tasksField);
       return {
         ...state,
         avatars,
-        startups: Object.keys(startups).length > 0 ? startups : state.startups,
-        tasks: Object.keys(tasks).length > 0 ? tasks : state.tasks,
+        startups,
+        tasks,
         backendCatalog: catalog,
       };
     }

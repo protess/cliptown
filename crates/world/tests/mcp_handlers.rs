@@ -168,6 +168,25 @@ async fn move_intent_starts_path() {
     assert!(fx.paths.contains_key("e1"));
 }
 
+/// Codex round-5 P2#3: tile-only `move_intent` (no `target_room`) must walk
+/// the caller within their current room. e1 starts at (4, 3) in suite_1
+/// and asks to move to (3, 3) in the same room.
+#[tokio::test]
+async fn move_intent_tile_only_uses_current_room() {
+    let mut fx = fixture().await;
+    let r = fx
+        .call(
+            "e1",
+            "move_intent",
+            json!({"target_tile": {"x": 3, "y": 3}}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_reply", "{r}");
+    assert_eq!(r["result"]["target_room"], "suite_1");
+    assert_eq!(r["result"]["target_tile"]["x"], 3);
+    assert_eq!(r["result"]["target_tile"]["y"], 3);
+}
+
 #[tokio::test]
 async fn move_intent_rejects_foreign_suite() {
     let mut fx = fixture().await;
@@ -820,6 +839,58 @@ async fn accept_proposal_with_cross_startup_assignee_rejected() {
     // The fixture seeds T1.assignee_agent_id = "e1"; the guard rejected the
     // attempted reassignment before any UPDATE ran, so it must still be e1.
     assert_eq!(row.1.as_deref(), Some("e1"));
+}
+
+/// Codex round-5 P1#2: when a manager creates a subtask with an explicit
+/// `assignee_agent_id`, that agent must belong to the caller's startup.
+/// Same bug class as round-3 P2#4 (accept_proposal). Without this gate the
+/// scheduler would dispatch the foreign task to the wrong-startup worker
+/// and `task_done` would later reject it cross-startup, wedging the task.
+#[tokio::test]
+async fn subtask_create_with_cross_startup_assignee_rejected() {
+    let mut fx = fixture().await;
+    // m1 (s1) tries to create a subtask under s1's parent T0 but assigns
+    // it to e2 (s2). Should be refused with `cross_startup` and no row
+    // should land in tasks.
+    let r = fx
+        .call(
+            "m1",
+            "subtask_create",
+            json!({"parent_id":"T0","title":"k","description":"d","assignee_agent_id":"e2"}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_error", "{r}");
+    assert_eq!(r["code"], "cross_startup", "{r}");
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM tasks WHERE parent_id = 'T0' AND title = 'k'",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(count.0, 0);
+}
+
+/// Codex round-5 P1#2 sibling: an unknown assignee_agent_id on subtask_create
+/// is rejected before any INSERT runs.
+#[tokio::test]
+async fn subtask_create_with_unknown_assignee_rejected() {
+    let mut fx = fixture().await;
+    let r = fx
+        .call(
+            "m1",
+            "subtask_create",
+            json!({"parent_id":"T0","title":"k","description":"d","assignee_agent_id":"ghost"}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_error", "{r}");
+    assert_eq!(r["code"], "unknown_assignee", "{r}");
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM tasks WHERE parent_id = 'T0' AND title = 'k'",
+    )
+    .fetch_one(&fx.pool)
+    .await
+    .unwrap();
+    assert_eq!(count.0, 0);
 }
 
 /// Sibling guard: an unknown assignee_agent_id is rejected before any
