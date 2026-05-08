@@ -102,7 +102,7 @@ export function TownTopBar({ startupId }: { startupId: string }) {
         <div>
           <div style={{ fontWeight: 600 }}>{s?.name ?? startupId}</div>
           <div style={{ fontSize: 11, color: "var(--fg-secondary)" }}>
-            <code>{startupId}</code>
+            <code title={startupId}>{startupId.slice(0, 6)}</code>
           </div>
         </div>
       </div>
