@@ -145,6 +145,51 @@ async fn broadcasts_on_peer_chat() {
 }
 
 #[tokio::test]
+async fn broadcasts_on_peer_directive() {
+    use cliptown_world::{mcp_dispatch, move_sys, path::RoomGraph, seed::TownLayout, state::AvatarView};
+
+    let mut ctx = TestCtx::new().await;
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp', 'active', unixepoch())"
+    ).execute(&ctx.pool).await.unwrap();
+    sqlx::query("INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status, manager_id) VALUES ('mgr', 's1', 'M', 'founder', 'claude_code', 'm', '{}', 'suite_1', 'idle', NULL)")
+        .execute(&ctx.pool).await.unwrap();
+    sqlx::query("INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status, manager_id) VALUES ('eng', 's1', 'E', 'engineer', 'claude_code', 'm', '{}', 'suite_1', 'idle', 'mgr')")
+        .execute(&ctx.pool).await.unwrap();
+
+    let mut w = cliptown_world::state::WorldView::default();
+    w.avatars.insert("mgr".into(), AvatarView {
+        agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
+        backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
+        room_id: "suite_1".into(), status: "idle".into(),
+    });
+
+    let layout = TownLayout::default_town();
+    let graph: RoomGraph = move_sys::graph_from_layout(&layout);
+    let mut paths = std::collections::HashMap::new();
+
+    let r = mcp_dispatch::dispatch(
+        &mut w, &mut paths, &layout, &graph, &ctx.out_bus, &ctx.pool, &ctx.event_tx,
+        "mgr",
+        serde_json::json!({
+            "type": "mcp_call", "v": 1, "tool": "speak", "corr_id": "c1",
+            "args": { "kind": "directive", "to_agent_id": "eng", "body": "do the thing" }
+        }),
+    ).await;
+    assert_eq!(r["type"], "mcp_reply", "directive should succeed: {r}");
+
+    let frame = ctx.expect_one_broadcast();
+    let cliptown_world::protocol::ConsoleOutbound::Directive {
+        author_id, to_agent_id, body, in_response_to_task, ..
+    } = frame else { panic!("expected Directive") };
+    assert_eq!(author_id, "mgr");
+    assert_eq!(to_agent_id, "eng");
+    assert_eq!(body, "do the thing");
+    assert_eq!(in_response_to_task, None);
+}
+
+#[tokio::test]
 async fn no_broadcast_on_unknown_recipient() {
     let mut ctx = TestCtx::new().await;
     let mut w = cliptown_world::state::WorldView::default();

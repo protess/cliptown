@@ -452,6 +452,18 @@ async fn handle_speak(
                 "body":body
             }));
         }
+        // Broadcast a Directive frame to operator consoles (god view).
+        // rid is non-empty because the early-validate above returns Err otherwise.
+        let _ = event_tx.send(crate::protocol::ConsoleOutbound::Directive {
+            v: 1,
+            message_id: id.clone(),
+            ts: chrono::Utc::now().timestamp_millis(),
+            startup_id: caller.startup_id.clone(),
+            author_id: caller.agent_id.clone(),
+            to_agent_id: rid.to_string(),
+            body: body.clone(),
+            in_response_to_task: None,
+        });
     }
 
     Ok(json!({"message_id": id}))

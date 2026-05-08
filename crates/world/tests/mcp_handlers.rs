@@ -281,7 +281,18 @@ async fn speak_directive_requires_manager_relationship() {
     assert_eq!(r["type"], "mcp_reply", "{r}");
     let evts = fx.drain("e1");
     assert_eq!(evts[0]["type"], "directive");
-    fx.expect_no_broadcasts();
+    // Operator console should receive a Directive broadcast.
+    match fx._event_rx.try_recv() {
+        Ok(cliptown_world::protocol::ConsoleOutbound::Directive {
+            author_id, to_agent_id, body, in_response_to_task, ..
+        }) => {
+            assert_eq!(author_id, "m1");
+            assert_eq!(to_agent_id, "e1");
+            assert_eq!(body, "go");
+            assert_eq!(in_response_to_task, None);
+        }
+        other => panic!("expected Directive frame, got {:?}", other),
+    }
 }
 
 #[tokio::test]
