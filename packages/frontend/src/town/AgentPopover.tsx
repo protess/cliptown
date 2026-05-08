@@ -12,7 +12,7 @@
  *   - Click-outside (overlay) and Escape both close the popover.
  *   - Enter inside the input submits a directive and closes.
  */
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 import type { AvatarVM, TaskVM } from "../store.js";
 
@@ -41,6 +41,19 @@ export function AgentPopover({ agentId, anchorX, anchorY, onClose }: AgentPopove
   const [draft, setDraft] = useState("");
   const op = state.avatars[OPERATOR_AVATAR_ID];
   const possessing = !!op;
+  // Imperative focus: React's `autoFocus` doesn't reliably move focus when the
+  // popover mounts inside a `position: fixed` overlay above a Pixi canvas
+  // (the canvas's pointerdown handler asserts focus on the canvas element,
+  // and useEffect fires before that finishes). Defer with rAF to let layout +
+  // any in-flight focus events settle, then take focus.
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (!possessing) return;
+    const id = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [possessing]);
 
   // Find a current task assigned to this agent (in_progress > queued).
   const currentTask: TaskVM | undefined = Object.values(state.tasks).find(
@@ -147,6 +160,7 @@ export function AgentPopover({ agentId, anchorX, anchorY, onClose }: AgentPopove
         {possessing ? (
           <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
             <input
+              ref={inputRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -155,7 +169,6 @@ export function AgentPopover({ agentId, anchorX, anchorY, onClose }: AgentPopove
               placeholder="Directive…"
               style={inputStyle}
               aria-label="Directive body"
-              autoFocus
             />
             <button
               onClick={sendDirective}

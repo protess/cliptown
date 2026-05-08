@@ -9,8 +9,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
+      # `version` is sourced from package.json's `packageManager` field.
+      # Specifying it here too triggers ERR_PNPM_BAD_PM_VERSION in v4.
       - uses: pnpm/action-setup@v4
-        with: { version: 9 }
       - run: pnpm install --frozen-lockfile
       - name: Enforce log shape
         run: |
