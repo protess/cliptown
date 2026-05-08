@@ -7,6 +7,13 @@ fn make_event_tx() -> tokio::sync::broadcast::Sender<cliptown_world::protocol::C
     tokio::sync::broadcast::channel(64).0
 }
 
+fn make_event_channel() -> (
+    tokio::sync::broadcast::Sender<cliptown_world::protocol::ConsoleOutbound>,
+    tokio::sync::broadcast::Receiver<cliptown_world::protocol::ConsoleOutbound>,
+) {
+    tokio::sync::broadcast::channel(64)
+}
+
 async fn fixture() -> (sqlx::SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("test.db");
@@ -68,10 +75,11 @@ async fn clean_exit_does_not_respawn() {
 #[tokio::test]
 async fn crash_respawns_with_backoff_then_alerts() {
     let (pool, _dir) = fixture().await;
+    let (event_tx, mut event_rx) = make_event_channel();
     let sup = Arc::new(AgentSupervisor::new(
         config_for("fake_worker_crash.sh"),
         pool.clone(),
-        make_event_tx(),
+        event_tx,
     ));
     sup.spawn_agent(spawn_cfg("a2", "s1")).await.unwrap();
     // 1 initial + 3 retries with backoff [10,20,30]ms ≈ 60ms backoff +
@@ -86,6 +94,14 @@ async fn crash_respawns_with_backoff_then_alerts() {
     .unwrap();
     assert_eq!(count.0, 1, "supervisor should emit one worker_dead alert");
     assert_eq!(sup.agent_count().await, 0, "agent should be removed after exhaustion");
+
+    // Verify the worker_dead SystemEvent broadcast reaches operator consoles.
+    let frame = event_rx.try_recv().expect("expected SystemEvent broadcast for worker_dead");
+    let cliptown_world::protocol::ConsoleOutbound::SystemEvent { kind, severity, .. } = frame else {
+        panic!("expected SystemEvent, got {:?}", frame);
+    };
+    assert_eq!(kind, "worker_dead");
+    assert_eq!(severity, "alert");
 }
 
 #[tokio::test]
