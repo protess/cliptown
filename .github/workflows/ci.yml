@@ -21,5 +21,7 @@ jobs:
         run: pnpm test:rust
       - name: TS tests
         run: pnpm test:ts
+      - name: Install Playwright browsers
+        run: pnpm --filter @cliptown/frontend e2e:install
       - name: E2E (mocked LLM)
         run: pnpm test:e2e

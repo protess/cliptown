@@ -200,8 +200,7 @@ pub async fn tick(
             if let Some(a) = world.avatars.get_mut(&agent_id) {
                 a.status = "idle".to_string();
             }
-            tracing::warn!(
-                component = "scheduler",
+            tracing::warn!(component = "scheduler",
                 agent_id = %agent_id,
                 task_id = %task.id,
                 reason = kind,
