@@ -1,0 +1,54 @@
+[package]
+name = "cliptown-world"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+ts-rs.workspace = true
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+uuid = { version = "1", features = ["v4"] }
+toml = "0.8"
+rand = "0.8"
+axum = { version = "0.7", features = ["ws", "json"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+hyper = "1"
+pathfinding = "=4.14.0"
+unicode-normalization = "0.1"
+futures-util = "0.3"
+libc = "0.2"
+
+[build-dependencies]
+ts-rs.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+cliptown-world = { path = ".", features = ["test_det"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
+tokio-tungstenite = "0.24"
+proptest = "1"
+criterion = "0.5"
+
+[features]
+_ts_export = []
+test_det = []
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cliptown-world"
+path = "src/main.rs"
+
+[[bench]]
+name = "world_bench"
+harness = false

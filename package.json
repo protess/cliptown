@@ -1,0 +1,16 @@
+{
+  "name": "cliptown",
+  "private": true,
+  "scripts": {
+    "build:rust": "cargo build --workspace && cargo test -p cliptown-world --lib -- --ignored ts_rs_export",
+    "build:ts": "pnpm -r --filter '!@cliptown/frontend' build && pnpm --filter @cliptown/frontend build",
+    "build": "pnpm build:rust && pnpm build:ts",
+    "test:rust": "cargo test --workspace",
+    "test:ts": "pnpm -r test",
+    "test": "pnpm build:rust && pnpm build:ts && pnpm test:rust && pnpm test:ts",
+    "test:e2e": "pnpm --filter @cliptown/frontend e2e",
+    "dev": "concurrently -n world,frontend 'cargo run -p cliptown-world' 'pnpm --filter @cliptown/frontend dev'"
+  },
+  "devDependencies": { "concurrently": "^9", "playwright": "^1" },
+  "packageManager": "pnpm@9.0.0"
+}

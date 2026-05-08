@@ -1,0 +1,8 @@
+[alias]
+ts-export = "test -p cliptown-world --lib --features _ts_export -- --ignored ts_rs_export"
+
+# ts-rs `export_to` paths are interpreted relative to TS_RS_EXPORT_DIR (default
+# `./bindings`). Anchor it at `crates/world/` so the `../../packages/protocol/dist/`
+# attribute on each TS-derived type resolves to <repo>/packages/protocol/dist/.
+[env]
+TS_RS_EXPORT_DIR = { value = "crates/world", relative = true }

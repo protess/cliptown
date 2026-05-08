@@ -1,0 +1,52 @@
+name: E2E Real LLM
+
+on:
+  workflow_dispatch:
+    inputs:
+      budget_cap_usd:
+        description: "Per-run budget cap in USD"
+        required: true
+        default: "0.50"
+        type: string
+
+concurrency:
+  group: e2e-real-llm
+  cancel-in-progress: false
+
+jobs:
+  e2e-real:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      E2E_LLM: real
+      E2E_BUDGET_CAP_USD: ${{ inputs.budget_cap_usd }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.86.0
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@9 --activate
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Build rust
+        run: cargo build --workspace --release
+      - name: Build TS
+        run: pnpm -r build
+      - name: Run E2E real-LLM
+        run: |
+          set -e
+          # The actual real-LLM E2E runner is wired in Phase 1 (M5+ infrastructure).
+          # For Phase 0 the workflow exists as the manual gate; the runner step
+          # below validates the budget cap is enforced by aborting if it's <= 0.
+          if [ -z "$E2E_BUDGET_CAP_USD" ] || [ "$(echo "$E2E_BUDGET_CAP_USD <= 0" | bc -l)" = "1" ]; then
+            echo "::error::Invalid budget cap"
+            exit 1
+          fi
+          echo "Real-LLM E2E placeholder — runner lands in Phase 1"
+          echo "Budget cap: \$$E2E_BUDGET_CAP_USD"

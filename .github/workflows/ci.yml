@@ -1,0 +1,27 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - run: pnpm install --frozen-lockfile
+      - name: Enforce log shape
+        run: |
+          ! rg -n 'tracing::(info|warn|error)' crates/ | rg -v 'component\s*=' || (echo "Missing component= field" && exit 1)
+      - name: Build (Rust → TS)
+        run: pnpm build
+      - name: Rust tests
+        run: pnpm test:rust
+      - name: TS tests
+        run: pnpm test:ts
+      - name: Install Playwright browsers
+        run: pnpm --filter @cliptown/frontend e2e:install
+      - name: E2E (mocked LLM)
+        run: pnpm test:e2e

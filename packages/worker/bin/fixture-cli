@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Wrapper that runs the TS fixture CLI through tsx. Used by M3.3 contract tests
+# as the `bin` for claudeCodeAdapter.spawn().
+exec "$(dirname "$0")/../node_modules/.bin/tsx" "$(dirname "$0")/../src/fixture-cli.ts" "$@"

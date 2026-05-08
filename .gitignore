@@ -1,1 +1,18 @@
 .superpowers/
+target/
+node_modules/
+dist/
+!packages/protocol/dist/
+packages/protocol/dist/*
+!packages/protocol/dist/.gitkeep
+# ts-rs writes the serde_json::Value bridge type next to the export root.
+crates/world/serde_json/
+crates/world/bindings/
+workspaces/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
+playwright-report/
+test-results/

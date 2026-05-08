@@ -1,0 +1,11 @@
+{
+  "_comment": "Phase 0 baselines. Real values populate after first stable CI run; until then, bench job logs only.",
+  "version": 1,
+  "tolerance_pct": 20,
+  "metrics": {
+    "world.tick_latency_us": { "baseline": null, "unit": "us" },
+    "world.mpsc_throughput_msgs_per_sec": { "baseline": null, "unit": "msgs/s" },
+    "frontend.console_fcp_ms": { "baseline": null, "unit": "ms", "ceiling": 300 },
+    "frontend.town_fcp_ms": { "baseline": null, "unit": "ms", "ceiling": 500 }
+  }
+}
