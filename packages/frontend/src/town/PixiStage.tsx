@@ -54,6 +54,7 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
   // Initialize Pixi once.
   useEffect(() => {
     let cancelled = false;
+    let initDone = false;
     const app = new Application();
     appRef.current = app;
     app
@@ -66,7 +67,13 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
         resolution: window.devicePixelRatio || 1,
       })
       .then(() => {
-        if (cancelled) return;
+        initDone = true;
+        if (cancelled) {
+          // Cleanup already ran while init was in flight (React 18 StrictMode
+          // double-mount). Now that init is done, tear the app down.
+          try { app.destroy(true, { children: true, texture: true }); } catch { /* noop */ }
+          return;
+        }
         hostRef.current?.appendChild(app.canvas);
 
         // worldRoot is the container we scale for the possess camera ease.
@@ -137,9 +144,13 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
       });
     return () => {
       cancelled = true;
-      // Pixi 8: destroy the app + GPU resources. `texture: true` evicts
-      // textures we created (the rooms/doors graphics).
-      app.destroy(true, { children: true, texture: true });
+      // Pixi 8: only destroy if init() finished. Calling destroy() before
+      // init() resolves throws `this._cancelResize is not a function`
+      // because internal resize state hasn't been wired yet. The init then
+      // sees cancelled=true and tears the app down itself.
+      if (initDone) {
+        try { app.destroy(true, { children: true, texture: true }); } catch { /* noop */ }
+      }
       appRef.current = null;
       spritesRef.current.clear();
       avatarLayerRef.current = null;

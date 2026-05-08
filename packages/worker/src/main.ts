@@ -137,12 +137,14 @@ async function main(): Promise<void> {
   const proxy = createMcpProxy(handle);
   const workspaceRoot = pathResolve(args.workspace);
 
-  // Inbound frame logger (Phase 0): just print non-MCP frames so we see
-  // task_assigned, directive, move_complete, etc. The MCP correlation layer
-  // already filters mcp_reply/mcp_error by corr_id.
+  // Inbound frame logger (Phase 0): print non-MCP, non-heartbeat frames so we
+  // see task_assigned, directive, move_complete, etc. The MCP correlation layer
+  // already filters mcp_reply/mcp_error by corr_id. Heartbeat-style frames
+  // (proximity_tick at 1Hz) would drown the actual control events.
+  const HEARTBEAT_TYPES = new Set(["proximity_tick", "mcp_reply", "mcp_error"]);
   handle.onMessage((m) => {
-    const o = m as { type?: string; corr_id?: string };
-    if (typeof o?.type === "string" && o.type !== "mcp_reply" && o.type !== "mcp_error") {
+    const o = m as { type?: string };
+    if (typeof o?.type === "string" && !HEARTBEAT_TYPES.has(o.type)) {
       console.log(`[worker] inbound: ${JSON.stringify(o)}`);
     }
   });
