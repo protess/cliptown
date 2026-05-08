@@ -243,7 +243,18 @@ async fn speak_chat_fans_to_room_peers() {
         .await
         .unwrap();
     assert_eq!(count.0, 1);
-    fx.expect_no_broadcasts();
+    // Operator console should receive a Chat broadcast.
+    match fx._event_rx.try_recv() {
+        Ok(cliptown_world::protocol::ConsoleOutbound::Chat {
+            startup_id, room_id, author_id, body, ..
+        }) => {
+            assert_eq!(startup_id, "s1");
+            assert_eq!(room_id, "suite_1");
+            assert_eq!(author_id, "e1");
+            assert_eq!(body, "hi");
+        }
+        other => panic!("expected Chat frame, got {:?}", other),
+    }
 }
 
 #[tokio::test]

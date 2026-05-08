@@ -350,7 +350,6 @@ async fn handle_speak(
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
-    let _ = event_tx;
     let body = require_str(&args, "body")?.to_string();
     let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("chat");
     let to_agent_id = args
@@ -435,6 +434,16 @@ async fn handle_speak(
                 }));
             }
         }
+        // Broadcast a Chat frame to operator consoles (god view).
+        let _ = event_tx.send(crate::protocol::ConsoleOutbound::Chat {
+            v: 1,
+            message_id: id.clone(),
+            ts: chrono::Utc::now().timestamp_millis(),
+            startup_id: caller.startup_id.clone(),
+            room_id: caller.room_id.clone(),
+            author_id: caller.agent_id.clone(),
+            body: body.clone(),
+        });
     } else if let Some(rid) = to_agent_id.as_deref() {
         if let Some(tx) = out_bus.get(rid) {
             let _ = tx.try_send(json!({

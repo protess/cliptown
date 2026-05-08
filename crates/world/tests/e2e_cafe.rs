@@ -115,7 +115,17 @@ async fn cross_startup_chat_in_cafe_delivered() {
     assert_eq!(chat["from_agent_id"], "alpha_eng");
     assert_eq!(chat["body"], "anyone tried mdast?");
     assert_eq!(chat["room_id"], "cafe");
-    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
+    match event_rx.try_recv() {
+        Ok(ConsoleOutbound::Chat {
+            startup_id, room_id, author_id, body, ..
+        }) => {
+            assert_eq!(startup_id, "alpha");
+            assert_eq!(room_id, "cafe");
+            assert_eq!(author_id, "alpha_eng");
+            assert_eq!(body, "anyone tried mdast?");
+        }
+        other => panic!("expected Chat frame, got {:?}", other),
+    }
 }
 
 #[tokio::test]
@@ -164,7 +174,19 @@ async fn cross_startup_chat_in_suite_blocked() {
         recv_result.is_err(),
         "private-room chat should not cross startups; got {recv_result:?}"
     );
-    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
+    // Chat frame is still emitted to operator consoles even for private-room
+    // messages — operators have god-view visibility.
+    match event_rx.try_recv() {
+        Ok(ConsoleOutbound::Chat {
+            startup_id, room_id, author_id, body, ..
+        }) => {
+            assert_eq!(startup_id, "alpha");
+            assert_eq!(room_id, "suite_1");
+            assert_eq!(author_id, "alpha_eng");
+            assert_eq!(body, "secret");
+        }
+        other => panic!("expected Chat frame, got {:?}", other),
+    }
 }
 
 #[tokio::test]
@@ -213,5 +235,15 @@ async fn same_startup_chat_in_cafe_still_works() {
         .expect("alpha_des should receive chat");
     assert_eq!(chat["type"], "chat_received");
     assert_eq!(chat["body"], "hi team");
-    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
+    match event_rx.try_recv() {
+        Ok(ConsoleOutbound::Chat {
+            startup_id, room_id, author_id, body, ..
+        }) => {
+            assert_eq!(startup_id, "alpha");
+            assert_eq!(room_id, "cafe");
+            assert_eq!(author_id, "alpha_eng");
+            assert_eq!(body, "hi team");
+        }
+        other => panic!("expected Chat frame, got {:?}", other),
+    }
 }
