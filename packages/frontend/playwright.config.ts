@@ -11,10 +11,23 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
-    command: "pnpm dev",
-    url: "http://127.0.0.1:5173",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  // Two servers: the rust world (MUST be up before vite, since vite proxies
+  // /ws and /api to :8080) and the vite dev server. `reuseExistingServer`
+  // keeps the local dev experience nice — if you already have `pnpm dev`
+  // running at the repo root, playwright reuses both processes.
+  webServer: [
+    {
+      command: "cargo run -p cliptown-world",
+      cwd: "../..",
+      url: "http://127.0.0.1:8080/health",
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+    {
+      command: "pnpm dev",
+      url: "http://127.0.0.1:5173",
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+  ],
 });
