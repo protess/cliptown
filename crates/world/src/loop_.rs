@@ -91,7 +91,8 @@ pub fn spawn_with_layout(
     // of the process.
     let mut layout = layout;
 
-    let _event_tx_owned = event_tx.clone();
+    let event_tx_for_handle = event_tx.clone();  // retained for Handle return value
+    let event_tx_owned = event_tx;  // moved into the spawn task; Task 5
     tokio::spawn(async move {
         while let Some(cmd) = rx.recv().await {
             match cmd {
@@ -122,13 +123,14 @@ pub fn spawn_with_layout(
                     let _ = view_tx.send(w.clone());
                 }
                 Cmd::HandleConsoleMsg { msg, reply } => {
-                    let result = crate::cmd_console::dispatch(&mut w, &pool, &out_bus, msg).await;
+                    let result = crate::cmd_console::dispatch(&mut w, &pool, &out_bus, &event_tx_owned, msg).await;
                     let _ = view_tx.send(w.clone());
                     let _ = reply.send(result);
                 }
                 Cmd::HandleWorkerMsg { agent_id, msg, reply } => {
                     let result = crate::cmd_worker::dispatch(
-                        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, &agent_id, msg,
+                        &mut w, &mut paths, &layout, &graph, &out_bus, &pool,
+                        &event_tx_owned, &agent_id, msg,
                     )
                     .await;
                     let _ = view_tx.send(w.clone());
@@ -187,6 +189,6 @@ pub fn spawn_with_layout(
         }
     });
 
-    Handle { tx, view_rx, event_tx }
+    Handle { tx, view_rx, event_tx: event_tx_for_handle }
 }
 

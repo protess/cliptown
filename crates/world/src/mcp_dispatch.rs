@@ -43,6 +43,7 @@ pub async fn dispatch(
     graph: &RoomGraph,
     out_bus: &HashMap<String, mpsc::Sender<Value>>,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     agent_id: &str,
     msg: Value,
 ) -> Value {
@@ -69,12 +70,12 @@ pub async fn dispatch(
         "move_intent" => {
             handle_move_intent(world, paths, layout, graph, pool, &caller, args).await
         }
-        "speak" => handle_speak(world, out_bus, pool, &caller, args).await,
+        "speak" => handle_speak(world, out_bus, pool, event_tx, &caller, args).await,
         "task_done" => handle_task_done(world, out_bus, pool, &caller, args).await,
         "task_failed" => handle_task_failed(world, pool, &caller, args).await,
         "subtask_create" => handle_subtask_create(out_bus, pool, &caller, args).await,
         "task_accept" => handle_task_accept(out_bus, pool, &caller, args).await,
-        "task_request_changes" => handle_task_request_changes(out_bus, pool, &caller, args).await,
+        "task_request_changes" => handle_task_request_changes(out_bus, pool, event_tx, &caller, args).await,
         "accept_proposal" => handle_accept_proposal(pool, &caller, args).await,
         "reject_proposal" => handle_reject_proposal(pool, &caller, args).await,
         "hypothesis_state" => handle_epistemic_append(pool, &caller, args, "hypothesis_state").await,
@@ -345,9 +346,11 @@ async fn handle_speak(
     world: &WorldView,
     out_bus: &HashMap<String, mpsc::Sender<Value>>,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
+    let _ = event_tx;
     let body = require_str(&args, "body")?.to_string();
     let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("chat");
     let to_agent_id = args
@@ -764,9 +767,11 @@ async fn handle_task_accept(
 async fn handle_task_request_changes(
     out_bus: &HashMap<String, mpsc::Sender<Value>>,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
+    let _ = event_tx;
     let task_id = require_str(&args, "task_id")?.to_string();
     let feedback = require_str(&args, "feedback")?.to_string();
     let task = load_task(pool, &task_id).await?;

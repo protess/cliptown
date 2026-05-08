@@ -20,16 +20,18 @@ pub async fn dispatch(
     graph: &RoomGraph,
     out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     agent_id: &str,
     msg: serde_json::Value,
 ) -> serde_json::Value {
+    let _ = event_tx;
     // M2.3: MCP frames have their own envelope (`mcp_call` → `mcp_reply` /
     // `mcp_error`) and are dispatched by `mcp_dispatch`. Sniffing the type
     // first means the existing `WorkerInbound` deserializer doesn't have to
     // know about every MCP tool variant.
     if msg.get("type") == Some(&serde_json::Value::String("mcp_call".to_string())) {
         return crate::mcp_dispatch::dispatch(
-            world, paths, layout, graph, out_bus, pool, agent_id, msg,
+            world, paths, layout, graph, out_bus, pool, event_tx, agent_id, msg,
         )
         .await;
     }

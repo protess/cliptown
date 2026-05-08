@@ -109,6 +109,7 @@ async fn directive_to_founder_then_subtask_then_assigned() {
         .insert("des1".to_string(), av("des1", "designer", "suite_1"));
 
     let mut paths: PathStore = HashMap::new();
+    let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
 
     // Mock workers: tx into out_bus, hold rx ends to assert delivery.
     let mut out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
@@ -124,6 +125,7 @@ async fn directive_to_founder_then_subtask_then_assigned() {
         &mut w,
         &pool,
         &out_bus,
+        &event_tx,
         json!({
             "type": "operator_directive",
             "v": 1,
@@ -163,6 +165,7 @@ async fn directive_to_founder_then_subtask_then_assigned() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "founder1",
         json!({
             "type": "mcp_call",
@@ -210,4 +213,15 @@ async fn directive_to_founder_then_subtask_then_assigned() {
 
     // Engineer avatar is flagged busy in-memory (scheduler invariant).
     assert_eq!(w.avatars["eng1"].status, "working");
+
+    let mut found = Vec::new();
+    loop {
+        match event_rx.try_recv() {
+            Ok(frame) => found.push(frame),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+        }
+    }
+    assert!(found.is_empty(), "expected no console broadcasts, found {}: {:?}", found.len(), found);
 }

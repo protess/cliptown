@@ -15,17 +15,20 @@
 //! load-bearing one — but we keep the SQL aligned so any future code path
 //! that derives ownership from the DB still observes the same world.
 
+mod common;
+
 use cliptown_world::{
     mcp_dispatch,
     move_sys::{self, PathStore},
     path::RoomGraph,
+    protocol::ConsoleOutbound,
     seed::{self, TownLayout},
     state::{AvatarView, WorldView},
     storage,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 async fn fixture() -> (sqlx::SqlitePool, TownLayout, RoomGraph, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -92,6 +95,10 @@ fn alpha_engineer() -> AvatarView {
     }
 }
 
+fn make_event_tx() -> (broadcast::Sender<ConsoleOutbound>, broadcast::Receiver<ConsoleOutbound>) {
+    broadcast::channel(64)
+}
+
 #[tokio::test]
 async fn alpha_engineer_cannot_enter_beta_suite() {
     let (pool, layout, graph, _dir) = fixture().await;
@@ -99,6 +106,7 @@ async fn alpha_engineer_cannot_enter_beta_suite() {
     w.avatars.insert("alpha_eng".to_string(), alpha_engineer());
     let mut paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     // α-engineer attempts to move into suite_2 (β-owned).
     let r = mcp_dispatch::dispatch(
@@ -108,6 +116,7 @@ async fn alpha_engineer_cannot_enter_beta_suite() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "alpha_eng",
         json!({
             "type": "mcp_call", "v": 1, "tool": "move_intent", "corr_id": "c1",
@@ -141,6 +150,7 @@ async fn alpha_engineer_cannot_enter_beta_suite() {
     assert_eq!(payload["agent_id"], "alpha_eng", "payload missing agent_id: {}", row.0);
     assert_eq!(payload["target_room"], "suite_2", "payload missing target_room: {}", row.0);
     assert_eq!(row.1.as_deref(), Some("s_alpha"), "alert should be tagged to caller's startup");
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -150,6 +160,7 @@ async fn alpha_engineer_can_enter_public_room() {
     w.avatars.insert("alpha_eng".to_string(), alpha_engineer());
     let mut paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     // Lobby is public — no ownership, should succeed.
     let r = mcp_dispatch::dispatch(
@@ -159,6 +170,7 @@ async fn alpha_engineer_can_enter_public_room() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "alpha_eng",
         json!({
             "type": "mcp_call", "v": 1, "tool": "move_intent", "corr_id": "c1",
@@ -175,4 +187,5 @@ async fn alpha_engineer_can_enter_public_room() {
             .await
             .unwrap();
     assert_eq!(count.0, 0, "no permission_violation rows expected on success");
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }

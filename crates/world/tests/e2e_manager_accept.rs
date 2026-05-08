@@ -11,17 +11,20 @@
 //! source-side logic is added. Pairs with `e2e_engineer_artifact.rs` (M5.4)
 //! to cover the full subtask lifecycle for Phase 0.
 
+mod common;
+
 use cliptown_world::{
     mcp_dispatch,
     move_sys::{self, PathStore},
     path::RoomGraph,
+    protocol::ConsoleOutbound,
     seed::{self, TownLayout},
     state::{AvatarView, WorldView},
     storage,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 async fn fixture() -> (sqlx::SqlitePool, TownLayout, RoomGraph, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -86,6 +89,10 @@ fn av(id: &str, role: &str) -> AvatarView {
     }
 }
 
+fn make_event_tx() -> (broadcast::Sender<ConsoleOutbound>, broadcast::Receiver<ConsoleOutbound>) {
+    broadcast::channel(64)
+}
+
 #[tokio::test]
 async fn founder_reads_artifact_then_accepts() {
     let (pool, layout, graph, _dir) = fixture().await;
@@ -95,6 +102,7 @@ async fn founder_reads_artifact_then_accepts() {
 
     let mut paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     // Materialize the artifact at the canonical location so read_artifact
     // can find it. sandbox::resolve canonicalizes the workspace root, so the
@@ -114,6 +122,7 @@ async fn founder_reads_artifact_then_accepts() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "founder1",
         json!({
             "type": "mcp_call", "v": 1, "tool": "read_artifact", "corr_id": "c1",
@@ -133,6 +142,7 @@ async fn founder_reads_artifact_then_accepts() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "founder1",
         json!({
             "type": "mcp_call", "v": 1, "tool": "task_accept", "corr_id": "c2",
@@ -158,6 +168,7 @@ async fn founder_reads_artifact_then_accepts() {
 
     // Cleanup so the workspaces/ dir doesn't leak between test runs.
     let _ = tokio::fs::remove_file(&artifact_path).await;
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -168,6 +179,7 @@ async fn non_manager_cannot_accept() {
 
     let mut paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     // Engineer is the assignee of T1, NOT the manager. Manager is the
     // founder (parent's assignee). Self-acceptance must be denied.
@@ -178,6 +190,7 @@ async fn non_manager_cannot_accept() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "eng1",
         json!({
             "type": "mcp_call", "v": 1, "tool": "task_accept", "corr_id": "c1",
@@ -197,4 +210,5 @@ async fn non_manager_cannot_accept() {
         row.0, "awaiting_review",
         "task should not have transitioned"
     );
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }

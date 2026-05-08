@@ -3,6 +3,10 @@ use cliptown_world::storage;
 use std::sync::Arc;
 use std::time::Duration;
 
+fn make_event_tx() -> tokio::sync::broadcast::Sender<cliptown_world::protocol::ConsoleOutbound> {
+    tokio::sync::broadcast::channel(64).0
+}
+
 async fn fixture() -> (sqlx::SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("test.db");
@@ -53,6 +57,7 @@ async fn clean_exit_does_not_respawn() {
     let sup = Arc::new(AgentSupervisor::new(
         config_for("fake_worker_clean_exit.sh"),
         pool,
+        make_event_tx(),
     ));
     sup.spawn_agent(spawn_cfg("a1", "s1")).await.unwrap();
     // Wait for the watch loop to observe the clean exit and remove the agent.
@@ -66,6 +71,7 @@ async fn crash_respawns_with_backoff_then_alerts() {
     let sup = Arc::new(AgentSupervisor::new(
         config_for("fake_worker_crash.sh"),
         pool.clone(),
+        make_event_tx(),
     ));
     sup.spawn_agent(spawn_cfg("a2", "s1")).await.unwrap();
     // 1 initial + 3 retries with backoff [10,20,30]ms ≈ 60ms backoff +
@@ -96,6 +102,7 @@ async fn dissolve_kills_only_targeted_startups_workers() {
     let sup = Arc::new(AgentSupervisor::new(
         config_for("fake_worker_long_run.sh"),
         pool,
+        make_event_tx(),
     ));
     sup.spawn_agent(spawn_cfg("a1", "s1")).await.unwrap();
     sup.spawn_agent(spawn_cfg("b1", "s2")).await.unwrap();

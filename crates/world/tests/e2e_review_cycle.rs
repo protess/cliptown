@@ -14,17 +14,20 @@
 //! and routes through `task_sm::next(Escalate)` so the SM stays the single
 //! source of truth on legal transitions.
 
+mod common;
+
 use cliptown_world::{
     mcp_dispatch,
     move_sys::{self, PathStore},
     path::RoomGraph,
+    protocol::ConsoleOutbound,
     seed::{self, TownLayout},
     state::{AvatarView, WorldView},
     storage,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 async fn fixture() -> (sqlx::SqlitePool, TownLayout, RoomGraph, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -89,6 +92,10 @@ fn av(id: &str, role: &str) -> AvatarView {
     }
 }
 
+fn make_event_tx() -> (broadcast::Sender<ConsoleOutbound>, broadcast::Receiver<ConsoleOutbound>) {
+    broadcast::channel(64)
+}
+
 #[tokio::test]
 async fn round1_request_changes_then_round2_accept() {
     let (pool, layout, graph, _dir) = fixture().await;
@@ -100,6 +107,7 @@ async fn round1_request_changes_then_round2_accept() {
     let mut out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
     let (eng_tx, mut eng_rx) = mpsc::channel(8);
     out_bus.insert("eng1".to_string(), eng_tx);
+    let (event_tx, mut event_rx) = make_event_tx();
 
     // Materialize a v1 artifact so read_artifact would work, even though the
     // spec doesn't require the founder to have read it before requesting
@@ -119,6 +127,7 @@ async fn round1_request_changes_then_round2_accept() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "founder1",
         json!({
             "type": "mcp_call", "v": 1, "tool": "task_request_changes", "corr_id": "c1",
@@ -168,6 +177,7 @@ async fn round1_request_changes_then_round2_accept() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "eng1",
         json!({
             "type": "mcp_call", "v": 1, "tool": "task_done", "corr_id": "c2",
@@ -189,6 +199,7 @@ async fn round1_request_changes_then_round2_accept() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "founder1",
         json!({
             "type": "mcp_call", "v": 1, "tool": "task_accept", "corr_id": "c3",
@@ -226,6 +237,7 @@ async fn round1_request_changes_then_round2_accept() {
 
     // Cleanup so the workspaces/ dir doesn't leak between test runs.
     let _ = tokio::fs::remove_file(&artifact_path).await;
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -237,6 +249,7 @@ async fn max_review_rounds_escalates() {
 
     let mut paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     // Pre-set review_round = 3 (the cap) with the task back in awaiting_review.
     // The next request_changes should auto-escalate instead of bouncing.
@@ -252,6 +265,7 @@ async fn max_review_rounds_escalates() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "founder1",
         json!({
             "type": "mcp_call", "v": 1, "tool": "task_request_changes", "corr_id": "c1",
@@ -303,4 +317,5 @@ async fn max_review_rounds_escalates() {
         "audit_trail should mention escalated kind: {}",
         trail.0
     );
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }

@@ -22,8 +22,10 @@ pub async fn dispatch(
     world: &mut WorldView,
     pool: &SqlitePool,
     out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     msg: serde_json::Value,
 ) -> serde_json::Value {
+    let _ = event_tx;
     let inbound: ConsoleInbound = match serde_json::from_value(msg.clone()) {
         Ok(v) => v,
         Err(e) => return json!({"type":"error","reason":"parse","detail":e.to_string()}),

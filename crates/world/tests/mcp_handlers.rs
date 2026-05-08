@@ -29,6 +29,8 @@ struct Fx {
     /// Receivers for each agent in the bus, so tests can assert what got
     /// fanned out without racing.
     rx: HashMap<String, mpsc::Receiver<Value>>,
+    event_tx: tokio::sync::broadcast::Sender<cliptown_world::protocol::ConsoleOutbound>,
+    _event_rx: tokio::sync::broadcast::Receiver<cliptown_world::protocol::ConsoleOutbound>,
     _dir: tempfile::TempDir,
 }
 
@@ -60,10 +62,29 @@ impl Fx {
             &self.graph,
             &self.out_bus,
             &self.pool,
+            &self.event_tx,
             agent_id,
             msg,
         )
         .await
+    }
+
+    fn expect_no_broadcasts(&mut self) {
+        let mut found = Vec::new();
+        loop {
+            match self._event_rx.try_recv() {
+                Ok(frame) => found.push(frame),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "expected no console broadcasts, found {} frame(s): {:?}",
+            found.len(),
+            found
+        );
     }
 }
 
@@ -142,6 +163,7 @@ async fn fixture() -> Fx {
             },
         );
     }
+    let (event_tx, _event_rx) = tokio::sync::broadcast::channel(64);
     Fx {
         world,
         paths: PathStore::new(),
@@ -150,6 +172,8 @@ async fn fixture() -> Fx {
         out_bus: HashMap::new(),
         pool,
         rx: HashMap::new(),
+        event_tx,
+        _event_rx,
         _dir: dir,
     }
 }
@@ -166,6 +190,7 @@ async fn move_intent_starts_path() {
     assert_eq!(r["result"]["target_room"], "lobby");
     // Path queued: e1 must traverse suite_1 → door → lobby.
     assert!(fx.paths.contains_key("e1"));
+    fx.expect_no_broadcasts();
 }
 
 /// Codex round-5 P2#3: tile-only `move_intent` (no `target_room`) must walk
@@ -185,6 +210,7 @@ async fn move_intent_tile_only_uses_current_room() {
     assert_eq!(r["result"]["target_room"], "suite_1");
     assert_eq!(r["result"]["target_tile"]["x"], 3);
     assert_eq!(r["result"]["target_tile"]["y"], 3);
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -197,6 +223,7 @@ async fn move_intent_rejects_foreign_suite() {
         .call("e1", "move_intent", json!({"target_room":"does_not_exist"}))
         .await;
     assert_eq!(r["type"], "mcp_error", "{r}");
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -216,6 +243,7 @@ async fn speak_chat_fans_to_room_peers() {
         .await
         .unwrap();
     assert_eq!(count.0, 1);
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -242,6 +270,7 @@ async fn speak_directive_requires_manager_relationship() {
     assert_eq!(r["type"], "mcp_reply", "{r}");
     let evts = fx.drain("e1");
     assert_eq!(evts[0]["type"], "directive");
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -268,6 +297,7 @@ async fn task_done_assignee_only_and_emits_subtask_done() {
     assert_eq!(s.0, "awaiting_review");
     let evts = fx.drain("m1");
     assert!(evts.iter().any(|e| e["type"] == "subtask_done"), "{evts:?}");
+    fx.expect_no_broadcasts();
 }
 
 /// Codex round-2 P1#2: scheduler flips `status = "working"` on dispatch but
@@ -299,6 +329,7 @@ async fn task_done_resets_avatar_to_idle() {
         "idle",
         "task_done must reset avatar status"
     );
+    fx.expect_no_broadcasts();
 }
 
 /// Codex round-2 P1#2 sibling — same idle-reset for `task_failed` since the
@@ -325,6 +356,7 @@ async fn task_failed_resets_avatar_to_idle() {
         "idle",
         "task_failed must reset avatar status"
     );
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -354,6 +386,7 @@ async fn task_failed_assignee_only() {
         .await;
     assert_eq!(r["type"], "mcp_error", "{r}");
     assert_eq!(r["code"], "no_permission");
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -368,6 +401,7 @@ async fn subtask_create_manager_path_starts_queued() {
         .await;
     assert_eq!(r["type"], "mcp_reply", "{r}");
     assert_eq!(r["result"]["status"], "queued");
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -397,6 +431,7 @@ async fn subtask_create_non_manager_path_proposes_and_notifies() {
             .await
             .unwrap();
     assert!(row.0.is_none());
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -417,6 +452,7 @@ async fn task_accept_manager_only() {
         .await
         .unwrap();
     assert_eq!(s.0, "done");
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -444,6 +480,7 @@ async fn task_request_changes_increments_round_and_notifies() {
     assert_eq!(row.1, 1);
     let evts = fx.drain("e1");
     assert!(evts.iter().any(|e| e["type"] == "directive"), "{evts:?}");
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -475,6 +512,7 @@ async fn accept_proposal_manager_only() {
         )
         .await;
     assert_eq!(r["type"], "mcp_error", "{r}");
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -497,6 +535,7 @@ async fn reject_proposal_manager_only() {
         .await
         .unwrap();
     assert_eq!(s.0, "failed");
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -516,6 +555,7 @@ async fn hypothesis_state_appends_epistemic_log() {
         .unwrap();
     assert!(row.0.contains("hypothesis_state"));
     assert!(row.0.contains("H1"));
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -534,6 +574,7 @@ async fn test_record_appends_epistemic_log() {
         .await
         .unwrap();
     assert!(row.0.contains("test_record"));
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -552,6 +593,7 @@ async fn hypothesis_resolve_appends_epistemic_log() {
         .await
         .unwrap();
     assert!(row.0.contains("hypothesis_resolve"));
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -569,6 +611,7 @@ async fn verify_read_assert_runs_inline() {
         .await;
     assert_eq!(r["type"], "mcp_reply", "{r}");
     assert_eq!(r["result"]["observed"]["ok"], true);
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -594,6 +637,7 @@ async fn verify_lint_json_returns_observation() {
         )
         .await;
     assert_eq!(r["result"]["observed"]["ok"], false);
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -610,6 +654,7 @@ async fn verify_typescript_and_markdown_are_deferred() {
         assert_eq!(r["type"], "mcp_reply");
         assert_eq!(r["result"]["observed"]["deferred"], true);
     }
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -624,6 +669,7 @@ async fn ask_peer_returns_null_in_phase_0() {
         .await;
     assert_eq!(r["type"], "mcp_reply");
     assert!(r["result"]["response"].is_null());
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -645,6 +691,7 @@ async fn observe_world_three_queries() {
         .call("e1", "observe_world", json!({"query":"budget_remaining"}))
         .await;
     assert_eq!(r["result"]["cap_usd"], 10.0);
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -658,6 +705,7 @@ async fn read_artifact_within_workspace() {
         .await;
     assert_eq!(r["type"], "mcp_reply");
     assert_eq!(r["result"]["content"], "# hi");
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -674,6 +722,7 @@ async fn read_artifact_rejects_path_escape() {
         .await;
     assert_eq!(r["type"], "mcp_error", "{r}");
     assert_eq!(r["code"], "sandbox_violation");
+    fx.expect_no_broadcasts();
 }
 
 // ── group permission test ───────────────────────────────────────────────────
@@ -720,6 +769,7 @@ async fn manager_only_tools_reject_non_manager() {
         assert_eq!(r["type"], "mcp_error", "tool {tool}: {r}");
         assert_eq!(r["code"], "no_permission", "tool {tool}: {r}");
     }
+    fx.expect_no_broadcasts();
 }
 
 // ── cross-startup invariant ─────────────────────────────────────────────────
@@ -796,6 +846,7 @@ async fn cross_startup_invariant_blocks_mutations() {
             .await
             .unwrap();
     assert_eq!(count.0, 0);
+    fx.expect_no_broadcasts();
 }
 
 #[tokio::test]
@@ -804,6 +855,7 @@ async fn unknown_tool_returns_mcp_error() {
     let r = fx.call("e1", "what_even", json!({})).await;
     assert_eq!(r["type"], "mcp_error");
     assert_eq!(r["code"], "unknown_tool");
+    fx.expect_no_broadcasts();
 }
 
 /// Codex round-3 P2#4: when a manager accepts a proposal, the assignee must
@@ -839,6 +891,7 @@ async fn accept_proposal_with_cross_startup_assignee_rejected() {
     // The fixture seeds T1.assignee_agent_id = "e1"; the guard rejected the
     // attempted reassignment before any UPDATE ran, so it must still be e1.
     assert_eq!(row.1.as_deref(), Some("e1"));
+    fx.expect_no_broadcasts();
 }
 
 /// Codex round-5 P1#2: when a manager creates a subtask with an explicit
@@ -868,6 +921,7 @@ async fn subtask_create_with_cross_startup_assignee_rejected() {
     .await
     .unwrap();
     assert_eq!(count.0, 0);
+    fx.expect_no_broadcasts();
 }
 
 /// Codex round-5 P1#2 sibling: an unknown assignee_agent_id on subtask_create
@@ -891,6 +945,7 @@ async fn subtask_create_with_unknown_assignee_rejected() {
     .await
     .unwrap();
     assert_eq!(count.0, 0);
+    fx.expect_no_broadcasts();
 }
 
 /// Sibling guard: an unknown assignee_agent_id is rejected before any
@@ -911,4 +966,5 @@ async fn accept_proposal_with_unknown_assignee_rejected() {
         .await;
     assert_eq!(r["type"], "mcp_error", "{r}");
     assert_eq!(r["code"], "unknown_assignee", "{r}");
+    fx.expect_no_broadcasts();
 }

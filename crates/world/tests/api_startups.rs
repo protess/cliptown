@@ -25,6 +25,7 @@ async fn fixture() -> AppState {
     std::mem::forget(dir);
 
     let cargo_dir = env!("CARGO_MANIFEST_DIR");
+    let (event_tx, _event_rx) = tokio::sync::broadcast::channel(64);
     let supervisor = Arc::new(AgentSupervisor::new(
         SupervisorConfig {
             worker_bin: "/bin/sh".into(),
@@ -33,14 +34,16 @@ async fn fixture() -> AppState {
             dissolve_grace_ms: 100,
         },
         pool.clone(),
+        event_tx.clone(),
     ));
 
-    let handle = loop_::spawn(WorldView::default(), pool.clone());
+    let handle = loop_::spawn(WorldView::default(), pool.clone(), event_tx.clone());
     AppState {
         pool,
         handle,
         catalog: Arc::new(tokio::sync::RwLock::new(Default::default())),
         supervisor,
+        max_review_rounds: 3,
     }
 }
 
