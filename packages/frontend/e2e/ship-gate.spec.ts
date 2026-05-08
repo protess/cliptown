@@ -198,4 +198,102 @@ test.describe("ship gate § 11", () => {
       chat.locator(`code[title="${OTHER_AGENT}"]`),
     ).toHaveText(OTHER_AGENT.slice(0, 6));
   });
+
+  // § 11.8 — Multi-tenant isolation. A directive sent inside one startup's
+  // suite is never delivered to any agent of any other startup, regardless
+  // of timing, room transitions, or backend type. Spec § 11.8.
+  //
+  // The full delivery claim (worker-side routing) lives in the rust-layer
+  // `crates/world/tests/e2e_isolation.rs`. The UI proof is the operator's
+  // observable side: when the operator selects startup A in the sidebar,
+  // MainHeader counts and the Kanban only show A's data — never B's. If
+  // the per-startup filters in MainHeader (`a.startup_id === s.id`) or
+  // Kanban (`t.startup_id === startupId`) regressed and pulled in
+  // foreign-startup state, the operator would see ghost agents/tasks from
+  // other tenants. This test pins that contract.
+  test("§ 11.8 — selecting a startup partitions MainHeader and Kanban to that startup only", async ({
+    page,
+  }) => {
+    const STARTUP_A = "aaaa1111-aaaa-4111-aaaa-111111111111";
+    const STARTUP_B = "bbbb2222-bbbb-4222-bbbb-222222222222";
+
+    await page.goto("/console");
+    await stopWS(page);
+
+    // Two startups, each with its own agents and distinctive task titles.
+    // Distinctive titles let us assert both directions: A's titles must NOT
+    // appear when B is selected, and vice-versa.
+    await dispatch(page, {
+      type: "world_view_snapshot",
+      snapshot: {
+        startups: [
+          { id: STARTUP_A, name: "alpha-iso", budget_cap_usd: 100, budget_spent_usd: 0, last_event_ts: 1 },
+          { id: STARTUP_B, name: "beta-iso", budget_cap_usd: 50, budget_spent_usd: 0, last_event_ts: 2 },
+        ],
+        avatars: [
+          { agent_id: "a1aaaaaa-aaaa-4111-aaaa-aaaaaaaaaaaa", startup_id: STARTUP_A, role: "founder", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+          { agent_id: "a2aaaaaa-aaaa-4222-aaaa-aaaaaaaaaaaa", startup_id: STARTUP_A, role: "engineer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+          { agent_id: "a3aaaaaa-aaaa-4333-aaaa-aaaaaaaaaaaa", startup_id: STARTUP_A, role: "designer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+          { agent_id: "b1bbbbbb-bbbb-4111-bbbb-bbbbbbbbbbbb", startup_id: STARTUP_B, role: "founder", backend: "codex", current_pos: [0, 0], target_pos: null, room_id: "suite_2", status: "idle" },
+          { agent_id: "b2bbbbbb-bbbb-4222-bbbb-bbbbbbbbbbbb", startup_id: STARTUP_B, role: "engineer", backend: "codex", current_pos: [0, 0], target_pos: null, room_id: "suite_2", status: "idle" },
+        ],
+        tasks: [
+          { id: "task-a-001", startup_id: STARTUP_A, title: "TASK-ALPHA-WRITE-SPEC", status: "queued", assignee_agent_id: null, required_room: null },
+          { id: "task-a-002", startup_id: STARTUP_A, title: "TASK-ALPHA-RESEARCH", status: "queued", assignee_agent_id: null, required_room: null },
+          { id: "task-b-001", startup_id: STARTUP_B, title: "TASK-BETA-PROTOTYPE", status: "queued", assignee_agent_id: null, required_room: null },
+          { id: "task-b-002", startup_id: STARTUP_B, title: "TASK-BETA-DESIGN", status: "queued", assignee_agent_id: null, required_room: null },
+          { id: "task-b-003", startup_id: STARTUP_B, title: "TASK-BETA-REVIEW", status: "queued", assignee_agent_id: null, required_room: null },
+        ],
+      },
+    });
+
+    const sidebar = page.getByRole("complementary", { name: "startups" });
+    const main = page.locator("main");
+
+    // Both startups are listed in the sidebar — that's expected (the operator
+    // sees all tenants from a god view). Isolation is about which DATA
+    // the per-startup main pane shows, not which startups appear in the
+    // sidebar.
+    await expect(sidebar.locator(`[data-startup-id="${STARTUP_A}"]`)).toBeVisible();
+    await expect(sidebar.locator(`[data-startup-id="${STARTUP_B}"]`)).toBeVisible();
+
+    // Helper to assert MainHeader's stat tile (label + value) — Stat in
+    // MainHeader.tsx renders <div>{value}</div><div>{label}</div> as
+    // siblings inside a wrapper.
+    const statValue = async (label: string): Promise<string> => {
+      return main
+        .locator("div")
+        .filter({ has: page.locator(`> div:text-is("${label}")`) })
+        .first()
+        .locator("> div")
+        .first()
+        .innerText();
+    };
+
+    // Select startup A.
+    await sidebar.locator(`[data-startup-id="${STARTUP_A}"]`).click();
+
+    await expect(main.getByText("alpha-iso", { exact: true })).toBeVisible();
+    expect(await statValue("agents")).toBe("3");
+    expect(await statValue("tasks")).toBe("2");
+    // Kanban shows A's titles, not B's.
+    await expect(main.getByText("TASK-ALPHA-WRITE-SPEC")).toBeVisible();
+    await expect(main.getByText("TASK-ALPHA-RESEARCH")).toBeVisible();
+    await expect(main.getByText("TASK-BETA-PROTOTYPE")).toHaveCount(0);
+    await expect(main.getByText("TASK-BETA-DESIGN")).toHaveCount(0);
+    await expect(main.getByText("TASK-BETA-REVIEW")).toHaveCount(0);
+
+    // Select startup B.
+    await sidebar.locator(`[data-startup-id="${STARTUP_B}"]`).click();
+
+    await expect(main.getByText("beta-iso", { exact: true })).toBeVisible();
+    expect(await statValue("agents")).toBe("2");
+    expect(await statValue("tasks")).toBe("3");
+    // Kanban now shows B's titles, none of A's.
+    await expect(main.getByText("TASK-BETA-PROTOTYPE")).toBeVisible();
+    await expect(main.getByText("TASK-BETA-DESIGN")).toBeVisible();
+    await expect(main.getByText("TASK-BETA-REVIEW")).toBeVisible();
+    await expect(main.getByText("TASK-ALPHA-WRITE-SPEC")).toHaveCount(0);
+    await expect(main.getByText("TASK-ALPHA-RESEARCH")).toHaveCount(0);
+  });
 });
