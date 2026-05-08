@@ -155,6 +155,19 @@ async fn directive_to_founder_then_subtask_then_assigned() {
     assert_eq!(row.0, "operator");
     assert_eq!(row.1, "directive");
 
+    // Verify the Directive broadcast frame reached the operator console.
+    match event_rx.try_recv() {
+        Ok(cliptown_world::protocol::ConsoleOutbound::Directive {
+            author_id, to_agent_id, body, in_response_to_task, ..
+        }) => {
+            assert_eq!(author_id, "operator");
+            assert_eq!(to_agent_id, "founder1");
+            assert!(body.contains("spec") || body.contains("build"), "body should be the directive: {body}");
+            assert_eq!(in_response_to_task, None);
+        }
+        other => panic!("expected Directive frame, got {:?}", other),
+    }
+
     // ── Step 2: founder calls subtask_create assigning the engineer.
     // Founder is the parent task's assignee → manager → status goes straight
     // to `queued` (not `proposed`).

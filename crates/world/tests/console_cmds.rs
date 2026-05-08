@@ -116,6 +116,19 @@ async fn directive_inserts_message_row() {
     let count: (i64,) = sqlx::query_as("SELECT count(*) FROM messages WHERE kind='directive'")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(count.0, 1);
+    // OperatorDirective now broadcasts a Directive frame after the SQL INSERT.
+    match event_rx.try_recv() {
+        Ok(cliptown_world::protocol::ConsoleOutbound::Directive {
+            author_id, to_agent_id, body, in_response_to_task, ..
+        }) => {
+            assert_eq!(author_id, "operator");
+            assert_eq!(to_agent_id, "a1");
+            assert_eq!(body, "hi");
+            assert_eq!(in_response_to_task, None);
+        }
+        other => panic!("expected Directive broadcast, got {:?}", other),
+    }
+    // No further broadcasts.
     expect_no_broadcasts(&mut event_rx);
 }
 

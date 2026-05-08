@@ -25,7 +25,6 @@ pub async fn dispatch(
     event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     msg: serde_json::Value,
 ) -> serde_json::Value {
-    let _ = event_tx;
     let inbound: ConsoleInbound = match serde_json::from_value(msg.clone()) {
         Ok(v) => v,
         Err(e) => return json!({"type":"error","reason":"parse","detail":e.to_string()}),
@@ -67,25 +66,33 @@ pub async fn dispatch(
             json!({"type":"ok","kind":"operator_unpossess"})
         }
         ConsoleInbound::OperatorDirective { to_agent_id, body, .. } => {
-            // Insert a directive message in SQLite, then push the directive
-            // to the recipient's worker out_bus so the founder's CLI sees it
-            // on the next session boot (M5.3 chain step 1).
+            // Prefetch recipient validity + startup_id BEFORE any side effect.
+            // Codex M4: returning a clean unknown_recipient error is cheaper than
+            // letting an inline-subquery INSERT fail via FK violation.
+            let row: Result<Option<(String,)>, _> =
+                sqlx::query_as("SELECT startup_id FROM agents WHERE id = ?")
+                    .bind(&to_agent_id)
+                    .fetch_optional(pool)
+                    .await;
+            let recipient_startup_id = match row {
+                Ok(Some((sid,))) => sid,
+                Ok(None) => return json!({"type":"error","reason":"unknown_recipient"}),
+                Err(e) => return json!({"type":"error","reason":"sql","detail":e.to_string()}),
+            };
+
             let id = uuid::Uuid::new_v4().to_string();
             let r = sqlx::query(
                 "INSERT INTO messages (id, startup_id, room_id, author_id, body, kind, ts) \
-                 VALUES (?, (SELECT startup_id FROM agents WHERE id = ?), NULL, 'operator', ?, 'directive', unixepoch())"
+                 VALUES (?, ?, NULL, 'operator', ?, 'directive', unixepoch())",
             )
             .bind(&id)
-            .bind(&to_agent_id)
+            .bind(&recipient_startup_id)
             .bind(&body)
             .execute(pool)
             .await;
             match r {
                 Ok(_) => {
-                    // Mirror the MCP `speak` directive shape (mcp_dispatch.rs)
-                    // and the WorkerOutbound::Directive protocol type:
-                    // `from_agent_id` distinguishes operator-sourced directives
-                    // (sentinel id "operator") from peer-sourced directives.
+                    // Push to recipient's worker out_bus (existing behavior).
                     if let Some(tx) = out_bus.get(&to_agent_id) {
                         let payload = json!({
                             "type": "directive",
@@ -94,15 +101,25 @@ pub async fn dispatch(
                             "body": body,
                             "message_id": id,
                         });
-                        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
-                            tx.try_send(payload)
-                        {
+                        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx.try_send(payload) {
                             tracing::warn!(component = "cmd_console",
                                 agent_id = %to_agent_id,
                                 "out_bus full, dropping operator directive"
                             );
                         }
                     }
+                    // Broadcast a Directive frame to all subscribed operator consoles
+                    // (god view). After SQL success only.
+                    let _ = event_tx.send(crate::protocol::ConsoleOutbound::Directive {
+                        v: 1,
+                        message_id: id.clone(),
+                        ts: chrono::Utc::now().timestamp_millis(),
+                        startup_id: recipient_startup_id,
+                        author_id: "operator".into(),
+                        to_agent_id: to_agent_id.clone(),
+                        body: body.clone(),
+                        in_response_to_task: None,
+                    });
                     json!({"type":"ok","kind":"operator_directive","message_id":id})
                 }
                 Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
