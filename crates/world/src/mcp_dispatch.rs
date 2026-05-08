@@ -821,7 +821,7 @@ async fn handle_task_request_changes(
                 "triggered_by":caller.agent_id,
             }).to_string(),
         ).await;
-        let _ = crate::emit::emit_system_event(
+        if let Err(e) = crate::emit::emit_system_event(
             pool, event_tx,
             Some(&caller.startup_id),
             "task_escalated",
@@ -831,7 +831,13 @@ async fn handle_task_request_changes(
                 "feedback": feedback,
             }).to_string(),
             "alert",
-        ).await;
+        ).await {
+            tracing::error!(component = "mcp_dispatch",
+                task_id = %task_id,
+                err = %e,
+                "failed to emit task_escalated system_event after task UPDATE committed"
+            );
+        }
         return Ok(json!({
             "task_id": task_id,
             "new_status": status_to_str(escalated),

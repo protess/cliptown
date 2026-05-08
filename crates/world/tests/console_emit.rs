@@ -286,7 +286,7 @@ async fn no_broadcast_on_request_changes_null_assignee() {
     let graph: RoomGraph = move_sys::graph_from_layout(&layout);
     let mut paths = std::collections::HashMap::new();
 
-    let _r = mcp_dispatch::dispatch(
+    let r = mcp_dispatch::dispatch(
         &mut w, &mut paths, &layout, &graph, &ctx.out_bus, &ctx.pool, &ctx.event_tx,
         "mgr",
         serde_json::json!({
@@ -294,6 +294,8 @@ async fn no_broadcast_on_request_changes_null_assignee() {
             "args":{"task_id":"T1","feedback":"x"}
         }),
     ).await;
+    assert_eq!(r["type"], "mcp_error", "dispatch should fail with mcp_error: {r}");
+    assert_eq!(r["code"], "no_permission", "should fail manager check: {r}");
     // task_request_changes is manager-only and the manager check uses
     // assignee_agent_id; with NULL, this returns an mcp_error rather than
     // emitting a broadcast.
@@ -335,9 +337,13 @@ async fn escalation_emits_system_event_only() {
     let system_event_count = frames.iter().filter(|f| matches!(f, cliptown_world::protocol::ConsoleOutbound::SystemEvent {..})).count();
     assert_eq!(directive_count, 0, "no Directive on escalation: {frames:?}");
     assert_eq!(system_event_count, 1, "one SystemEvent (task_escalated): {frames:?}");
-    if let cliptown_world::protocol::ConsoleOutbound::SystemEvent { kind, severity, .. } = &frames[0] {
+    if let cliptown_world::protocol::ConsoleOutbound::SystemEvent { kind, severity, payload, startup_id, .. } = &frames[0] {
         assert_eq!(kind, "task_escalated");
         assert_eq!(severity, "alert");
+        assert_eq!(startup_id.as_deref(), Some("s1"));
+        assert_eq!(payload["task_id"], "T1");
+        assert_eq!(payload["rounds"], 3);
+        assert_eq!(payload["feedback"], "final straw");
     }
 
     // review_round preserved (escalation does NOT increment).
@@ -368,7 +374,7 @@ async fn transactional_integrity_request_changes() {
     let graph: RoomGraph = move_sys::graph_from_layout(&layout);
     let mut paths = std::collections::HashMap::new();
 
-    let _r = mcp_dispatch::dispatch(
+    let r = mcp_dispatch::dispatch(
         &mut w, &mut paths, &layout, &graph, &ctx.out_bus, &ctx.pool, &ctx.event_tx,
         "mgr",
         serde_json::json!({
@@ -376,6 +382,7 @@ async fn transactional_integrity_request_changes() {
             "args":{"task_id":"T1","feedback":"x"}
         }),
     ).await;
+    assert_eq!(r["type"], "mcp_reply", "dispatch should succeed: {r}");
     // Assert both rows are present (transactional success):
     let task: (String, i64) = sqlx::query_as(
         "SELECT status, review_round FROM tasks WHERE id = 'T1'"
