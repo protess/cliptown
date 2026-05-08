@@ -213,6 +213,12 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
     // a duplicate of the initial snapshot).
     view_rx.borrow_and_update();
 
+    // Subscribe to the broadcast channel for live Chat/Directive/SystemEvent
+    // frames. Subscribed BEFORE the initial snapshot so we don't miss any
+    // events that fire in between. Lagged is treated as fatal-close (see
+    // the third select! arm below).
+    let mut event_rx = state.handle.event_tx.subscribe();
+
     // Send the initial snapshot. Phase 0 worlds are small enough that we
     // skip the `chunk_snapshot` transport (M1.11) — TODO M11+: route through
     // chunk_snapshot when the serialized payload exceeds the 256 KiB threshold
@@ -253,6 +259,29 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
                 let frame = build_console_snapshot(&state.pool, &view, state.max_review_rounds).await;
                 if sender.send(Message::Text(frame.to_string().into())).await.is_err() {
                     break;
+                }
+            }
+            event = event_rx.recv() => {
+                match event {
+                    Ok(frame) => {
+                        let json = match serde_json::to_string(&frame) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                tracing::warn!(component = "handle_console", err = %e,
+                                    "failed to serialize broadcast frame");
+                                continue;
+                            }
+                        };
+                        if sender.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(component = "handle_console", lagged = n,
+                            "console subscriber lagged; closing WS to force resync");
+                        break;  // frontend will reconnect to a fresh snapshot
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         }

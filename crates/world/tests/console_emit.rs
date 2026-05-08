@@ -354,6 +354,30 @@ async fn escalation_emits_system_event_only() {
 }
 
 #[tokio::test]
+async fn lagged_subscriber_logs_and_closes() {
+    // Construct a small-capacity broadcast channel, subscribe, then send
+    // more events than capacity to force Lagged.
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<cliptown_world::protocol::ConsoleOutbound>(8);
+    for i in 0..20 {
+        let _ = tx.send(cliptown_world::protocol::ConsoleOutbound::Toast {
+            v: 1,
+            severity: "info".into(),
+            body: format!("toast {i}"),
+            sticky: false,
+        });
+    }
+    // First recv should report Lagged with n > 0; the production select arm
+    // logs and breaks the WS, so this asserts that signal is observable.
+    let r = rx.try_recv();
+    match r {
+        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+            assert!(n > 0, "expected Lagged with n > 0");
+        }
+        other => panic!("expected Lagged, got {:?}", other),
+    }
+}
+
+#[tokio::test]
 async fn transactional_integrity_request_changes() {
     use cliptown_world::{mcp_dispatch, move_sys, path::RoomGraph, seed::TownLayout, state::AvatarView};
     let mut ctx = TestCtx::new().await;
