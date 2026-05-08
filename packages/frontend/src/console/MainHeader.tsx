@@ -101,7 +101,7 @@ export function MainHeader({ startupId }: { startupId: string | null }) {
         <div>
           <div style={{ fontWeight: 600 }}>{s.name || s.id}</div>
           <div style={{ fontSize: 12, color: "var(--fg-secondary)" }}>
-            <code>{s.id}</code>
+            <code title={s.id}>{s.id.slice(0, 6)}</code>
           </div>
         </div>
       </div>
