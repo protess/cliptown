@@ -153,6 +153,19 @@ async fn round1_request_changes_then_round2_accept() {
     );
     assert_eq!(directive["in_response_to_task"], "T1");
 
+    // The broadcast channel should carry exactly one Directive frame for round 1.
+    match event_rx.try_recv() {
+        Ok(ConsoleOutbound::Directive {
+            author_id, to_agent_id, body, in_response_to_task, ..
+        }) => {
+            assert_eq!(author_id, "founder1");
+            assert_eq!(to_agent_id, "eng1");
+            assert!(body.contains("needs more detail"), "directive body: {body}");
+            assert_eq!(in_response_to_task, Some("T1".into()));
+        }
+        other => panic!("expected Directive frame after round-1 request_changes, got {:?}", other),
+    }
+
     let row: (String, i64) =
         sqlx::query_as("SELECT status, review_round FROM tasks WHERE id = 'T1'")
             .fetch_one(&pool)
@@ -237,6 +250,8 @@ async fn round1_request_changes_then_round2_accept() {
 
     // Cleanup so the workspaces/ dir doesn't leak between test runs.
     let _ = tokio::fs::remove_file(&artifact_path).await;
+    // No additional frames after the round-1 Directive (already consumed above):
+    // task_done and task_accept don't broadcast on this path.
     assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
@@ -317,5 +332,11 @@ async fn max_review_rounds_escalates() {
         "audit_trail should mention escalated kind: {}",
         trail.0
     );
-    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
+
+    // Escalation emits exactly one SystemEvent (task_escalated), no Directive.
+    let frames: Vec<_> = std::iter::from_fn(|| event_rx.try_recv().ok()).collect();
+    let dir_count = frames.iter().filter(|f| matches!(f, ConsoleOutbound::Directive {..})).count();
+    let sys_count = frames.iter().filter(|f| matches!(f, ConsoleOutbound::SystemEvent {..})).count();
+    assert_eq!(dir_count, 0, "no Directive on escalation");
+    assert_eq!(sys_count, 1, "one SystemEvent on escalation");
 }

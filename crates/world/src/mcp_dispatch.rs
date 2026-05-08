@@ -792,7 +792,6 @@ async fn handle_task_request_changes(
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
-    let _ = event_tx;
     let task_id = require_str(&args, "task_id")?.to_string();
     let feedback = require_str(&args, "feedback")?.to_string();
     let task = load_task(pool, &task_id).await?;
@@ -800,52 +799,39 @@ async fn handle_task_request_changes(
         return Err(("cross_startup".into(), "task belongs to another startup".into()));
     }
     if !caller_is_manager_of_task(pool, caller, &task).await? {
-        return Err((
-            "no_permission".into(),
-            "task_request_changes is manager-only".into(),
-        ));
+        return Err(("no_permission".into(), "task_request_changes is manager-only".into()));
     }
 
-    // Phase 0 max-rounds enforcement (spec §6.3 / M5.6): once the task has
-    // already cycled through `MAX_REVIEW_ROUNDS` rounds of changes, the world
-    // refuses to bounce it back yet again and instead auto-escalates. Routed
-    // through `task_sm::next(Escalate)` so the SM stays the single source of
-    // truth on legal transitions.
+    // Escalation branch: max-rounds breach. NO directive INSERT, NO Directive
+    // broadcast. Emits a single SystemEvent via emit_system_event so the
+    // operator console sees the task transition to escalated.
     if task.review_round >= MAX_REVIEW_ROUNDS {
         let escalated = next(task.status, &Transition::Escalate)
-            .map_err(|r| ("illegal_transition".to_string(), r.to_string()))?;
+            .map_err(|r| ("illegal_transition".into(), r.to_string()))?;
         sqlx::query("UPDATE tasks SET status = ?, updated_at = unixepoch() WHERE id = ?")
-            .bind(status_to_str(escalated))
-            .bind(&task_id)
-            .execute(pool)
-            .await
-            .map_err(|e| ("sql".to_string(), e.to_string()))?;
+            .bind(status_to_str(escalated)).bind(&task_id)
+            .execute(pool).await
+            .map_err(|e| ("sql".into(), e.to_string()))?;
         let _ = persist::append_audit(
-            pool,
-            &task_id,
+            pool, &task_id,
             &json!({
-                "actor": "system",
-                "kind": "escalated",
-                "reason": "max_review_rounds_exceeded",
-                "at_round": task.review_round,
-                "triggered_by": caller.agent_id,
-            })
-            .to_string(),
-        )
-        .await;
-        let _ = persist::record_system_event(
-            pool,
+                "actor":"system","kind":"escalated",
+                "reason":"max_review_rounds_exceeded",
+                "at_round":task.review_round,
+                "triggered_by":caller.agent_id,
+            }).to_string(),
+        ).await;
+        let _ = crate::emit::emit_system_event(
+            pool, event_tx,
             Some(&caller.startup_id),
             "task_escalated",
             &json!({
                 "task_id": task_id,
                 "rounds": task.review_round,
                 "feedback": feedback,
-            })
-            .to_string(),
+            }).to_string(),
             "alert",
-        )
-        .await;
+        ).await;
         return Ok(json!({
             "task_id": task_id,
             "new_status": status_to_str(escalated),
@@ -855,27 +841,45 @@ async fn handle_task_request_changes(
         }));
     }
 
+    // Regular round-increment branch: task UPDATE + directive INSERT in a
+    // single transaction so the broadcast-after-SQL invariant holds.
     let new_status = next(task.status, &Transition::RequestChanges)
-        .map_err(|r| ("illegal_transition".to_string(), r.to_string()))?;
+        .map_err(|r| ("illegal_transition".into(), r.to_string()))?;
+    let directive_id = uuid::Uuid::new_v4().to_string();
+    let mut tx = pool.begin().await.map_err(|e| ("sql".into(), e.to_string()))?;
     sqlx::query(
         "UPDATE tasks SET status = ?, review_round = review_round + 1, updated_at = unixepoch() WHERE id = ?",
     )
-    .bind(status_to_str(new_status))
-    .bind(&task_id)
-    .execute(pool)
-    .await
-    .map_err(|e| ("sql".to_string(), e.to_string()))?;
-    let _ = persist::append_audit(
-        pool,
-        &task_id,
-        &json!({"actor":"manager","kind":"task_request_changes","agent_id":caller.agent_id})
-            .to_string(),
+    .bind(status_to_str(new_status)).bind(&task_id)
+    .execute(&mut *tx).await
+    .map_err(|e| ("sql".into(), e.to_string()))?;
+    sqlx::query(
+        "INSERT INTO messages (id, startup_id, room_id, author_id, body, kind, ts) \
+         VALUES (?, ?, NULL, ?, ?, 'directive', unixepoch())",
     )
-    .await;
+    .bind(&directive_id).bind(&caller.startup_id).bind(&caller.agent_id).bind(&feedback)
+    .execute(&mut *tx).await
+    .map_err(|e| ("sql".into(), e.to_string()))?;
+    tx.commit().await.map_err(|e| ("sql".into(), e.to_string()))?;
 
-    // Surface feedback to the assignee as a `directive` event so it's picked
-    // up on their next CLI session boot (spec §7 Level 2).
+    let _ = persist::append_audit(
+        pool, &task_id,
+        &json!({"actor":"manager","kind":"task_request_changes","agent_id":caller.agent_id}).to_string(),
+    ).await;
+
+    // Broadcast Directive + push to assignee out_bus, ONLY if assignee exists
+    // (mirrors the existing out_bus-skip behavior).
     if let Some(assignee) = task.assignee_agent_id.as_deref() {
+        let _ = event_tx.send(crate::protocol::ConsoleOutbound::Directive {
+            v: 1,
+            message_id: directive_id,
+            ts: chrono::Utc::now().timestamp_millis(),
+            startup_id: caller.startup_id.clone(),
+            author_id: caller.agent_id.clone(),
+            to_agent_id: assignee.to_string(),
+            body: feedback.clone(),
+            in_response_to_task: Some(task_id.clone()),
+        });
         if let Some(tx) = out_bus.get(assignee) {
             let _ = tx.try_send(json!({
                 "type":"directive","v":1,

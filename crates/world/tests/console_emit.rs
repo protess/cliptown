@@ -206,3 +206,185 @@ async fn no_broadcast_on_unknown_recipient() {
     assert_eq!(r["reason"], "unknown_recipient");
     ctx.expect_no_broadcasts();
 }
+
+async fn seed_review_cycle_fixture(pool: &sqlx::SqlitePool) {
+    sqlx::query("INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp', 'active', unixepoch())")
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status, manager_id) VALUES ('mgr', 's1', 'M', 'founder', 'claude_code', 'm', '{}', 'suite_1', 'idle', NULL)")
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status, manager_id) VALUES ('eng', 's1', 'E', 'engineer', 'claude_code', 'm', '{}', 'suite_1', 'idle', 'mgr')")
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO tasks (id, startup_id, parent_id, title, description, status, assignee_agent_id, review_round, created_at, updated_at) VALUES ('T1', 's1', NULL, 'T', 'D', 'awaiting_review', 'eng', 0, unixepoch(), unixepoch())")
+        .execute(pool).await.unwrap();
+}
+
+#[tokio::test]
+async fn broadcasts_on_review_request_changes() {
+    use cliptown_world::{mcp_dispatch, move_sys, path::RoomGraph, seed::TownLayout, state::AvatarView};
+    let mut ctx = TestCtx::new().await;
+    seed_review_cycle_fixture(&ctx.pool).await;
+
+    let mut w = cliptown_world::state::WorldView::default();
+    w.avatars.insert("mgr".into(), AvatarView {
+        agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
+        backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
+        room_id: "suite_1".into(), status: "idle".into(),
+    });
+    let layout = TownLayout::default_town();
+    let graph: RoomGraph = move_sys::graph_from_layout(&layout);
+    let mut paths = std::collections::HashMap::new();
+
+    let r = mcp_dispatch::dispatch(
+        &mut w, &mut paths, &layout, &graph, &ctx.out_bus, &ctx.pool, &ctx.event_tx,
+        "mgr",
+        serde_json::json!({
+            "type":"mcp_call","v":1,"tool":"task_request_changes","corr_id":"c1",
+            "args":{"task_id":"T1","feedback":"please revise the api"}
+        }),
+    ).await;
+    assert_eq!(r["type"], "mcp_reply", "task_request_changes should succeed: {r}");
+
+    let frame = ctx.expect_one_broadcast();
+    let cliptown_world::protocol::ConsoleOutbound::Directive {
+        author_id, to_agent_id, body, in_response_to_task, ..
+    } = frame else { panic!("expected Directive") };
+    assert_eq!(author_id, "mgr");
+    assert_eq!(to_agent_id, "eng");
+    assert_eq!(body, "please revise the api");
+    assert_eq!(in_response_to_task, Some("T1".into()));
+
+    // Persisted directive row exists.
+    let row: (String, String, String) = sqlx::query_as(
+        "SELECT author_id, kind, body FROM messages WHERE startup_id = 's1' AND kind = 'directive'"
+    ).fetch_one(&ctx.pool).await.unwrap();
+    assert_eq!(row.0, "mgr");
+    assert_eq!(row.1, "directive");
+    assert_eq!(row.2, "please revise the api");
+
+    // review_round incremented.
+    let rr: (i64,) = sqlx::query_as("SELECT review_round FROM tasks WHERE id = 'T1'")
+        .fetch_one(&ctx.pool).await.unwrap();
+    assert_eq!(rr.0, 1);
+}
+
+#[tokio::test]
+async fn no_broadcast_on_request_changes_null_assignee() {
+    use cliptown_world::{mcp_dispatch, move_sys, path::RoomGraph, seed::TownLayout, state::AvatarView};
+    let mut ctx = TestCtx::new().await;
+    seed_review_cycle_fixture(&ctx.pool).await;
+    // Wipe assignee.
+    sqlx::query("UPDATE tasks SET assignee_agent_id = NULL WHERE id = 'T1'")
+        .execute(&ctx.pool).await.unwrap();
+
+    let mut w = cliptown_world::state::WorldView::default();
+    w.avatars.insert("mgr".into(), AvatarView {
+        agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
+        backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
+        room_id: "suite_1".into(), status: "idle".into(),
+    });
+    let layout = TownLayout::default_town();
+    let graph: RoomGraph = move_sys::graph_from_layout(&layout);
+    let mut paths = std::collections::HashMap::new();
+
+    let _r = mcp_dispatch::dispatch(
+        &mut w, &mut paths, &layout, &graph, &ctx.out_bus, &ctx.pool, &ctx.event_tx,
+        "mgr",
+        serde_json::json!({
+            "type":"mcp_call","v":1,"tool":"task_request_changes","corr_id":"c1",
+            "args":{"task_id":"T1","feedback":"x"}
+        }),
+    ).await;
+    // task_request_changes is manager-only and the manager check uses
+    // assignee_agent_id; with NULL, this returns an mcp_error rather than
+    // emitting a broadcast.
+    ctx.expect_no_broadcasts();
+}
+
+#[tokio::test]
+async fn escalation_emits_system_event_only() {
+    use cliptown_world::{mcp_dispatch, move_sys, path::RoomGraph, seed::TownLayout, state::AvatarView};
+    let mut ctx = TestCtx::new().await;
+    seed_review_cycle_fixture(&ctx.pool).await;
+    // Pre-set review_round to the cap so the next request_changes escalates.
+    sqlx::query("UPDATE tasks SET review_round = 3 WHERE id = 'T1'")
+        .execute(&ctx.pool).await.unwrap();
+
+    let mut w = cliptown_world::state::WorldView::default();
+    w.avatars.insert("mgr".into(), AvatarView {
+        agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
+        backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
+        room_id: "suite_1".into(), status: "idle".into(),
+    });
+    let layout = TownLayout::default_town();
+    let graph: RoomGraph = move_sys::graph_from_layout(&layout);
+    let mut paths = std::collections::HashMap::new();
+
+    let r = mcp_dispatch::dispatch(
+        &mut w, &mut paths, &layout, &graph, &ctx.out_bus, &ctx.pool, &ctx.event_tx,
+        "mgr",
+        serde_json::json!({
+            "type":"mcp_call","v":1,"tool":"task_request_changes","corr_id":"c1",
+            "args":{"task_id":"T1","feedback":"final straw"}
+        }),
+    ).await;
+    assert_eq!(r["type"], "mcp_reply");
+    assert_eq!(r["result"]["reason"], "max_review_rounds_exceeded");
+
+    let frames = ctx.drain_broadcasts();
+    let directive_count = frames.iter().filter(|f| matches!(f, cliptown_world::protocol::ConsoleOutbound::Directive {..})).count();
+    let system_event_count = frames.iter().filter(|f| matches!(f, cliptown_world::protocol::ConsoleOutbound::SystemEvent {..})).count();
+    assert_eq!(directive_count, 0, "no Directive on escalation: {frames:?}");
+    assert_eq!(system_event_count, 1, "one SystemEvent (task_escalated): {frames:?}");
+    if let cliptown_world::protocol::ConsoleOutbound::SystemEvent { kind, severity, .. } = &frames[0] {
+        assert_eq!(kind, "task_escalated");
+        assert_eq!(severity, "alert");
+    }
+
+    // review_round preserved (escalation does NOT increment).
+    let rr: (i64, String) = sqlx::query_as("SELECT review_round, status FROM tasks WHERE id = 'T1'")
+        .fetch_one(&ctx.pool).await.unwrap();
+    assert_eq!(rr.0, 3, "review_round unchanged on escalation");
+    assert_eq!(rr.1, "escalated");
+}
+
+#[tokio::test]
+async fn transactional_integrity_request_changes() {
+    use cliptown_world::{mcp_dispatch, move_sys, path::RoomGraph, seed::TownLayout, state::AvatarView};
+    let mut ctx = TestCtx::new().await;
+    seed_review_cycle_fixture(&ctx.pool).await;
+
+    // Happy-path transactional integrity check: assert that on a successful
+    // task_request_changes, BOTH the task UPDATE AND the new directive INSERT
+    // are persisted atomically. If a future change splits them, the
+    // broadcast-then-rollback case would show as a broadcast for a missing row;
+    // this test guards both rows being present together.
+    let mut w = cliptown_world::state::WorldView::default();
+    w.avatars.insert("mgr".into(), AvatarView {
+        agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
+        backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
+        room_id: "suite_1".into(), status: "idle".into(),
+    });
+    let layout = TownLayout::default_town();
+    let graph: RoomGraph = move_sys::graph_from_layout(&layout);
+    let mut paths = std::collections::HashMap::new();
+
+    let _r = mcp_dispatch::dispatch(
+        &mut w, &mut paths, &layout, &graph, &ctx.out_bus, &ctx.pool, &ctx.event_tx,
+        "mgr",
+        serde_json::json!({
+            "type":"mcp_call","v":1,"tool":"task_request_changes","corr_id":"c1",
+            "args":{"task_id":"T1","feedback":"x"}
+        }),
+    ).await;
+    // Assert both rows are present (transactional success):
+    let task: (String, i64) = sqlx::query_as(
+        "SELECT status, review_round FROM tasks WHERE id = 'T1'"
+    ).fetch_one(&ctx.pool).await.unwrap();
+    let msg_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM messages WHERE startup_id = 's1' AND kind = 'directive'"
+    ).fetch_one(&ctx.pool).await.unwrap();
+    assert_eq!(task.0, "changes_requested");
+    assert_eq!(task.1, 1);
+    assert_eq!(msg_count.0, 1, "exactly one directive row persisted");
+    let _ = ctx.drain_broadcasts();
+}

@@ -502,6 +502,19 @@ async fn task_request_changes_increments_round_and_notifies() {
     assert_eq!(row.1, 1);
     let evts = fx.drain("e1");
     assert!(evts.iter().any(|e| e["type"] == "directive"), "{evts:?}");
+    // Broadcast channel should carry exactly one Directive frame (task feedback).
+    match fx._event_rx.try_recv() {
+        Ok(cliptown_world::protocol::ConsoleOutbound::Directive {
+            author_id, to_agent_id, body, in_response_to_task, ..
+        }) => {
+            assert_eq!(author_id, "m1");
+            assert_eq!(to_agent_id, "e1");
+            assert_eq!(body, "redo");
+            assert_eq!(in_response_to_task, Some("T1".into()));
+        }
+        other => panic!("expected Directive broadcast frame, got {:?}", other),
+    }
+    // No further frames after the one Directive.
     fx.expect_no_broadcasts();
 }
 
