@@ -595,4 +595,68 @@ test.describe("ship gate § 11", () => {
     await expect(inProgressColumn.locator('text="E"')).toHaveCount(1);
     await expect(inProgressColumn.locator('text="?"')).toHaveCount(0);
   });
+
+  // Card review-round badge: independent rendering check that pins the
+  // contract Card.tsx::ReviewRoundBadge needs to satisfy for ship-gate
+  // § 11.6's UI proof. Asserts that:
+  //   - A task with review_round=0 (or undefined) renders NO badge.
+  //   - A task with review_round=2, max=3 renders "R2/3" with a
+  //     `data-review-round="2"` attribute the integration test can hook on.
+  //   - At round=max (3/3), the title attribute reads "at escalation
+  //     threshold" so the operator hover-explanation is verifiable.
+  test("kanban card renders R{round}/{max} review-round badge", async ({
+    page,
+  }) => {
+    const STARTUP = "ccdd1111-ccdd-4111-ccdd-111111111111";
+    const TASK_FRESH = "task-fresh-001"; // review_round 0 → no badge
+    const TASK_R2 = "task-r2-002"; // review_round 2 → "R2/3" amber
+    const TASK_AT_CAP = "task-cap-003"; // review_round 3 → "R3/3" red, escalation tooltip
+
+    await page.goto("/console");
+    await stopWS(page);
+
+    await dispatch(page, {
+      type: "world_view_snapshot",
+      snapshot: {
+        startups: [
+          { id: STARTUP, name: "alpha-rr", budget_cap_usd: 100, budget_spent_usd: 0, last_event_ts: 1 },
+        ],
+        avatars: [],
+        tasks: [
+          { id: TASK_FRESH, startup_id: STARTUP, title: "Fresh task no review", status: "queued", assignee_agent_id: null, required_room: null, review_round: 0, max_review_rounds: 3 },
+          { id: TASK_R2, startup_id: STARTUP, title: "Task at round two", status: "awaiting_review", assignee_agent_id: null, required_room: null, review_round: 2, max_review_rounds: 3 },
+          // status stays awaiting_review — escalation isn't yet surfaced in
+          // the kanban (separate UI gap; tasks transitioning to "escalated"
+          // disappear from the board today). The badge logic at round=cap
+          // is what this test pins.
+          { id: TASK_AT_CAP, startup_id: STARTUP, title: "Task at threshold", status: "awaiting_review", assignee_agent_id: null, required_room: null, review_round: 3, max_review_rounds: 3 },
+        ],
+      },
+    });
+
+    const sidebar = page.getByRole("complementary", { name: "startups" });
+    await sidebar.locator(`[data-startup-id="${STARTUP}"]`).click();
+    const main = page.locator("main");
+
+    // Fresh task (round 0): no badge anywhere on its card. The card uses
+    // data-review-round on the badge wrapper, so "no badge" === "no
+    // attribute" within the queued column for that task title.
+    const freshCard = main.getByText("Fresh task no review");
+    await expect(freshCard).toBeVisible();
+    // Sanity: no R0/N text rendered for fresh tasks (regression guard for
+    // the `if (!round || round < 1) return null` early-exit).
+    await expect(main.locator('text="R0/3"')).toHaveCount(0);
+
+    // Round 2 task: badge with "R2/3" and data-review-round="2".
+    const r2Badge = main.locator('[data-review-round="2"]');
+    await expect(r2Badge).toHaveCount(1);
+    await expect(r2Badge).toContainText("R2/3");
+
+    // Round 3 (escalation threshold): "R3/3" + tooltip mentions threshold.
+    const capBadge = main.locator('[data-review-round="3"]');
+    await expect(capBadge).toHaveCount(1);
+    await expect(capBadge).toContainText("R3/3");
+    // Tooltip is the `title` attribute (also mirrored to aria-label).
+    await expect(capBadge).toHaveAttribute("title", /escalation threshold/);
+  });
 });
