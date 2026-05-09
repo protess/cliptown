@@ -154,18 +154,24 @@ pub async fn build_console_snapshot(
 
     // In-flight + pending tasks (everything except `done` / `failed`) so
     // the kanban shows the live work surface without flooding on history.
+    // `artifact_path` is set by `handle_task_done` (mcp_dispatch.rs) when the
+    // engineer submits work. Status flips in_progress → awaiting_review in
+    // the same UPDATE, so the operator console sees the canonical path
+    // (`workspaces/<sid>/artifacts/<tid>.md`) on the kanban card while the
+    // manager reviews. Spec § 11.4 — the operator-visible proof of "artifact
+    // landed at the canonical path."
     let tasks: Vec<serde_json::Value> = sqlx::query_as::<
         _,
-        (String, String, String, String, Option<String>, Option<String>, i64),
+        (String, String, String, String, Option<String>, Option<String>, i64, Option<String>),
     >(
-        "SELECT id, startup_id, title, status, assignee_agent_id, required_room, review_round \
+        "SELECT id, startup_id, title, status, assignee_agent_id, required_room, review_round, artifact_path \
          FROM tasks WHERE status NOT IN ('done', 'failed')",
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(id, startup_id, title, status, assignee, required_room, review_round)| {
+    .map(|(id, startup_id, title, status, assignee, required_room, review_round, artifact_path)| {
         json!({
             "id": id,
             "startup_id": startup_id,
@@ -175,6 +181,7 @@ pub async fn build_console_snapshot(
             "required_room": required_room,
             "review_round": review_round,
             "max_review_rounds": max_review_rounds,
+            "artifact_path": artifact_path,
         })
     })
     .collect();

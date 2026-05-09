@@ -103,6 +103,22 @@ export function Card({
           {task.required_room && <span>· {task.required_room}</span>}
           <ReviewRoundBadge round={reviewRound} max={maxReviewRounds} />
         </div>
+        {task.artifact_path && (
+          <div
+            data-artifact-path={task.artifact_path}
+            title={task.artifact_path}
+            style={{
+              fontSize: 11,
+              color: "var(--fg-secondary)",
+              marginTop: 2,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <code>{task.artifact_path}</code>
+          </div>
+        )}
       </div>
       <span
         aria-hidden
