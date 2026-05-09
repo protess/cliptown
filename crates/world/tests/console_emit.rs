@@ -419,3 +419,61 @@ async fn transactional_integrity_request_changes() {
     assert_eq!(msg_count.0, 1, "exactly one directive row persisted");
     let _ = ctx.drain_broadcasts();
 }
+
+#[tokio::test]
+async fn no_broadcast_on_subtask_with_null_assignee() {
+    use cliptown_world::{mcp_dispatch, move_sys, path::RoomGraph, seed::TownLayout, state::AvatarView};
+    let mut ctx = TestCtx::new().await;
+
+    // Seed: founder mgr manages a parent task. Engineer eng was assigned to T1
+    // (a subtask of parent), then assignee was nulled (e.g. agent removed).
+    sqlx::query("INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp', 'active', unixepoch())")
+        .execute(&ctx.pool).await.unwrap();
+    sqlx::query("INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status, manager_id) VALUES ('mgr', 's1', 'M', 'founder', 'claude_code', 'm', '{}', 'suite_1', 'idle', NULL)")
+        .execute(&ctx.pool).await.unwrap();
+    // Parent task assigned to mgr (root task pattern).
+    sqlx::query("INSERT INTO tasks (id, startup_id, parent_id, title, description, status, assignee_agent_id, review_round, created_at, updated_at) VALUES ('parent', 's1', NULL, 'parent', 'd', 'in_progress', 'mgr', 0, unixepoch(), unixepoch())")
+        .execute(&ctx.pool).await.unwrap();
+    // Subtask with NULL assignee, awaiting review.
+    sqlx::query("INSERT INTO tasks (id, startup_id, parent_id, title, description, status, assignee_agent_id, review_round, created_at, updated_at) VALUES ('T1', 's1', 'parent', 'subtask', 'd', 'awaiting_review', NULL, 0, unixepoch(), unixepoch())")
+        .execute(&ctx.pool).await.unwrap();
+
+    let mut w = cliptown_world::state::WorldView::default();
+    w.avatars.insert("mgr".into(), AvatarView {
+        agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
+        backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
+        room_id: "suite_1".into(), status: "idle".into(),
+    });
+    let layout = TownLayout::default_town();
+    let graph: RoomGraph = move_sys::graph_from_layout(&layout);
+    let mut paths = std::collections::HashMap::new();
+
+    let r = mcp_dispatch::dispatch(
+        &mut w, &mut paths, &layout, &graph, &ctx.out_bus, &ctx.pool, &ctx.event_tx,
+        "mgr",
+        serde_json::json!({
+            "type":"mcp_call","v":1,"tool":"task_request_changes","corr_id":"c1",
+            "args":{"task_id":"T1","feedback":"please revise"}
+        }),
+    ).await;
+
+    // Manager check should pass (mgr manages parent), but no_assignee guard
+    // must reject before any side effect.
+    assert_eq!(r["type"], "mcp_error", "expected mcp_error: {r}");
+    assert_eq!(r["code"], "no_assignee", "code should be no_assignee: {r}");
+
+    // No broadcast emitted.
+    ctx.expect_no_broadcasts();
+
+    // Critical: task state UNCHANGED (no UPDATE happened, no directive row).
+    let task: (String, i64) = sqlx::query_as(
+        "SELECT status, review_round FROM tasks WHERE id = 'T1'"
+    ).fetch_one(&ctx.pool).await.unwrap();
+    assert_eq!(task.0, "awaiting_review", "status must be unchanged");
+    assert_eq!(task.1, 0, "review_round must be unchanged");
+
+    let msg_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM messages WHERE startup_id = 's1' AND kind = 'directive'"
+    ).fetch_one(&ctx.pool).await.unwrap();
+    assert_eq!(msg_count.0, 0, "no directive row should be persisted");
+}

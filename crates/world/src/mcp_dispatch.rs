@@ -807,6 +807,14 @@ async fn handle_task_request_changes(
         return Err(("no_permission".into(), "task_request_changes is manager-only".into()));
     }
 
+    // Guard: must run BEFORE any side effects.
+    // A subtask whose parent.assignee = caller passes the manager check above,
+    // but if the subtask itself has no assignee, the directive has nowhere to go.
+    // Reject early so the task state stays clean.
+    if task.assignee_agent_id.is_none() {
+        return Err(("no_assignee".into(), "task has no assignee".into()));
+    }
+
     // Escalation branch: max-rounds breach. NO directive INSERT, NO Directive
     // broadcast. Emits a single SystemEvent via emit_system_event so the
     // operator console sees the task transition to escalated.
@@ -878,27 +886,25 @@ async fn handle_task_request_changes(
         &json!({"actor":"manager","kind":"task_request_changes","agent_id":caller.agent_id}).to_string(),
     ).await;
 
-    // Broadcast Directive + push to assignee out_bus, ONLY if assignee exists
-    // (mirrors the existing out_bus-skip behavior).
-    if let Some(assignee) = task.assignee_agent_id.as_deref() {
-        let _ = event_tx.send(crate::protocol::ConsoleOutbound::Directive {
-            v: 1,
-            message_id: directive_id,
-            ts: chrono::Utc::now().timestamp_millis(),
-            startup_id: caller.startup_id.clone(),
-            author_id: caller.agent_id.clone(),
-            to_agent_id: assignee.to_string(),
-            body: feedback.clone(),
-            in_response_to_task: Some(task_id.clone()),
-        });
-        if let Some(tx) = out_bus.get(assignee) {
-            let _ = tx.try_send(json!({
-                "type":"directive","v":1,
-                "from_agent_id": caller.agent_id,
-                "body": feedback,
-                "in_response_to_task": task_id,
-            }));
-        }
+    // assignee is guaranteed non-None by the guard above.
+    let assignee = task.assignee_agent_id.as_deref().expect("checked above for None");
+    let _ = event_tx.send(crate::protocol::ConsoleOutbound::Directive {
+        v: 1,
+        message_id: directive_id,
+        ts: chrono::Utc::now().timestamp_millis(),
+        startup_id: caller.startup_id.clone(),
+        author_id: caller.agent_id.clone(),
+        to_agent_id: assignee.to_string(),
+        body: feedback.clone(),
+        in_response_to_task: Some(task_id.clone()),
+    });
+    if let Some(tx) = out_bus.get(assignee) {
+        let _ = tx.try_send(json!({
+            "type":"directive","v":1,
+            "from_agent_id": caller.agent_id,
+            "body": feedback,
+            "in_response_to_task": task_id,
+        }));
     }
 
     Ok(json!({"task_id": task_id, "new_status": status_to_str(new_status)}))
