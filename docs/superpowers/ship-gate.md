@@ -31,7 +31,7 @@ cd packages/frontend
 pnpm e2e:install   # one-time
 pnpm e2e
 ```
-13 tests pass: 3 smoke (redirect, status indicator, town back link), 2 keymap regression (input suppression, Esc-dismiss), 7 ship-gate invariants (§ 11.1, § 11.2, § 11.3, § 11.4, § 11.6, § 11.7, § 11.8), plus a card-rendering test for the review-round badge that backs § 11.6. #5 stays rust-only (DB invariant); #9 is real-LLM only (M9.10).
+14 tests pass: 3 smoke (redirect, status indicator, town back link), 2 keymap regression (input suppression, Esc-dismiss), 7 ship-gate invariants (§ 11.1, § 11.2, § 11.3, § 11.4, § 11.6, § 11.7, § 11.8), plus two card-rendering tests that back § 11.6 (the review-round badge and the `changes_requested → in_progress` coalesce). #5 stays rust-only (DB invariant); #9 is real-LLM only (M9.10).
 
 UI proofs that need synthetic ConsoleOutbound frames (§ 11.2, § 11.3, § 11.4, § 11.6, § 11.7, § 11.8) use dev-only test hooks, all `import.meta.env.DEV`-gated and tree-shaken from production builds:
 - `__cliptownDispatch(msg)` (store.ts) — push a frame through the reducer
