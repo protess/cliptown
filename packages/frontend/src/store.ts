@@ -50,6 +50,11 @@ export interface TaskVM {
   required_room?: string | null;
   review_round?: number;
   max_review_rounds?: number;
+  // Canonical path from cliptown-design § 11.4. World rejects any other
+  // shape with `bad_artifact_path`. Set when the engineer's `task_done`
+  // commits, visible to the operator while the task sits in
+  // `awaiting_review`. Absent on tasks before submission.
+  artifact_path?: string | null;
 }
 
 export interface SystemEventVM {
@@ -246,6 +251,8 @@ function indexTasks(raw: unknown): Record<string, TaskVM> {
           typeof t.required_room === "string" ? t.required_room : null,
         review_round: typeof t.review_round === "number" ? t.review_round : undefined,
         max_review_rounds: typeof t.max_review_rounds === "number" ? t.max_review_rounds : undefined,
+        artifact_path:
+          typeof t.artifact_path === "string" ? t.artifact_path : null,
       };
     }
   } else {
@@ -265,6 +272,8 @@ function indexTasks(raw: unknown): Record<string, TaskVM> {
             typeof t.required_room === "string" ? t.required_room : null,
           review_round: typeof t.review_round === "number" ? t.review_round : undefined,
           max_review_rounds: typeof t.max_review_rounds === "number" ? t.max_review_rounds : undefined,
+          artifact_path:
+            typeof t.artifact_path === "string" ? t.artifact_path : null,
         };
       }
     }

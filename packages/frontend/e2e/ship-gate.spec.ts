@@ -660,6 +660,86 @@ test.describe("ship gate § 11", () => {
     await expect(capBadge).toHaveAttribute("title", /escalation threshold/);
   });
 
+  // § 11.4 — When the engineer's `task_done` MCP call commits, the world
+  // updates the task row with `artifact_path = workspaces/<sid>/artifacts/
+  // <tid>.md` AND status → awaiting_review in the same transaction. The
+  // canonical path is then visible to the operator on the kanban card while
+  // the manager reviews. Spec § 11.4.
+  //
+  // Filesystem proof (the file actually lands on disk at that path) lives in
+  // the rust-layer `crates/world/tests/e2e_engineer_artifact.rs` — this UI
+  // proof asserts the operator-observable surface: the canonical path string
+  // renders on the card, attached to the right task.
+  test("§ 11.4 — engineer artifact path renders on the kanban card", async ({
+    page,
+  }) => {
+    const STARTUP = "1144aaaa-1144-4aaa-1144-aaaaaaaa1144";
+    const ENGINEER = "1144eeee-eeee-4eee-eeee-eeeeeeeeeeee";
+    const TASK_DONE_ID = "task-1144-art";
+    const TASK_OPEN_ID = "task-1144-open";
+    // Mirrors the world's canonical pattern from handle_task_done
+    // (mcp_dispatch.rs::501-510). Any deviation is rejected with
+    // bad_artifact_path, so the test pins both sides of the contract.
+    const ARTIFACT = `workspaces/${STARTUP}/artifacts/${TASK_DONE_ID}.md`;
+
+    await page.goto("/console");
+    await stopWS(page);
+
+    await dispatch(page, {
+      type: "world_view_snapshot",
+      snapshot: {
+        startups: [
+          { id: STARTUP, name: "artifact", budget_cap_usd: 100, budget_spent_usd: 0, last_event_ts: 1 },
+        ],
+        avatars: [
+          { agent_id: ENGINEER, startup_id: STARTUP, role: "engineer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+        ],
+        tasks: [
+          // Submitted task: engineer just called task_done, world flipped
+          // status to awaiting_review with artifact_path attached. This is
+          // the operator's window to see the path before the manager
+          // accepts/rejects.
+          { id: TASK_DONE_ID, startup_id: STARTUP, title: "Write spec.md", status: "awaiting_review", assignee_agent_id: ENGINEER, required_room: null, review_round: 0, max_review_rounds: 3, artifact_path: ARTIFACT },
+          // Companion task with no artifact yet (still in_progress). Pins
+          // the conditional render — `task.artifact_path && (...)` in
+          // Card.tsx — so a regression that always renders the row trips
+          // this test.
+          { id: TASK_OPEN_ID, startup_id: STARTUP, title: "Open work item", status: "in_progress", assignee_agent_id: ENGINEER, required_room: null, review_round: 0, max_review_rounds: 3, artifact_path: null },
+        ],
+      },
+    });
+
+    const sidebar = page.getByRole("complementary", { name: "startups" });
+    await sidebar.locator(`[data-startup-id="${STARTUP}"]`).click();
+    const main = page.locator("main");
+
+    // The submitted task lands in the awaiting_review column with the
+    // canonical path attached. data-artifact-path lets the test pin the
+    // exact card without grepping nearby DOM, and the visible text inside
+    // <code> mirrors it for the operator's eyes.
+    const reviewColumn = main.locator('[data-column-id="awaiting_review"]');
+    const submittedCard = reviewColumn.getByText("Write spec.md");
+    await expect(submittedCard).toBeVisible();
+    const pathEl = main.locator(`[data-artifact-path="${ARTIFACT}"]`);
+    await expect(pathEl).toHaveCount(1);
+    await expect(pathEl).toContainText(ARTIFACT);
+    // Canonical pattern guard: "workspaces/<startup_id>/artifacts/<task_id>.md".
+    // Mirrors mcp_dispatch.rs:501-510 so a regression on either side trips.
+    await expect(pathEl).toContainText(
+      new RegExp(`^workspaces/[^/]+/artifacts/[^/]+\\.md$`),
+    );
+    // Tooltip mirrors the path so an operator hovering over a truncated
+    // ellipsis can still read it. Pins both sides of `title` + visible text.
+    await expect(pathEl).toHaveAttribute("title", ARTIFACT);
+
+    // Companion (open work, no artifact yet): no artifact-path element
+    // anywhere on its card. Asserting via the in_progress column scope
+    // catches any regression that renders the path container always.
+    const inProgressColumn = main.locator('[data-column-id="in_progress"]');
+    await expect(inProgressColumn.getByText("Open work item")).toBeVisible();
+    await expect(inProgressColumn.locator("[data-artifact-path]")).toHaveCount(0);
+  });
+
   // § 11.6 — When a manager calls `task_request_changes`, the world commits
   // an UPDATE+INSERT transaction (round_++, directive INSERT) and broadcasts
   // a Directive ConsoleOutbound. After three rounds the next call hits the
