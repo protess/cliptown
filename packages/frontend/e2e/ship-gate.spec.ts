@@ -763,11 +763,10 @@ test.describe("ship gate § 11", () => {
   //      task to status="escalated". The TopBar event-feed surfaces it
   //      and the History modal renders the full row.
   //
-  // Phase-1 known gap: the kanban has no column for status="escalated"
-  // (or "changes_requested"), so escalated tasks vanish from the board.
-  // This test documents that gap by asserting the disappearance — when a
-  // follow-up PR surfaces escalated tasks (dedicated column / critical
-  // toast), update the assertion at the bottom of this test.
+  // The kanban now has a dedicated `Escalated` column (between
+  // awaiting_review and done). `changes_requested` folds into in_progress
+  // because the engineer is re-doing the work and the R{round}/{max}
+  // badge already conveys the iteration count.
   test("§ 11.6 — review-cycle bumps badge round-by-round and escalates at cap", async ({
     page,
   }) => {
@@ -780,10 +779,9 @@ test.describe("ship gate § 11", () => {
     await stopWS(page);
 
     // Helper: build a snapshot for the same single-task fixture at a given
-    // status + review_round. The status flip from awaiting_review →
-    // changes_requested → awaiting_review during a round-trip is the
-    // world's job; this test only renders the awaiting_review states the
-    // operator actually sees the badge in.
+    // status + review_round. The status flips between awaiting_review,
+    // changes_requested, and escalated during the lifecycle; this test
+    // exercises each.
     const snapshotAt = (status: string, reviewRound: number) => ({
       type: "world_view_snapshot",
       snapshot: {
@@ -872,8 +870,70 @@ test.describe("ship gate § 11", () => {
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).not.toBeVisible();
 
-    // Phase-1 gap: status="escalated" has no kanban column, so the task
-    // vanishes from the board. Document the gap; flip when surfaced.
-    await expect(main.getByText("Review-cycle task")).toHaveCount(0);
+    // Escalated kanban surface: the task lands in the dedicated `Escalated`
+    // column (data-column-id="escalated"), the R3/3 cap badge is still
+    // attached, and the column header takes the alert color (#D62828).
+    // Spec § 11.6: the operator must be able to see — and override — every
+    // escalated task without scrolling through History.
+    const escalatedColumn = main.locator('[data-column-id="escalated"]');
+    await expect(escalatedColumn.getByText("Review-cycle task")).toBeVisible();
+    await expect(escalatedColumn.locator('[data-review-round="3"]')).toHaveCount(1);
+    // Sanity: the awaiting_review column no longer holds this task.
+    await expect(reviewColumn.getByText("Review-cycle task")).toHaveCount(0);
+  });
+
+  // Companion to § 11.6: `changes_requested` is a status the world sets
+  // mid-cycle (manager bounced, engineer re-working). It has no kanban
+  // column of its own — the operator's mental model is "engineer is
+  // working on it" and the iteration count belongs to the badge. This
+  // test pins the coalesce behavior in `Kanban.tsx::groupBy`: a
+  // changes_requested task lands in the `in_progress` column with the
+  // appropriate review-round badge, NOT in awaiting_review or escalated,
+  // and not vanished.
+  test("§ 11.6 — changes_requested folds into the in_progress column", async ({
+    page,
+  }) => {
+    const STARTUP = "ccrr1111-ccrr-4111-ccrr-111111111111";
+    const ENGINEER = "ccrr0000-0000-4000-0000-000000000002";
+    const TASK = "task-changes-req-001";
+
+    await page.goto("/console");
+    await stopWS(page);
+
+    await dispatch(page, {
+      type: "world_view_snapshot",
+      snapshot: {
+        startups: [
+          { id: STARTUP, name: "rework", budget_cap_usd: 100, budget_spent_usd: 0, last_event_ts: 1 },
+        ],
+        avatars: [
+          { agent_id: ENGINEER, startup_id: STARTUP, role: "engineer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "working" },
+        ],
+        tasks: [
+          { id: TASK, startup_id: STARTUP, title: "Rework after bounce", status: "changes_requested", assignee_agent_id: ENGINEER, required_room: null, review_round: 2, max_review_rounds: 3 },
+        ],
+      },
+    });
+
+    const sidebar = page.getByRole("complementary", { name: "startups" });
+    await sidebar.locator(`[data-startup-id="${STARTUP}"]`).click();
+    const main = page.locator("main");
+
+    // Coalesce: changes_requested → in_progress column.
+    const inProgress = main.locator('[data-column-id="in_progress"]');
+    await expect(inProgress.getByText("Rework after bounce")).toBeVisible();
+    // R2/3 (cap-1) badge shows the iteration count for the operator,
+    // since the column itself looks identical to a fresh in_progress task.
+    const badge = inProgress.locator('[data-review-round="2"]');
+    await expect(badge).toHaveCount(1);
+    await expect(badge).toContainText("R2/3");
+
+    // Sanity: nowhere else.
+    await expect(
+      main.locator('[data-column-id="awaiting_review"]').getByText("Rework after bounce"),
+    ).toHaveCount(0);
+    await expect(
+      main.locator('[data-column-id="escalated"]').getByText("Rework after bounce"),
+    ).toHaveCount(0);
   });
 });

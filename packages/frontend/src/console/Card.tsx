@@ -2,10 +2,12 @@
  * Kanban Card (M4.6): a draggable summary tile for one task.
  *
  * Layout: [stuck-bar | title + meta | assignee monogram]. The left bar is the
- * "stuck indicator" — amber after `stuck_warn_minutes` and red after
- * `stuck_alert_minutes` (defaults sourced from cliptown.toml [kanban]). The
- * monogram is rendered in a deterministic startup-hue circle; review-round
- * dot lights up after the first round and escalates color through round 3.
+ * "stuck indicator" — amber after `stuck_warn_minutes`, red after
+ * `stuck_alert_minutes` (defaults sourced from cliptown.toml [kanban]), and
+ * always red when status is `escalated` (operator must intervene). The
+ * monogram is rendered in a deterministic startup-hue circle; the
+ * review-round badge lights up after the first round and escalates color
+ * through round 3.
  *
  * Phase 0: TaskVM does not yet carry an `updated_at` per-status timestamp,
  * so the stuck indicator stays transparent until the world emits one. This
@@ -182,6 +184,11 @@ function ReviewRoundBadge({ round, max }: { round?: number; max?: number }) {
 }
 
 function stuckIndicator(task: TaskVM): string {
+  // Escalated tasks burn red regardless of `updated_at`. Manager already
+  // bounced the work the maximum number of times, so this card stays in
+  // alert until the operator force-accepts or force-fails it.
+  if (task.status === "escalated") return "#D62828";
+
   // Phase 0: TaskVM has no per-status timestamp. We optimistically read
   // `updated_at` (seconds since epoch) if the world starts emitting it; in
   // its absence the bar stays transparent.

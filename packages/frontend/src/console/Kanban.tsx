@@ -156,6 +156,15 @@ function Column({
   avatars,
   snapBack,
 }: ColumnProps) {
+  // Escalated demands operator action — manager already bounced the work
+  // max-rounds times. Tint the column header in the same alert color the
+  // SystemEvent panel uses (#D62828) so the operator's eye lands here
+  // first when an escalation arrives. Empty escalated columns stay neutral
+  // so the board doesn't cry wolf.
+  const isAlert = id === "escalated" && tasks.length > 0;
+  const headerStyle: CSSProperties = isAlert
+    ? { ...columnHeaderStyle, color: "#D62828" }
+    : columnHeaderStyle;
   return (
     <section
       data-column-id={id}
@@ -163,9 +172,11 @@ function Column({
       onDrop={onDrop}
       style={columnStyle(isOver)}
     >
-      <header style={columnHeaderStyle}>
-        <span style={{ fontWeight: 600 }}>{label}</span>
-        <span>{tasks.length}</span>
+      <header style={headerStyle}>
+        <span style={{ fontWeight: isAlert ? 700 : 600 }}>{label}</span>
+        <span style={isAlert ? { fontWeight: 700 } : undefined}>
+          {tasks.length}
+        </span>
       </header>
       {tasks.map((t) => (
         <div
@@ -260,7 +271,14 @@ function FailedDrawer({
 function groupBy(tasks: TaskVM[]): Record<string, TaskVM[]> {
   const out: Record<string, TaskVM[]> = {};
   for (const t of tasks) {
-    (out[t.status] ??= []).push(t);
+    // `changes_requested` doesn't get its own column — the engineer is
+    // re-doing the work, which is operationally identical to in_progress.
+    // The R{round}/{max} badge on the card already conveys "this is
+    // iteration N." Folding here keeps the kanban focused on the five
+    // operator-facing states + escalated; the world's status enum stays
+    // richer for the rust-layer machinery.
+    const column = t.status === "changes_requested" ? "in_progress" : t.status;
+    (out[column] ??= []).push(t);
   }
   return out;
 }
