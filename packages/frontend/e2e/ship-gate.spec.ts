@@ -439,4 +439,147 @@ test.describe("ship gate § 11", () => {
       { timeout: 3_000 },
     );
   });
+
+  // § 11.2 — An operator directive sent to a founder produces (a) a Directive
+  // frame visible in the operator's chat panel, (b) a new subtask appearing
+  // in the founder's startup's Kanban as "queued", and (c) the task
+  // transitioning to "in progress" once the scheduler assigns it to the
+  // engineer. Spec § 11.2.
+  //
+  // The full chain (cmd_console::OperatorDirective → mcp_dispatch::handle_subtask_create
+  // → scheduler::tick → task_assigned) lives in the rust-layer
+  // `crates/world/tests/e2e_directive_chain.rs`. Until M5+ wires a real-WS
+  // end-to-end fixture in CI, this UI proof asserts each observable
+  // transition by synthesizing the ConsoleOutbound frames the world would
+  // emit at each step:
+  //   1. Directive frame after `cmd_console::OperatorDirective` succeeds
+  //      (M5 emit path; commit 553a912).
+  //   2. WorldViewSnapshot with the new queued task after the founder's
+  //      `subtask_create` MCP call commits.
+  //   3. WorldViewSnapshot with the task transitioned to in_progress and
+  //      assignee_agent_id set to the engineer, after `scheduler::tick`.
+  //
+  // When the real-LLM e2e runner ships (M9.10) this becomes a live-traffic
+  // proof; the rendering contract under test here doesn't change.
+  test("§ 11.2 — operator directive arrives, subtask queues, engineer is assigned", async ({
+    page,
+  }) => {
+    const STARTUP = "abcd1111-abcd-4111-abcd-111111111111";
+    const FOUNDER = "f0000000-0000-4000-0000-000000000001";
+    const ENGINEER = "e0000000-0000-4000-0000-000000000002";
+    const DESIGNER = "d0000000-0000-4000-0000-000000000003";
+    const TASK = "task-spec-001";
+
+    await page.goto("/console");
+    await stopWS(page);
+
+    // Step 0: world publishes the startup + agents. No tasks yet — the
+    // operator hasn't sent the directive.
+    await dispatch(page, {
+      type: "world_view_snapshot",
+      snapshot: {
+        startups: [
+          { id: STARTUP, name: "alpha", budget_cap_usd: 100, budget_spent_usd: 0, last_event_ts: 1 },
+        ],
+        avatars: [
+          { agent_id: FOUNDER, startup_id: STARTUP, role: "founder", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+          { agent_id: ENGINEER, startup_id: STARTUP, role: "engineer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+          { agent_id: DESIGNER, startup_id: STARTUP, role: "designer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+        ],
+        tasks: [],
+      },
+    });
+
+    // Select the startup so the kanban scopes to its tasks. Without this,
+    // Kanban returns null (Kanban.tsx:38: `if (!startupId) return null;`).
+    const sidebar = page.getByRole("complementary", { name: "startups" });
+    await sidebar.locator(`[data-startup-id="${STARTUP}"]`).click();
+    const main = page.locator("main");
+
+    // Open the chat panel — directive frames land in state.messages and the
+    // panel renders them.
+    await page.getByRole("button", { name: "Open chat" }).click();
+    const chat = page.getByRole("complementary", { name: "Chat" });
+    await expect(chat).toBeVisible();
+
+    // ── Step 1: operator sends a directive to the founder. The world's
+    // `cmd_console::OperatorDirective` arm broadcasts a Directive frame
+    // (M5; cmd_console.rs:67-141). Author is the sentinel "operator" so
+    // `looksLikeUuid` (ChatPanel.tsx:202) renders it as raw text.
+    await dispatch(page, {
+      type: "directive",
+      message_id: "msg-directive-001",
+      ts: Date.now(),
+      startup_id: STARTUP,
+      author_id: "operator",
+      to_agent_id: FOUNDER,
+      body: "build a spec.md describing how to deploy",
+      in_response_to_task: null,
+    });
+
+    // Bubble (ChatPanel.tsx:211-257) renders body + author + a directive arrow
+    // tag (`tag = m.kind === "directive" ? "→" : "·"`). Assert all three so a
+    // regression that flips kind→chat or drops the body trips this test.
+    const directiveBubble = chat.getByText(
+      "build a spec.md describing how to deploy",
+    );
+    await expect(directiveBubble).toBeVisible();
+    // The "operator" sentinel renders as a raw <code> (no UUID truncation).
+    await expect(chat.locator('code:text-is("operator")')).toHaveCount(1);
+
+    // ── Step 2: founder's CLI calls subtask_create; world transitions the
+    // new task to `queued` and pushes a WorldViewSnapshot. The kanban's
+    // "Queued" column (id="queued") gets a card.
+    await dispatch(page, {
+      type: "world_view_snapshot",
+      snapshot: {
+        startups: [
+          { id: STARTUP, name: "alpha", budget_cap_usd: 100, budget_spent_usd: 0, last_event_ts: 2 },
+        ],
+        avatars: [
+          { agent_id: FOUNDER, startup_id: STARTUP, role: "founder", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+          { agent_id: ENGINEER, startup_id: STARTUP, role: "engineer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+          { agent_id: DESIGNER, startup_id: STARTUP, role: "designer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+        ],
+        tasks: [
+          { id: TASK, startup_id: STARTUP, title: "Write spec.md", status: "queued", assignee_agent_id: null, required_room: null },
+        ],
+      },
+    });
+
+    const queuedColumn = main.locator('[data-column-id="queued"]');
+    await expect(queuedColumn.getByText("Write spec.md")).toBeVisible();
+    // Sanity: the in_progress column doesn't have it yet.
+    await expect(
+      main.locator('[data-column-id="in_progress"]').getByText("Write spec.md"),
+    ).toHaveCount(0);
+
+    // ── Step 3: scheduler::tick assigns the task to the engineer. Status
+    // flips to `in_progress`, `assignee_agent_id` is set. The kanban moves
+    // the card to the "In progress" column (id="in_progress") and the
+    // assignee monogram derives from the engineer's agent_id (Card.tsx:50).
+    await dispatch(page, {
+      type: "world_view_snapshot",
+      snapshot: {
+        startups: [
+          { id: STARTUP, name: "alpha", budget_cap_usd: 100, budget_spent_usd: 0, last_event_ts: 3 },
+        ],
+        avatars: [
+          { agent_id: FOUNDER, startup_id: STARTUP, role: "founder", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+          { agent_id: ENGINEER, startup_id: STARTUP, role: "engineer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "working" },
+          { agent_id: DESIGNER, startup_id: STARTUP, role: "designer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+        ],
+        tasks: [
+          { id: TASK, startup_id: STARTUP, title: "Write spec.md", status: "in_progress", assignee_agent_id: ENGINEER, required_room: null },
+        ],
+      },
+    });
+
+    const inProgressColumn = main.locator('[data-column-id="in_progress"]');
+    await expect(inProgressColumn.getByText("Write spec.md")).toBeVisible();
+    // Card no longer in queued column.
+    await expect(
+      queuedColumn.getByText("Write spec.md"),
+    ).toHaveCount(0);
+  });
 });
