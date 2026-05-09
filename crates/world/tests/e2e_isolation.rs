@@ -5,17 +5,20 @@
 //! a verification test that exercises the existing cross-startup gates
 //! installed in M2.3 and the per-startup workspace sandbox from §6.3.
 
+mod common;
+
 use cliptown_world::{
     mcp_dispatch,
     move_sys::{self, PathStore},
     path,
+    protocol::ConsoleOutbound,
     seed::{self, TownLayout},
     state::{AvatarView, WorldView},
     storage,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 async fn fixture() -> (sqlx::SqlitePool, TownLayout, path::RoomGraph) {
     let dir = tempfile::tempdir().unwrap();
@@ -86,10 +89,11 @@ async fn alpha_subtask_create_does_not_touch_beta() {
 
     let mut paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = broadcast::channel::<ConsoleOutbound>(64);
 
     // α-founder creates a subtask under their own parent.
     let r = mcp_dispatch::dispatch(
-        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, "alpha_founder",
+        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, &event_tx, "alpha_founder",
         json!({
             "type": "mcp_call", "v": 1, "tool": "subtask_create", "corr_id": "c1",
             "args": {
@@ -112,6 +116,7 @@ async fn alpha_subtask_create_does_not_touch_beta() {
     let alpha_count: (i64,) = sqlx::query_as("SELECT count(*) FROM tasks WHERE startup_id = 'alpha'")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(alpha_count.0, 2);
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -123,10 +128,11 @@ async fn alpha_directive_to_beta_engineer_rejected() {
 
     let mut paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = broadcast::channel::<ConsoleOutbound>(64);
 
     // α-founder tries to send a directive to β's engineer.
     let r = mcp_dispatch::dispatch(
-        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, "alpha_founder",
+        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, &event_tx, "alpha_founder",
         json!({
             "type": "mcp_call", "v": 1, "tool": "speak", "corr_id": "c1",
             "args": { "kind": "directive", "to_agent_id": "beta_engineer", "body": "do my bidding" }
@@ -138,6 +144,7 @@ async fn alpha_directive_to_beta_engineer_rejected() {
     // No message row was inserted.
     let count: (i64,) = sqlx::query_as("SELECT count(*) FROM messages").fetch_one(&pool).await.unwrap();
     assert_eq!(count.0, 0);
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -147,10 +154,11 @@ async fn alpha_task_done_on_beta_task_rejected() {
     w.avatars.insert("alpha_engineer".into(), av("alpha_engineer", "alpha", "engineer", "suite_1"));
     let mut paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = broadcast::channel::<ConsoleOutbound>(64);
 
     // α-engineer tries to mark β's parent task done.
     let r = mcp_dispatch::dispatch(
-        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, "alpha_engineer",
+        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, &event_tx, "alpha_engineer",
         json!({
             "type": "mcp_call", "v": 1, "tool": "task_done", "corr_id": "c1",
             "args": { "task_id": "parent_beta", "artifact_path": "workspaces/alpha/artifacts/parent_beta.md" }
@@ -162,6 +170,7 @@ async fn alpha_task_done_on_beta_task_rejected() {
     let row: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id = 'parent_beta'")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(row.0, "in_progress");
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -171,6 +180,7 @@ async fn alpha_read_artifact_with_beta_path_rejected() {
     w.avatars.insert("alpha_engineer".into(), av("alpha_engineer", "alpha", "engineer", "suite_1"));
     let mut paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = broadcast::channel::<ConsoleOutbound>(64);
 
     // Materialize a fake artifact in beta's space.
     let beta_artifacts = std::env::current_dir().unwrap().join("workspaces").join("beta").join("artifacts");
@@ -179,7 +189,7 @@ async fn alpha_read_artifact_with_beta_path_rejected() {
 
     // α-engineer's sandbox is rooted at workspaces/alpha. Try to escape via ".." to beta.
     let r = mcp_dispatch::dispatch(
-        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, "alpha_engineer",
+        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, &event_tx, "alpha_engineer",
         json!({
             "type": "mcp_call", "v": 1, "tool": "read_artifact", "corr_id": "c1",
             "args": { "path": "../beta/artifacts/secret.md" }
@@ -188,4 +198,5 @@ async fn alpha_read_artifact_with_beta_path_rejected() {
     assert_eq!(r["type"], "mcp_error");
     // Sandbox rejects path escape.
     let _ = tokio::fs::remove_dir_all(std::env::current_dir().unwrap().join("workspaces").join("beta")).await;
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }

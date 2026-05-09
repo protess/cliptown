@@ -4,11 +4,16 @@
 
 use cliptown_world::{
     budget,
+    protocol::ConsoleOutbound,
     state::{AvatarView, WorldView},
     storage,
 };
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
+
+fn make_event_tx() -> (broadcast::Sender<ConsoleOutbound>, broadcast::Receiver<ConsoleOutbound>) {
+    broadcast::channel(64)
+}
 
 async fn fixture() -> (WorldView, sqlx::SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -238,9 +243,9 @@ async fn pause_startup_only_targets_matching_workers() {
 #[tokio::test]
 async fn record_threshold_event_writes_system_event() {
     let (_w, pool, _tmp) = fixture().await;
-    budget::record_threshold_event(&pool, "s1", budget::Threshold::Pause100, 10.5, 10.0)
-        .await
-        .unwrap();
+    let (event_tx, mut event_rx) = make_event_tx();
+    budget::record_threshold_event(&pool, &event_tx, "s1", budget::Threshold::Pause100, 10.5, 10.0)
+        .await;
     let count: (i64,) = sqlx::query_as(
         "SELECT count(*) FROM system_events WHERE kind='budget_pause_100' AND severity='alert'",
     )
@@ -249,10 +254,17 @@ async fn record_threshold_event_writes_system_event() {
     .unwrap();
     assert_eq!(count.0, 1);
 
+    // Broadcast frame emitted for Pause100.
+    let frame = event_rx.try_recv().expect("expected SystemEvent broadcast for Pause100");
+    let ConsoleOutbound::SystemEvent { kind, severity, .. } = frame else {
+        panic!("expected SystemEvent, got something else");
+    };
+    assert_eq!(kind, "budget_pause_100");
+    assert_eq!(severity, "alert");
+
     // Warn80 fires as severity=warn.
-    budget::record_threshold_event(&pool, "s1", budget::Threshold::Warn80, 8.1, 10.0)
-        .await
-        .unwrap();
+    budget::record_threshold_event(&pool, &event_tx, "s1", budget::Threshold::Warn80, 8.1, 10.0)
+        .await;
     let warn_count: (i64,) = sqlx::query_as(
         "SELECT count(*) FROM system_events WHERE kind='budget_warn_80' AND severity='warn'",
     )
@@ -260,6 +272,14 @@ async fn record_threshold_event_writes_system_event() {
     .await
     .unwrap();
     assert_eq!(warn_count.0, 1);
+
+    // Broadcast frame emitted for Warn80.
+    let frame2 = event_rx.try_recv().expect("expected SystemEvent broadcast for Warn80");
+    let ConsoleOutbound::SystemEvent { kind: kind2, severity: severity2, .. } = frame2 else {
+        panic!("expected SystemEvent, got something else");
+    };
+    assert_eq!(kind2, "budget_warn_80");
+    assert_eq!(severity2, "warn");
 }
 
 #[tokio::test]
@@ -284,4 +304,62 @@ async fn raising_cap_prevents_re_trip() {
         .await
         .unwrap();
     assert!(t2.is_none(), "raising the cap should auto-resume; got {:?}", t2);
+}
+
+/// Caller-path test: apply_report → record_threshold_event emits a
+/// ConsoleOutbound::SystemEvent broadcast at each threshold (80%, 95%, 100%).
+/// This covers the full dark-wire path, not just the SQL row.
+#[tokio::test]
+async fn threshold_crossings_broadcast_system_events() {
+    let (_w, pool, _tmp) = fixture().await;
+    let (event_tx, mut event_rx) = make_event_tx();
+
+    // --- 80% threshold ---
+    let (spent80, cap80, t80) = budget::apply_report(
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 2_700_000, 0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(t80, Some(budget::Threshold::Warn80));
+    budget::record_threshold_event(&pool, &event_tx, "s1", t80.unwrap(), spent80, cap80).await;
+
+    let frame80 = event_rx.try_recv().expect("expected broadcast for 80% threshold");
+    let ConsoleOutbound::SystemEvent { kind, severity, startup_id, .. } = frame80 else {
+        panic!("expected SystemEvent");
+    };
+    assert_eq!(kind, "budget_warn_80");
+    assert_eq!(severity, "warn");
+    assert_eq!(startup_id.as_deref(), Some("s1"));
+
+    // --- 95% threshold (push further from 81% → 96%) ---
+    let (spent95, cap95, t95) = budget::apply_report(
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 500_000, 0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(t95, Some(budget::Threshold::Warn95));
+    budget::record_threshold_event(&pool, &event_tx, "s1", t95.unwrap(), spent95, cap95).await;
+
+    let frame95 = event_rx.try_recv().expect("expected broadcast for 95% threshold");
+    let ConsoleOutbound::SystemEvent { kind: k95, severity: s95, .. } = frame95 else {
+        panic!("expected SystemEvent");
+    };
+    assert_eq!(k95, "budget_warn_95");
+    assert_eq!(s95, "warn");
+
+    // --- 100% threshold (push past $10 cap; currently ~$9.60) ---
+    let (spent100, cap100, t100) = budget::apply_report(
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 200_000, 0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(t100, Some(budget::Threshold::Pause100));
+    budget::record_threshold_event(&pool, &event_tx, "s1", t100.unwrap(), spent100, cap100).await;
+
+    let frame100 = event_rx.try_recv().expect("expected broadcast for 100% threshold");
+    let ConsoleOutbound::SystemEvent { kind: k100, severity: s100, .. } = frame100 else {
+        panic!("expected SystemEvent");
+    };
+    assert_eq!(k100, "budget_pause_100");
+    assert_eq!(s100, "alert");
 }

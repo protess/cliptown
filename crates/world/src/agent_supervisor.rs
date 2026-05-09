@@ -6,7 +6,6 @@
 //!
 //! On startup dissolve: SIGTERM all that startup's workers; 5s grace; SIGKILL.
 
-use crate::persist;
 use serde_json::json;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
@@ -80,15 +79,21 @@ pub struct AgentSupervisor {
     /// consults this on child exit to suppress respawn. Cleared when the
     /// watch loop has acted on it.
     tombstones: Arc<Mutex<HashSet<String>>>,
+    event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
 }
 
 impl AgentSupervisor {
-    pub fn new(config: SupervisorConfig, pool: SqlitePool) -> Self {
+    pub fn new(
+        config: SupervisorConfig,
+        pool: SqlitePool,
+        event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    ) -> Self {
         Self {
             config,
             pool,
             agents: Arc::new(Mutex::new(HashMap::new())),
             tombstones: Arc::new(Mutex::new(HashSet::new())),
+            event_tx,
         }
     }
 
@@ -165,14 +170,18 @@ impl AgentSupervisor {
             );
 
             if failures > self.config.backoff_ms.len() {
-                let _ = persist::record_system_event(
+                if let Err(e) = crate::emit::emit_system_event(
                     &self.pool,
+                    &self.event_tx,
                     Some(&cfg.startup_id),
                     "worker_dead",
                     &json!({"agent_id": cfg.agent_id, "attempts": failures}).to_string(),
                     "alert",
                 )
-                .await;
+                .await
+                {
+                    tracing::error!(component = "agent_supervisor", agent_id = %cfg.agent_id, err = %e, "failed to emit worker_dead system_event");
+                }
                 self.remove_agent(&cfg.agent_id).await;
                 return;
             }

@@ -112,8 +112,8 @@ export function HistoryModal({
   );
 }
 
-function severityColor(s: "info" | "warn" | "alert"): string {
-  return s === "alert" ? "#D62828" : s === "warn" ? "#E69F00" : "#6B6B6B";
+function severityColor(s: "info" | "warn" | "alert" | "critical"): string {
+  return s === "critical" ? "#8B0000" : s === "alert" ? "#D62828" : s === "warn" ? "#E69F00" : "#6B6B6B";
 }
 
 function detailString(d: unknown): string {

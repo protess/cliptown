@@ -59,12 +59,17 @@ pub enum Cmd {
 pub struct Handle {
     pub tx: mpsc::Sender<Cmd>,
     pub view_rx: watch::Receiver<WorldView>,
+    pub event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
 }
 
-pub fn spawn(initial: WorldView, pool: SqlitePool) -> Handle {
+pub fn spawn(
+    initial: WorldView,
+    pool: SqlitePool,
+    event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+) -> Handle {
     let layout = TownLayout::default_town();
     let graph = move_sys::graph_from_layout(&layout);
-    spawn_with_layout(initial, pool, layout, graph)
+    spawn_with_layout(initial, pool, layout, graph, event_tx)
 }
 
 pub fn spawn_with_layout(
@@ -72,6 +77,7 @@ pub fn spawn_with_layout(
     pool: SqlitePool,
     layout: TownLayout,
     graph: RoomGraph,
+    event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
 ) -> Handle {
     let (tx, mut rx) = mpsc::channel::<Cmd>(1024);
     let (view_tx, view_rx) = watch::channel(initial.clone());
@@ -85,6 +91,8 @@ pub fn spawn_with_layout(
     // of the process.
     let mut layout = layout;
 
+    let event_tx_for_handle = event_tx.clone();  // retained for Handle return value
+    let event_tx_owned = event_tx;  // moved into the spawn task; Task 5
     tokio::spawn(async move {
         while let Some(cmd) = rx.recv().await {
             match cmd {
@@ -115,13 +123,14 @@ pub fn spawn_with_layout(
                     let _ = view_tx.send(w.clone());
                 }
                 Cmd::HandleConsoleMsg { msg, reply } => {
-                    let result = crate::cmd_console::dispatch(&mut w, &pool, &out_bus, msg).await;
+                    let result = crate::cmd_console::dispatch(&mut w, &pool, &out_bus, &event_tx_owned, msg).await;
                     let _ = view_tx.send(w.clone());
                     let _ = reply.send(result);
                 }
                 Cmd::HandleWorkerMsg { agent_id, msg, reply } => {
                     let result = crate::cmd_worker::dispatch(
-                        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, &agent_id, msg,
+                        &mut w, &mut paths, &layout, &graph, &out_bus, &pool,
+                        &event_tx_owned, &agent_id, msg,
                     )
                     .await;
                     let _ = view_tx.send(w.clone());
@@ -180,5 +189,6 @@ pub fn spawn_with_layout(
         }
     });
 
-    Handle { tx, view_rx }
+    Handle { tx, view_rx, event_tx: event_tx_for_handle }
 }
+

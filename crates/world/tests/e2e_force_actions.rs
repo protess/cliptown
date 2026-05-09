@@ -12,14 +12,16 @@
 //!   Done/Failed). Requires a `note`, recorded in the audit trail.
 //! - Both actions append `{"actor":"operator", ...}` audit events.
 
+mod common;
+
 use cliptown_world::{
-    cmd_console, seed,
+    cmd_console, protocol::ConsoleOutbound, seed,
     state::{AvatarView, WorldView},
     storage,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 async fn fixture() -> sqlx::SqlitePool {
     let dir = tempfile::tempdir().unwrap();
@@ -59,6 +61,10 @@ fn fresh_world() -> WorldView {
     w
 }
 
+fn make_event_tx() -> (broadcast::Sender<ConsoleOutbound>, broadcast::Receiver<ConsoleOutbound>) {
+    broadcast::channel(64)
+}
+
 #[tokio::test]
 async fn force_accept_awaiting_review_to_done() {
     let pool = fixture().await;
@@ -69,11 +75,13 @@ async fn force_accept_awaiting_review_to_done() {
 
     let mut w = fresh_world();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     let r = cmd_console::dispatch(
         &mut w,
         &pool,
         &out_bus,
+        &event_tx,
         json!({ "type": "operator_force_accept", "v": 1, "task_id": "T1" }),
     )
     .await;
@@ -88,6 +96,7 @@ async fn force_accept_awaiting_review_to_done() {
     assert_eq!(row.0, "done");
     assert!(row.1.contains("force_accept"));
     assert!(row.1.contains("\"actor\":\"operator\""));
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -100,12 +109,14 @@ async fn force_accept_from_in_progress_rejected() {
 
     let mut w = fresh_world();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     // ForceAccept is only legal from awaiting_review per task_sm.
     let r = cmd_console::dispatch(
         &mut w,
         &pool,
         &out_bus,
+        &event_tx,
         json!({ "type": "operator_force_accept", "v": 1, "task_id": "T1" }),
     )
     .await;
@@ -117,6 +128,7 @@ async fn force_accept_from_in_progress_rejected() {
         .await
         .unwrap();
     assert_eq!(row.0, "in_progress");
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -129,11 +141,13 @@ async fn force_fail_from_queued_to_failed_with_note() {
 
     let mut w = fresh_world();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     let r = cmd_console::dispatch(
         &mut w,
         &pool,
         &out_bus,
+        &event_tx,
         json!({
             "type": "operator_force_fail", "v": 1,
             "task_id": "T1",
@@ -153,6 +167,7 @@ async fn force_fail_from_queued_to_failed_with_note() {
     assert!(row.1.contains("force_fail"));
     assert!(row.1.contains("abandoned by operator"));
     assert!(row.1.contains("\"actor\":\"operator\""));
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -165,11 +180,13 @@ async fn force_fail_from_in_progress() {
 
     let mut w = fresh_world();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     let r = cmd_console::dispatch(
         &mut w,
         &pool,
         &out_bus,
+        &event_tx,
         json!({ "type": "operator_force_fail", "v": 1, "task_id": "T1", "note": "x" }),
     )
     .await;
@@ -179,6 +196,7 @@ async fn force_fail_from_in_progress() {
         .await
         .unwrap();
     assert_eq!(row.0, "failed");
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -191,11 +209,13 @@ async fn force_fail_already_done_rejected() {
 
     let mut w = fresh_world();
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     let r = cmd_console::dispatch(
         &mut w,
         &pool,
         &out_bus,
+        &event_tx,
         json!({ "type": "operator_force_fail", "v": 1, "task_id": "T1", "note": "too late" }),
     )
     .await;
@@ -206,4 +226,5 @@ async fn force_fail_already_done_rejected() {
         .await
         .unwrap();
     assert_eq!(row.0, "done");
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }

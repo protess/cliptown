@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
         .init();
     tracing::info!(component = "world", event = "boot");
 
-    let _cfg = config::load_from("cliptown.toml")?;
+    let cfg = config::load_from("cliptown.toml")?;
     let db_path = std::env::var("CLIPTOWN_DB").unwrap_or_else(|_| "cliptown.db".into());
     let pool = storage::open(&db_path).await?;
     tracing::info!(component = "world", event = "storage_ready", db = %db_path);
@@ -25,7 +25,8 @@ async fn main() -> Result<()> {
     seed::seed_if_empty(&pool).await?;
     tracing::info!(component = "world", event = "town_seeded", town_id = "town_default");
 
-    let handle = loop_::spawn(WorldView::default(), pool.clone());
+    let (event_tx, _) = tokio::sync::broadcast::channel::<cliptown_world::protocol::ConsoleOutbound>(4096);
+    let handle = loop_::spawn(WorldView::default(), pool.clone(), event_tx.clone());
     tracing::info!(component = "world", event = "loop_started");
 
     // Boot probe — populate catalog before serving traffic
@@ -86,8 +87,15 @@ async fn main() -> Result<()> {
         });
     }
 
-    let supervisor = Arc::new(AgentSupervisor::new(SupervisorConfig::default(), pool.clone()));
-    let app = http::router(http::AppState { pool, handle, catalog, supervisor });
+    let supervisor = Arc::new(AgentSupervisor::new(
+        SupervisorConfig::default(),
+        pool.clone(),
+        event_tx.clone(),
+    ));
+    let max_review_rounds = cfg.task.max_review_rounds;
+    let app = http::router(http::AppState {
+        pool, handle, catalog, supervisor, max_review_rounds,
+    });
     let addr = std::env::var("CLIPTOWN_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let bound = listener.local_addr()?;

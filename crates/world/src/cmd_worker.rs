@@ -20,6 +20,7 @@ pub async fn dispatch(
     graph: &RoomGraph,
     out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     agent_id: &str,
     msg: serde_json::Value,
 ) -> serde_json::Value {
@@ -29,7 +30,7 @@ pub async fn dispatch(
     // know about every MCP tool variant.
     if msg.get("type") == Some(&serde_json::Value::String("mcp_call".to_string())) {
         return crate::mcp_dispatch::dispatch(
-            world, paths, layout, graph, out_bus, pool, agent_id, msg,
+            world, paths, layout, graph, out_bus, pool, event_tx, agent_id, msg,
         )
         .await;
     }
@@ -57,17 +58,15 @@ pub async fn dispatch(
             {
                 Ok((new_spent, cap, threshold)) => {
                     if let Some(t) = threshold {
-                        if let Err(e) = crate::budget::record_threshold_event(
+                        crate::budget::record_threshold_event(
                             pool,
+                            event_tx,
                             &startup_id,
                             t,
                             new_spent,
                             cap,
                         )
-                        .await
-                        {
-                            tracing::warn!(component = "cmd_worker", error = %e, "record_threshold_event failed");
-                        }
+                        .await;
                         match t {
                             crate::budget::Threshold::Warn80
                             | crate::budget::Threshold::Warn95 => {

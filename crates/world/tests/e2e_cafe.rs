@@ -10,17 +10,20 @@
 //! broadcast filter (mcp_dispatch::handle_speak) and its interaction with
 //! the public/private room boundary.
 
+mod common;
+
 use cliptown_world::{
     mcp_dispatch,
     move_sys::{self, PathStore},
     path,
+    protocol::ConsoleOutbound,
     seed::{self, TownLayout},
     state::{AvatarView, WorldView},
     storage,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 async fn fixture() -> (sqlx::SqlitePool, TownLayout, path::RoomGraph) {
     let dir = tempfile::tempdir().unwrap();
@@ -83,6 +86,7 @@ async fn cross_startup_chat_in_cafe_delivered() {
     let mut out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
     let (tx_b, mut rx_b) = mpsc::channel(8);
     out_bus.insert("beta_des".into(), tx_b);
+    let (event_tx, mut event_rx) = tokio::sync::broadcast::channel::<cliptown_world::protocol::ConsoleOutbound>(64);
 
     // α-engineer says chat in cafe.
     let r = mcp_dispatch::dispatch(
@@ -92,6 +96,7 @@ async fn cross_startup_chat_in_cafe_delivered() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "alpha_eng",
         json!({
             "type": "mcp_call", "v": 1, "tool": "speak", "corr_id": "c1",
@@ -110,6 +115,17 @@ async fn cross_startup_chat_in_cafe_delivered() {
     assert_eq!(chat["from_agent_id"], "alpha_eng");
     assert_eq!(chat["body"], "anyone tried mdast?");
     assert_eq!(chat["room_id"], "cafe");
+    match event_rx.try_recv() {
+        Ok(ConsoleOutbound::Chat {
+            startup_id, room_id, author_id, body, ..
+        }) => {
+            assert_eq!(startup_id, "alpha");
+            assert_eq!(room_id, "cafe");
+            assert_eq!(author_id, "alpha_eng");
+            assert_eq!(body, "anyone tried mdast?");
+        }
+        other => panic!("expected Chat frame, got {:?}", other),
+    }
 }
 
 #[tokio::test]
@@ -133,6 +149,7 @@ async fn cross_startup_chat_in_suite_blocked() {
     let mut out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
     let (tx_b, mut rx_b) = mpsc::channel(8);
     out_bus.insert("beta_des".into(), tx_b);
+    let (event_tx, mut event_rx) = broadcast::channel::<ConsoleOutbound>(64);
 
     let r = mcp_dispatch::dispatch(
         &mut w,
@@ -141,6 +158,7 @@ async fn cross_startup_chat_in_suite_blocked() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "alpha_eng",
         json!({
             "type": "mcp_call", "v": 1, "tool": "speak", "corr_id": "c1",
@@ -156,6 +174,19 @@ async fn cross_startup_chat_in_suite_blocked() {
         recv_result.is_err(),
         "private-room chat should not cross startups; got {recv_result:?}"
     );
+    // Chat frame is still emitted to operator consoles even for private-room
+    // messages — operators have god-view visibility.
+    match event_rx.try_recv() {
+        Ok(ConsoleOutbound::Chat {
+            startup_id, room_id, author_id, body, ..
+        }) => {
+            assert_eq!(startup_id, "alpha");
+            assert_eq!(room_id, "suite_1");
+            assert_eq!(author_id, "alpha_eng");
+            assert_eq!(body, "secret");
+        }
+        other => panic!("expected Chat frame, got {:?}", other),
+    }
 }
 
 #[tokio::test]
@@ -182,6 +213,7 @@ async fn same_startup_chat_in_cafe_still_works() {
     let mut out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
     let (tx_d, mut rx_d) = mpsc::channel(8);
     out_bus.insert("alpha_des".into(), tx_d);
+    let (event_tx, mut event_rx) = broadcast::channel::<ConsoleOutbound>(64);
 
     let _ = mcp_dispatch::dispatch(
         &mut w,
@@ -190,6 +222,7 @@ async fn same_startup_chat_in_cafe_still_works() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "alpha_eng",
         json!({
             "type": "mcp_call", "v": 1, "tool": "speak", "corr_id": "c1",
@@ -202,4 +235,15 @@ async fn same_startup_chat_in_cafe_still_works() {
         .expect("alpha_des should receive chat");
     assert_eq!(chat["type"], "chat_received");
     assert_eq!(chat["body"], "hi team");
+    match event_rx.try_recv() {
+        Ok(ConsoleOutbound::Chat {
+            startup_id, room_id, author_id, body, ..
+        }) => {
+            assert_eq!(startup_id, "alpha");
+            assert_eq!(room_id, "cafe");
+            assert_eq!(author_id, "alpha_eng");
+            assert_eq!(body, "hi team");
+        }
+        other => panic!("expected Chat frame, got {:?}", other),
+    }
 }

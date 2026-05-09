@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 
 /// Phase 0 hard cap on review rounds before the world auto-escalates.
 /// M9 hardening should move this to `cliptown.toml [supervisor] max_review_rounds`.
-const MAX_REVIEW_ROUNDS: u32 = 3;
+pub(crate) const MAX_REVIEW_ROUNDS: u32 = 3;
 
 type HandlerResult = Result<Value, (String, String)>;
 
@@ -43,6 +43,7 @@ pub async fn dispatch(
     graph: &RoomGraph,
     out_bus: &HashMap<String, mpsc::Sender<Value>>,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     agent_id: &str,
     msg: Value,
 ) -> Value {
@@ -67,14 +68,14 @@ pub async fn dispatch(
 
     let result: HandlerResult = match tool.as_str() {
         "move_intent" => {
-            handle_move_intent(world, paths, layout, graph, pool, &caller, args).await
+            handle_move_intent(world, paths, layout, graph, pool, event_tx, &caller, args).await
         }
-        "speak" => handle_speak(world, out_bus, pool, &caller, args).await,
+        "speak" => handle_speak(world, out_bus, pool, event_tx, &caller, args).await,
         "task_done" => handle_task_done(world, out_bus, pool, &caller, args).await,
         "task_failed" => handle_task_failed(world, pool, &caller, args).await,
         "subtask_create" => handle_subtask_create(out_bus, pool, &caller, args).await,
         "task_accept" => handle_task_accept(out_bus, pool, &caller, args).await,
-        "task_request_changes" => handle_task_request_changes(out_bus, pool, &caller, args).await,
+        "task_request_changes" => handle_task_request_changes(out_bus, pool, event_tx, &caller, args).await,
         "accept_proposal" => handle_accept_proposal(pool, &caller, args).await,
         "reject_proposal" => handle_reject_proposal(pool, &caller, args).await,
         "hypothesis_state" => handle_epistemic_append(pool, &caller, args, "hypothesis_state").await,
@@ -249,6 +250,7 @@ async fn handle_move_intent(
     layout: &TownLayout,
     graph: &RoomGraph,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
@@ -319,8 +321,9 @@ async fn handle_move_intent(
             // mcp_error keeps the wire contract; the system_events alert row
             // gives the operator console a durable audit trail of who tried
             // to enter what so we can spot misbehaving agents over time.
-            let _ = persist::record_system_event(
+            if let Err(e) = crate::emit::emit_system_event(
                 pool,
+                event_tx,
                 Some(&caller.startup_id),
                 "permission_violation",
                 &json!({
@@ -331,7 +334,10 @@ async fn handle_move_intent(
                 .to_string(),
                 "alert",
             )
-            .await;
+            .await
+            {
+                tracing::error!(component = "mcp_dispatch", agent_id = %caller.agent_id, err = %e, "failed to emit permission_violation system_event");
+            }
             Err((
                 "no_permission".into(),
                 "cannot enter target room".into(),
@@ -345,6 +351,7 @@ async fn handle_speak(
     world: &WorldView,
     out_bus: &HashMap<String, mpsc::Sender<Value>>,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
@@ -432,6 +439,16 @@ async fn handle_speak(
                 }));
             }
         }
+        // Broadcast a Chat frame to operator consoles (god view).
+        let _ = event_tx.send(crate::protocol::ConsoleOutbound::Chat {
+            v: 1,
+            message_id: id.clone(),
+            ts: chrono::Utc::now().timestamp_millis(),
+            startup_id: caller.startup_id.clone(),
+            room_id: caller.room_id.clone(),
+            author_id: caller.agent_id.clone(),
+            body: body.clone(),
+        });
     } else if let Some(rid) = to_agent_id.as_deref() {
         if let Some(tx) = out_bus.get(rid) {
             let _ = tx.try_send(json!({
@@ -440,6 +457,18 @@ async fn handle_speak(
                 "body":body
             }));
         }
+        // Broadcast a Directive frame to operator consoles (god view).
+        // rid is non-empty because the early-validate above returns Err otherwise.
+        let _ = event_tx.send(crate::protocol::ConsoleOutbound::Directive {
+            v: 1,
+            message_id: id.clone(),
+            ts: chrono::Utc::now().timestamp_millis(),
+            startup_id: caller.startup_id.clone(),
+            author_id: caller.agent_id.clone(),
+            to_agent_id: rid.to_string(),
+            body: body.clone(),
+            in_response_to_task: None,
+        });
     }
 
     Ok(json!({"message_id": id}))
@@ -764,6 +793,7 @@ async fn handle_task_accept(
 async fn handle_task_request_changes(
     out_bus: &HashMap<String, mpsc::Sender<Value>>,
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
@@ -774,52 +804,53 @@ async fn handle_task_request_changes(
         return Err(("cross_startup".into(), "task belongs to another startup".into()));
     }
     if !caller_is_manager_of_task(pool, caller, &task).await? {
-        return Err((
-            "no_permission".into(),
-            "task_request_changes is manager-only".into(),
-        ));
+        return Err(("no_permission".into(), "task_request_changes is manager-only".into()));
     }
 
-    // Phase 0 max-rounds enforcement (spec §6.3 / M5.6): once the task has
-    // already cycled through `MAX_REVIEW_ROUNDS` rounds of changes, the world
-    // refuses to bounce it back yet again and instead auto-escalates. Routed
-    // through `task_sm::next(Escalate)` so the SM stays the single source of
-    // truth on legal transitions.
+    // Guard: must run BEFORE any side effects.
+    // A subtask whose parent.assignee = caller passes the manager check above,
+    // but if the subtask itself has no assignee, the directive has nowhere to go.
+    // Reject early so the task state stays clean.
+    if task.assignee_agent_id.is_none() {
+        return Err(("no_assignee".into(), "task has no assignee".into()));
+    }
+
+    // Escalation branch: max-rounds breach. NO directive INSERT, NO Directive
+    // broadcast. Emits a single SystemEvent via emit_system_event so the
+    // operator console sees the task transition to escalated.
     if task.review_round >= MAX_REVIEW_ROUNDS {
         let escalated = next(task.status, &Transition::Escalate)
-            .map_err(|r| ("illegal_transition".to_string(), r.to_string()))?;
+            .map_err(|r| ("illegal_transition".into(), r.to_string()))?;
         sqlx::query("UPDATE tasks SET status = ?, updated_at = unixepoch() WHERE id = ?")
-            .bind(status_to_str(escalated))
-            .bind(&task_id)
-            .execute(pool)
-            .await
-            .map_err(|e| ("sql".to_string(), e.to_string()))?;
+            .bind(status_to_str(escalated)).bind(&task_id)
+            .execute(pool).await
+            .map_err(|e| ("sql".into(), e.to_string()))?;
         let _ = persist::append_audit(
-            pool,
-            &task_id,
+            pool, &task_id,
             &json!({
-                "actor": "system",
-                "kind": "escalated",
-                "reason": "max_review_rounds_exceeded",
-                "at_round": task.review_round,
-                "triggered_by": caller.agent_id,
-            })
-            .to_string(),
-        )
-        .await;
-        let _ = persist::record_system_event(
-            pool,
+                "actor":"system","kind":"escalated",
+                "reason":"max_review_rounds_exceeded",
+                "at_round":task.review_round,
+                "triggered_by":caller.agent_id,
+            }).to_string(),
+        ).await;
+        if let Err(e) = crate::emit::emit_system_event(
+            pool, event_tx,
             Some(&caller.startup_id),
             "task_escalated",
             &json!({
                 "task_id": task_id,
                 "rounds": task.review_round,
                 "feedback": feedback,
-            })
-            .to_string(),
+            }).to_string(),
             "alert",
-        )
-        .await;
+        ).await {
+            tracing::error!(component = "mcp_dispatch",
+                task_id = %task_id,
+                err = %e,
+                "failed to emit task_escalated system_event after task UPDATE committed"
+            );
+        }
         return Ok(json!({
             "task_id": task_id,
             "new_status": status_to_str(escalated),
@@ -829,35 +860,51 @@ async fn handle_task_request_changes(
         }));
     }
 
+    // Regular round-increment branch: task UPDATE + directive INSERT in a
+    // single transaction so the broadcast-after-SQL invariant holds.
     let new_status = next(task.status, &Transition::RequestChanges)
-        .map_err(|r| ("illegal_transition".to_string(), r.to_string()))?;
+        .map_err(|r| ("illegal_transition".into(), r.to_string()))?;
+    let directive_id = uuid::Uuid::new_v4().to_string();
+    let mut tx = pool.begin().await.map_err(|e| ("sql".into(), e.to_string()))?;
     sqlx::query(
         "UPDATE tasks SET status = ?, review_round = review_round + 1, updated_at = unixepoch() WHERE id = ?",
     )
-    .bind(status_to_str(new_status))
-    .bind(&task_id)
-    .execute(pool)
-    .await
-    .map_err(|e| ("sql".to_string(), e.to_string()))?;
-    let _ = persist::append_audit(
-        pool,
-        &task_id,
-        &json!({"actor":"manager","kind":"task_request_changes","agent_id":caller.agent_id})
-            .to_string(),
+    .bind(status_to_str(new_status)).bind(&task_id)
+    .execute(&mut *tx).await
+    .map_err(|e| ("sql".into(), e.to_string()))?;
+    sqlx::query(
+        "INSERT INTO messages (id, startup_id, room_id, author_id, body, kind, ts) \
+         VALUES (?, ?, NULL, ?, ?, 'directive', unixepoch())",
     )
-    .await;
+    .bind(&directive_id).bind(&caller.startup_id).bind(&caller.agent_id).bind(&feedback)
+    .execute(&mut *tx).await
+    .map_err(|e| ("sql".into(), e.to_string()))?;
+    tx.commit().await.map_err(|e| ("sql".into(), e.to_string()))?;
 
-    // Surface feedback to the assignee as a `directive` event so it's picked
-    // up on their next CLI session boot (spec §7 Level 2).
-    if let Some(assignee) = task.assignee_agent_id.as_deref() {
-        if let Some(tx) = out_bus.get(assignee) {
-            let _ = tx.try_send(json!({
-                "type":"directive","v":1,
-                "from_agent_id": caller.agent_id,
-                "body": feedback,
-                "in_response_to_task": task_id,
-            }));
-        }
+    let _ = persist::append_audit(
+        pool, &task_id,
+        &json!({"actor":"manager","kind":"task_request_changes","agent_id":caller.agent_id}).to_string(),
+    ).await;
+
+    // assignee is guaranteed non-None by the guard above.
+    let assignee = task.assignee_agent_id.as_deref().expect("checked above for None");
+    let _ = event_tx.send(crate::protocol::ConsoleOutbound::Directive {
+        v: 1,
+        message_id: directive_id,
+        ts: chrono::Utc::now().timestamp_millis(),
+        startup_id: caller.startup_id.clone(),
+        author_id: caller.agent_id.clone(),
+        to_agent_id: assignee.to_string(),
+        body: feedback.clone(),
+        in_response_to_task: Some(task_id.clone()),
+    });
+    if let Some(tx) = out_bus.get(assignee) {
+        let _ = tx.try_send(json!({
+            "type":"directive","v":1,
+            "from_agent_id": caller.agent_id,
+            "body": feedback,
+            "in_response_to_task": task_id,
+        }));
     }
 
     Ok(json!({"task_id": task_id, "new_status": status_to_str(new_status)}))

@@ -19,6 +19,7 @@ pub struct AppState {
     pub handle: Handle,
     pub catalog: Arc<tokio::sync::RwLock<std::collections::HashMap<String, serde_json::Value>>>,
     pub supervisor: Arc<AgentSupervisor>,
+    pub max_review_rounds: u32,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -120,9 +121,10 @@ async fn ws_worker(ws: WebSocketUpgrade, State(s): State<Arc<AppState>>) -> Resp
 /// tiny (a few startups, dozens of tasks) so the cost is negligible, but
 /// this is a TODO for caching once tick rates climb past a few Hz —
 /// e.g. memoize on `tick_seq` + a cheap "tasks dirty" counter.
-async fn build_console_snapshot(
+pub async fn build_console_snapshot(
     pool: &SqlitePool,
     view: &crate::state::WorldView,
+    max_review_rounds: u32,
 ) -> serde_json::Value {
     // Active startups, plus the most recent system_event ts so the sidebar
     // can flag stale runs at a glance. Falls back to `created_at` when no
@@ -154,16 +156,16 @@ async fn build_console_snapshot(
     // the kanban shows the live work surface without flooding on history.
     let tasks: Vec<serde_json::Value> = sqlx::query_as::<
         _,
-        (String, String, String, String, Option<String>, Option<String>),
+        (String, String, String, String, Option<String>, Option<String>, i64),
     >(
-        "SELECT id, startup_id, title, status, assignee_agent_id, required_room \
+        "SELECT id, startup_id, title, status, assignee_agent_id, required_room, review_round \
          FROM tasks WHERE status NOT IN ('done', 'failed')",
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(id, startup_id, title, status, assignee, required_room)| {
+    .map(|(id, startup_id, title, status, assignee, required_room, review_round)| {
         json!({
             "id": id,
             "startup_id": startup_id,
@@ -171,6 +173,8 @@ async fn build_console_snapshot(
             "status": status,
             "assignee_agent_id": assignee,
             "required_room": required_room,
+            "review_round": review_round,
+            "max_review_rounds": max_review_rounds,
         })
     })
     .collect();
@@ -209,13 +213,19 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
     // a duplicate of the initial snapshot).
     view_rx.borrow_and_update();
 
+    // Subscribe to the broadcast channel for live Chat/Directive/SystemEvent
+    // frames. Subscribed BEFORE the initial snapshot so we don't miss any
+    // events that fire in between. Lagged is treated as fatal-close (see
+    // the third select! arm below).
+    let mut event_rx = state.handle.event_tx.subscribe();
+
     // Send the initial snapshot. Phase 0 worlds are small enough that we
     // skip the `chunk_snapshot` transport (M1.11) — TODO M11+: route through
     // chunk_snapshot when the serialized payload exceeds the 256 KiB threshold
     // already enforced for worker view fans.
     {
         let view = state.handle.view_rx.borrow().clone();
-        let frame = build_console_snapshot(&state.pool, &view).await;
+        let frame = build_console_snapshot(&state.pool, &view, state.max_review_rounds).await;
         if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
             return;
         }
@@ -246,9 +256,32 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
             changed = view_rx.changed() => {
                 if changed.is_err() { break; }
                 let view = view_rx.borrow_and_update().clone();
-                let frame = build_console_snapshot(&state.pool, &view).await;
+                let frame = build_console_snapshot(&state.pool, &view, state.max_review_rounds).await;
                 if sender.send(Message::Text(frame.to_string().into())).await.is_err() {
                     break;
+                }
+            }
+            event = event_rx.recv() => {
+                match event {
+                    Ok(frame) => {
+                        let json = match serde_json::to_string(&frame) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                tracing::warn!(component = "handle_console", err = %e,
+                                    "failed to serialize broadcast frame");
+                                continue;
+                            }
+                        };
+                        if sender.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(component = "handle_console", lagged = n,
+                            "console subscriber lagged; closing WS to force resync");
+                        break;  // frontend will reconnect to a fresh snapshot
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         }

@@ -63,4 +63,31 @@ pub enum ConsoleOutbound {
     BackendCatalog { v: u8, entries: serde_json::Value },
     Toast { v: u8, severity: String, body: String, sticky: bool },
     Modal { v: u8, kind: String, payload: serde_json::Value },
+    /// Operator-visible chat message. Always room-scoped. `ts` is UNIX MILLISECONDS
+    /// (matches frontend `new Date(m.ts)` rendering convention; SQL `messages.ts`
+    /// stores seconds and gets multiplied at the emit site).
+    Chat {
+        v: u8,
+        message_id: String,
+        ts: i64,
+        startup_id: String,
+        room_id: String,
+        author_id: String,
+        body: String,
+    },
+    /// Operator-visible directive. Room-independent. `author_id` is the sentinel
+    /// "operator" for operator-sourced directives, real `agent_id` for peer- or
+    /// manager-sourced. `in_response_to_task` is `Some(task_id)` only for review-
+    /// cycle feedback (mcp_dispatch::handle_task_request_changes). `ts` is UNIX
+    /// MILLISECONDS, see `Chat` doc above.
+    Directive {
+        v: u8,
+        message_id: String,
+        ts: i64,
+        startup_id: String,
+        author_id: String,
+        to_agent_id: String,
+        body: String,
+        in_response_to_task: Option<String>,
+    },
 }

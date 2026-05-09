@@ -6,7 +6,8 @@ async fn tick_advances_seq() {
     // sequence advanced. Using paused time would require setting up the pool
     // before pausing; this is simpler and still fast in CI (~1.2s).
     let pool = storage::open(":memory:").await.unwrap();
-    let h = loop_::spawn(WorldView::default(), pool);
+    let (event_tx, _event_rx) = tokio::sync::broadcast::channel(64);
+    let h = loop_::spawn(WorldView::default(), pool, event_tx);
     let initial = h.view_rx.borrow().tick_seq;
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     assert!(h.view_rx.borrow().tick_seq > initial);

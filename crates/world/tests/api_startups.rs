@@ -25,6 +25,7 @@ async fn fixture() -> AppState {
     std::mem::forget(dir);
 
     let cargo_dir = env!("CARGO_MANIFEST_DIR");
+    let (event_tx, _event_rx) = tokio::sync::broadcast::channel(64);
     let supervisor = Arc::new(AgentSupervisor::new(
         SupervisorConfig {
             worker_bin: "/bin/sh".into(),
@@ -33,14 +34,16 @@ async fn fixture() -> AppState {
             dissolve_grace_ms: 100,
         },
         pool.clone(),
+        event_tx.clone(),
     ));
 
-    let handle = loop_::spawn(WorldView::default(), pool.clone());
+    let handle = loop_::spawn(WorldView::default(), pool.clone(), event_tx.clone());
     AppState {
         pool,
         handle,
         catalog: Arc::new(tokio::sync::RwLock::new(Default::default())),
         supervisor,
+        max_review_rounds: 3,
     }
 }
 
@@ -261,6 +264,9 @@ async fn delete_marks_dissolved_and_frees_suite() {
     ).bind(&startup_id).fetch_one(&state.pool).await.unwrap();
     assert_eq!(claimed.0, 1);
 
+    // Subscribe to event broadcasts BEFORE the DELETE call.
+    let mut event_rx = state.handle.event_tx.subscribe();
+
     // DELETE. Operator token uses the default dev token (`auth.rs`).
     let req = Request::builder()
         .method("DELETE").uri(format!("/api/startups/{}", startup_id))
@@ -285,6 +291,14 @@ async fn delete_marks_dissolved_and_frees_suite() {
         "SELECT count(*) FROM system_events WHERE kind = 'startup_dissolved'"
     ).fetch_one(&state.pool).await.unwrap();
     assert_eq!(count.0, 1);
+
+    // Verify the startup_dissolved SystemEvent broadcast reaches operator consoles.
+    let frame = event_rx.try_recv().expect("expected SystemEvent broadcast for startup_dissolved");
+    let cliptown_world::protocol::ConsoleOutbound::SystemEvent { kind, severity, .. } = frame else {
+        panic!("expected SystemEvent, got {:?}", frame);
+    };
+    assert_eq!(kind, "startup_dissolved");
+    assert_eq!(severity, "warn");
 
     // Cleanup workspace dir.
     let _ = std::fs::remove_dir_all(&workspace.0);

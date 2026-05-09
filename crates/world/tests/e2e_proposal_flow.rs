@@ -22,10 +22,13 @@
 //! A second scenario covers the reject path: operator rejects, task
 //! goes Proposed → Failed, audit captures the reason and actor.
 
+mod common;
+
 use cliptown_world::{
     cmd_console, mcp_dispatch,
     move_sys::{self, PathStore},
     path::RoomGraph,
+    protocol::ConsoleOutbound,
     scheduler,
     seed::{self, TownLayout},
     state::{AvatarView, WorldView},
@@ -33,7 +36,7 @@ use cliptown_world::{
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 /// Fixture: seeded default town, startup `s1`, founder `founder1`
 /// (root, no manager_id), engineer `eng1` (manager_id = founder1),
@@ -97,6 +100,10 @@ fn av(id: &str, role: &str) -> AvatarView {
     }
 }
 
+fn make_event_tx() -> (broadcast::Sender<ConsoleOutbound>, broadcast::Receiver<ConsoleOutbound>) {
+    broadcast::channel(64)
+}
+
 #[tokio::test]
 async fn proposal_to_queued_to_assigned() {
     let (pool, layout, graph, _dir) = fixture().await;
@@ -111,6 +118,7 @@ async fn proposal_to_queued_to_assigned() {
     let (eng_tx, mut eng_rx) = mpsc::channel(8);
     out_bus.insert("founder1".to_string(), founder_tx);
     out_bus.insert("eng1".to_string(), eng_tx);
+    let (event_tx, mut event_rx) = make_event_tx();
 
     // ── Step 1: engineer (non-manager) calls subtask_create.
     // Non-managers can't pre-pick the assignee (mcp_dispatch nulls it
@@ -122,6 +130,7 @@ async fn proposal_to_queued_to_assigned() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "eng1",
         json!({
             "type": "mcp_call",
@@ -160,6 +169,7 @@ async fn proposal_to_queued_to_assigned() {
         &mut w,
         &pool,
         &out_bus,
+        &event_tx,
         json!({
             "type": "operator_accept_proposal",
             "v": 1,
@@ -221,6 +231,7 @@ async fn proposal_to_queued_to_assigned() {
         "audit_trail missing actor=scheduler: {}",
         row.0
     );
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
 #[tokio::test]
@@ -234,6 +245,7 @@ async fn proposal_rejected_by_operator_audit_trail() {
     // No out_bus entries — the founder's subtask_proposed delivery is best-effort
     // (try_send) and absent recipients are a no-op; we don't assert on it here.
     let out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
+    let (event_tx, mut event_rx) = make_event_tx();
 
     // Engineer proposes.
     let r = mcp_dispatch::dispatch(
@@ -243,6 +255,7 @@ async fn proposal_rejected_by_operator_audit_trail() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "eng1",
         json!({
             "type": "mcp_call",
@@ -271,6 +284,7 @@ async fn proposal_rejected_by_operator_audit_trail() {
         &mut w,
         &pool,
         &out_bus,
+        &event_tx,
         json!({
             "type": "operator_reject_proposal",
             "v": 1,
@@ -304,4 +318,5 @@ async fn proposal_rejected_by_operator_audit_trail() {
         "audit_trail missing actor=operator: {}",
         row.1
     );
+    assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }

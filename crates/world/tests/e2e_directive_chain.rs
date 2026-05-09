@@ -109,6 +109,7 @@ async fn directive_to_founder_then_subtask_then_assigned() {
         .insert("des1".to_string(), av("des1", "designer", "suite_1"));
 
     let mut paths: PathStore = HashMap::new();
+    let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
 
     // Mock workers: tx into out_bus, hold rx ends to assert delivery.
     let mut out_bus: HashMap<String, mpsc::Sender<Value>> = HashMap::new();
@@ -124,6 +125,7 @@ async fn directive_to_founder_then_subtask_then_assigned() {
         &mut w,
         &pool,
         &out_bus,
+        &event_tx,
         json!({
             "type": "operator_directive",
             "v": 1,
@@ -153,6 +155,19 @@ async fn directive_to_founder_then_subtask_then_assigned() {
     assert_eq!(row.0, "operator");
     assert_eq!(row.1, "directive");
 
+    // Verify the Directive broadcast frame reached the operator console.
+    match event_rx.try_recv() {
+        Ok(cliptown_world::protocol::ConsoleOutbound::Directive {
+            author_id, to_agent_id, body, in_response_to_task, ..
+        }) => {
+            assert_eq!(author_id, "operator");
+            assert_eq!(to_agent_id, "founder1");
+            assert!(body.contains("spec") || body.contains("build"), "body should be the directive: {body}");
+            assert_eq!(in_response_to_task, None);
+        }
+        other => panic!("expected Directive frame, got {:?}", other),
+    }
+
     // ── Step 2: founder calls subtask_create assigning the engineer.
     // Founder is the parent task's assignee → manager → status goes straight
     // to `queued` (not `proposed`).
@@ -163,6 +178,7 @@ async fn directive_to_founder_then_subtask_then_assigned() {
         &graph,
         &out_bus,
         &pool,
+        &event_tx,
         "founder1",
         json!({
             "type": "mcp_call",
@@ -210,4 +226,15 @@ async fn directive_to_founder_then_subtask_then_assigned() {
 
     // Engineer avatar is flagged busy in-memory (scheduler invariant).
     assert_eq!(w.avatars["eng1"].status, "working");
+
+    let mut found = Vec::new();
+    loop {
+        match event_rx.try_recv() {
+            Ok(frame) => found.push(frame),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+        }
+    }
+    assert!(found.is_empty(), "expected no console broadcasts, found {}: {:?}", found.len(), found);
 }
