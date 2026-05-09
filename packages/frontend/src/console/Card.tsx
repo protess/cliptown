@@ -49,7 +49,8 @@ export function Card({
     assignee?.agent_id ?? task.assignee_agent_id ?? "?";
   const mono = monogramSrc.slice(0, 1).toUpperCase();
   const hue = assignee ? hueFor(assignee.startup_id) : "var(--fg-secondary)";
-  const reviewRound = (task as { review_round?: number }).review_round;
+  const reviewRound = task.review_round;
+  const maxReviewRounds = task.max_review_rounds;
 
   return (
     <div
@@ -100,7 +101,7 @@ export function Card({
         >
           <code>{task.id.slice(0, 6)}</code>
           {task.required_room && <span>· {task.required_room}</span>}
-          <ReviewRoundDot round={reviewRound} />
+          <ReviewRoundBadge round={reviewRound} max={maxReviewRounds} />
         </div>
       </div>
       <span
@@ -124,21 +125,43 @@ export function Card({
   );
 }
 
-function ReviewRoundDot({ round }: { round?: number }) {
+// Renders the review-round indicator on a task card. Two signals:
+//   - dot color: escalates yellow → orange → red as round approaches max
+//   - text "R{round}/{max}": the operator can read the exact round, not
+//     just sense it from color. Required for ship-gate § 11.6's UI proof.
+// Hidden when round is 0 or undefined (task hasn't been bounced back yet).
+function ReviewRoundBadge({ round, max }: { round?: number; max?: number }) {
   if (!round || round < 1) return null;
+  const cap = typeof max === "number" && max > 0 ? max : 3;
   const color =
-    round >= 3 ? "#D62828" : round >= 2 ? "#E69F00" : "#E9C46A";
+    round >= cap ? "#D62828" : round >= cap - 1 ? "#E69F00" : "#E9C46A";
+  const label = `R${round}/${cap}`;
+  const tooltip = `Review round ${round} of ${cap}${
+    round >= cap ? " — at escalation threshold" : ""
+  }`;
   return (
     <span
-      aria-label={`review round ${round}`}
+      data-review-round={round}
+      title={tooltip}
+      aria-label={tooltip}
       style={{
-        display: "inline-block",
-        width: 6,
-        height: 6,
-        borderRadius: "50%",
-        background: color,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
       }}
-    />
+    >
+      <span
+        aria-hidden
+        style={{
+          display: "inline-block",
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: color,
+        }}
+      />
+      <span style={{ fontSize: 11, color, fontWeight: 600 }}>{label}</span>
+    </span>
   );
 }
 
