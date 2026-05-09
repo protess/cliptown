@@ -659,4 +659,141 @@ test.describe("ship gate § 11", () => {
     // Tooltip is the `title` attribute (also mirrored to aria-label).
     await expect(capBadge).toHaveAttribute("title", /escalation threshold/);
   });
+
+  // § 11.6 — When a manager calls `task_request_changes`, the world commits
+  // an UPDATE+INSERT transaction (round_++, directive INSERT) and broadcasts
+  // a Directive ConsoleOutbound. After three rounds the next call hits the
+  // escalation branch in `mcp_dispatch::handle_task_request_changes`: the
+  // task transitions to status="escalated" and the world emits a
+  // `task_escalated` SystemEvent with severity="alert". Spec § 11.6.
+  //
+  // The full chain (transactional integrity, branch selection, audit log)
+  // lives in the rust-layer `crates/world/tests/console_emit.rs`. This UI
+  // proof asserts the operator-observable transitions by synthesizing the
+  // snapshot + system_event frames the world would emit:
+  //   1. Round 0 in awaiting_review → no badge.
+  //   2. After the first round-trip (engineer fixes after manager
+  //      bounce-back), the same task reappears in awaiting_review with
+  //      review_round=1 and the ReviewRoundBadge renders R1/3 yellow.
+  //   3. At review_round=3, the badge tooltip warns "at escalation
+  //      threshold".
+  //   4. The (cap+1)-th `task_request_changes` triggers escalation: the
+  //      world emits a `task_escalated` system_event (severity=alert,
+  //      payload contains task_id + rounds) and the snapshot moves the
+  //      task to status="escalated". The TopBar event-feed surfaces it
+  //      and the History modal renders the full row.
+  //
+  // Phase-1 known gap: the kanban has no column for status="escalated"
+  // (or "changes_requested"), so escalated tasks vanish from the board.
+  // This test documents that gap by asserting the disappearance — when a
+  // follow-up PR surfaces escalated tasks (dedicated column / critical
+  // toast), update the assertion at the bottom of this test.
+  test("§ 11.6 — review-cycle bumps badge round-by-round and escalates at cap", async ({
+    page,
+  }) => {
+    const STARTUP = "eeff1111-eeff-4111-eeff-111111111111";
+    const FOUNDER = "f1100000-0000-4000-0000-000000000001";
+    const ENGINEER = "e1100000-0000-4000-0000-000000000002";
+    const TASK = "task-review-cycle-001";
+
+    await page.goto("/console");
+    await stopWS(page);
+
+    // Helper: build a snapshot for the same single-task fixture at a given
+    // status + review_round. The status flip from awaiting_review →
+    // changes_requested → awaiting_review during a round-trip is the
+    // world's job; this test only renders the awaiting_review states the
+    // operator actually sees the badge in.
+    const snapshotAt = (status: string, reviewRound: number) => ({
+      type: "world_view_snapshot",
+      snapshot: {
+        startups: [
+          { id: STARTUP, name: "review-cycle", budget_cap_usd: 100, budget_spent_usd: 0, last_event_ts: reviewRound + 1 },
+        ],
+        avatars: [
+          { agent_id: FOUNDER, startup_id: STARTUP, role: "founder", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+          { agent_id: ENGINEER, startup_id: STARTUP, role: "engineer", backend: "claude_code", current_pos: [0, 0], target_pos: null, room_id: "suite_1", status: "idle" },
+        ],
+        tasks: [
+          { id: TASK, startup_id: STARTUP, title: "Review-cycle task", status, assignee_agent_id: ENGINEER, required_room: null, review_round: reviewRound, max_review_rounds: 3 },
+        ],
+      },
+    });
+
+    // Step 0: task is fresh in awaiting_review, no rounds yet.
+    await dispatch(page, snapshotAt("awaiting_review", 0));
+
+    const sidebar = page.getByRole("complementary", { name: "startups" });
+    await sidebar.locator(`[data-startup-id="${STARTUP}"]`).click();
+    const main = page.locator("main");
+    const reviewColumn = main.locator('[data-column-id="awaiting_review"]');
+
+    // Round 0: badge early-exits (`if (!round || round < 1) return null`),
+    // so no `[data-review-round]` element exists anywhere on the card.
+    await expect(reviewColumn.getByText("Review-cycle task")).toBeVisible();
+    await expect(main.locator("[data-review-round]")).toHaveCount(0);
+
+    // Step 1: manager request_changes (round 0 → 1) → engineer fixes →
+    // task reappears in awaiting_review with review_round=1. Badge is now
+    // visible in yellow at the lowest tier of escalation.
+    await dispatch(page, snapshotAt("awaiting_review", 1));
+    const r1 = main.locator('[data-review-round="1"]');
+    await expect(r1).toHaveCount(1);
+    await expect(r1).toContainText("R1/3");
+    await expect(r1).toHaveAttribute("title", /Review round 1 of 3/);
+    // Tooltip explicitly does NOT yet warn about the escalation threshold.
+    // This pins the conditional suffix in `ReviewRoundBadge` (Card.tsx),
+    // so a regression that always appends the warning trips the test.
+    await expect(r1).not.toHaveAttribute("title", /escalation threshold/);
+
+    // Step 2: jump to round 3 (cap). Round 2's color is pinned by the
+    // standalone badge test above; this test cares about the cap signal.
+    await dispatch(page, snapshotAt("awaiting_review", 3));
+    const cap = main.locator('[data-review-round="3"]');
+    await expect(cap).toHaveCount(1);
+    await expect(cap).toContainText("R3/3");
+    await expect(cap).toHaveAttribute("title", /at escalation threshold/);
+    // Single card, single badge — the round-1 indicator is gone.
+    await expect(main.locator('[data-review-round="1"]')).toHaveCount(0);
+
+    // Step 3: cap+1 request hits the escalation branch in
+    // `handle_task_request_changes`. The world emits a `task_escalated`
+    // SystemEvent (severity=alert, kind=task_escalated) BEFORE the
+    // snapshot transitions the task to status=escalated. Frontend
+    // severity union (store.ts:57) accepts "alert" and "critical" after
+    // M5.
+    await dispatch(page, {
+      type: "system_event",
+      ts: Date.now(),
+      severity: "alert",
+      kind: "task_escalated",
+      startup_id: STARTUP,
+      payload: JSON.stringify({ task_id: TASK, rounds: 3, feedback: "still wrong" }),
+    });
+    await dispatch(page, snapshotAt("escalated", 3));
+
+    // The TopBar event-feed (aria-label="event-feed") is the operator's
+    // first-glance surface. The kind text reaches the rendered DOM,
+    // proving the SystemEventVM made it through severityFromString.
+    const feed = page.getByLabel("event-feed");
+    await expect(feed).toContainText("task_escalated");
+
+    // Open History modal, scope assertions to the dialog so they don't
+    // accidentally match the topbar feed text.
+    await page.getByRole("button", { name: "History" }).click();
+    const dialog = page.getByRole("dialog", { name: "System event history" });
+    await expect(dialog).toBeVisible();
+    const eventRow = dialog.locator("li", { hasText: "task_escalated" });
+    await expect(eventRow).toContainText("alert");
+    await expect(eventRow).toContainText(TASK);
+    await expect(eventRow).toContainText('"rounds":3');
+
+    // Close the modal so it doesn't intercept the next assertion.
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).not.toBeVisible();
+
+    // Phase-1 gap: status="escalated" has no kanban column, so the task
+    // vanishes from the board. Document the gap; flip when surfaced.
+    await expect(main.getByText("Review-cycle task")).toHaveCount(0);
+  });
 });
