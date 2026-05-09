@@ -526,6 +526,11 @@ test.describe("ship gate § 11", () => {
     await expect(directiveBubble).toBeVisible();
     // The "operator" sentinel renders as a raw <code> (no UUID truncation).
     await expect(chat.locator('code:text-is("operator")')).toHaveCount(1);
+    // The directive-arrow tag (→) MUST be present; a chat-tag (·) MUST NOT
+    // appear, since the only message in the panel is a directive. Catches
+    // a regression where ChatPanel.tsx Bubble's `tag` switch flips kind.
+    await expect(chat).toContainText("→");
+    await expect(chat.locator(':text("·"):not(:has(*))')).toHaveCount(0);
 
     // ── Step 2: founder's CLI calls subtask_create; world transitions the
     // new task to `queued` and pushes a WorldViewSnapshot. The kanban's
@@ -581,5 +586,13 @@ test.describe("ship gate § 11", () => {
     await expect(
       queuedColumn.getByText("Write spec.md"),
     ).toHaveCount(0);
+    // Card MUST display the engineer's monogram, not the "?" fallback.
+    // Card.tsx:50 renders `monogramSrc = assignee?.agent_id ?? task.assignee_agent_id ?? "?"`,
+    // so a regression where assignee isn't resolved (e.g. avatars lookup
+    // fails or assignee_agent_id is dropped) renders "?". Asserting the
+    // first char of ENGINEER ("e" → "E") and the absence of "?" pins the
+    // assignee surface, not just the column.
+    await expect(inProgressColumn.locator('text="E"')).toHaveCount(1);
+    await expect(inProgressColumn.locator('text="?"')).toHaveCount(0);
   });
 });
