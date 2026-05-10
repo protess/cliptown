@@ -378,3 +378,98 @@ Concrete entry-point checklist:
   did the artifact land at the canonical path, not "is the haiku good").
 - Caching `claude` CLI between CI runs (premature optimization until the
   basic flow is green).
+
+## References & inspiration: multica-ai/multica
+
+Inspected during the spec session as a reference implementation of the same
+problem class (real coding agents driven by a daemon orchestrator).
+Multica's architecture differs from this spec's recommendation in one
+non-obvious way that's worth surfacing as an alternative.
+
+### What multica does
+
+- **Go server in the cloud** + **Go daemon on the user's machine**.
+- The daemon polls the server for tasks via heartbeat; on assignment, it
+  prepares an isolated `execenv` directory (workdir, injected CLAUDE.md /
+  AGENTS.md / skills), builds a prompt with `BuildPrompt(task)`, and spawns
+  the CLI (`claude`, `codex`) configured with the server-provided
+  `task.Agent.McpConfig`.
+- **MCP lives at the server, not the daemon.** The `mcp_config` JSON
+  delivered to the daemon points the CLI at the multica server's MCP
+  endpoint. The CLI authenticates with a token and talks MCP directly to
+  the cloud — the daemon is a process supervisor, not a protocol bridge.
+- Some tools are also CLI subcommands (`multica issue get/comment/list ...`)
+  hitting the server's REST API in parallel with MCP. The agent's prompt
+  literally instructs it: "Start by running `multica issue get X --output
+  json` to understand your task, then complete it."
+- Per-task workspace lives at `{workspacesRoot}/{workspace_id}/{task_id_short}/`.
+- See `server/internal/daemon/{daemon.go,prompt.go,types.go}` and
+  `server/internal/daemon/execenv/execenv.go`.
+
+### Where multica diverges from cliptown's current design
+
+| Concern | cliptown (current) | multica |
+|---|---|---|
+| MCP server location | Worker (Unix socket) — see Gap 2 | Server (HTTP/auth) |
+| Daemon shape | Per-agent Node worker | Singleton Go daemon, claims many tasks |
+| Tool surface | Pure MCP (16 cliptown tools) | MCP + REST CLI subcommands |
+| Workspace path | `workspaces/<sid>/artifacts/<tid>.md` (canonical, enforced) | `{root}/{workspace}/{task_short}/` per task |
+| Prompt source | Worker `--prompt` arg | Server-built, daemon-injected per task |
+| Auth | Worker WS `secret` arg | Per-task token in MCP/REST headers |
+
+### Alternative architecture: MCP-at-the-world (A1' instead of A1)
+
+The single biggest architectural decision multica forces re-examination of:
+**should the MCP server live at the worker (Unix socket) or at the world
+(HTTP endpoint)?**
+
+A1' sketch:
+- Add an `/mcp` HTTP/SSE route to the world (axum). Use the streamable HTTP
+  transport from `@modelcontextprotocol/sdk` (or `rmcp` on the Rust side).
+- The route accepts a Bearer token (per-agent secret, same one the worker
+  uses for WS auth) and routes `tools/call` straight to the existing
+  `mcp_dispatch::dispatch` function.
+- Adapter's `mcp.json` becomes `{ type: "http", url:
+  "http://world.local:PORT/mcp", headers: { Authorization: "Bearer ..." } }`.
+- The Unix socket disappears. The worker becomes a pure process supervisor
+  (spawn CLI, log hooks, report exit).
+
+**Why this might be better:**
+- One less hop. CLI → world directly, no JSON-RPC ↔ socket ↔ WS bridge.
+- Reuses the world's existing auth model.
+- No Node-side MCP server to maintain.
+- Matches the deployed-MCP-server pattern most production agents use today.
+- The MCP SDK has solid HTTP/SSE transport; less surface area than custom
+  Unix-socket framing.
+
+**Why the worker-hosts-MCP design (A1) might still be better:**
+- All cliptown traffic already flows through the worker WS. Adding HTTP
+  expands the world's surface area (auth, CORS, rate limits, observability).
+- The worker is on the same machine as the CLI; Unix socket has lower
+  overhead than HTTP+TLS+token-validation.
+- The current adapter already writes `nc -U <socket>` configs; switching
+  to HTTP changes the adapter API (`mcp_socket_path: string` →
+  `mcp_url: string`).
+- Cliptown's runtime model assumes per-agent workers — there's no
+  "one daemon, many tasks" abstraction to leverage as multica has.
+
+**Recommendation for the next session: re-decide before implementing A1.**
+
+Re-decide A1 vs A1' as the first thing in the next session. The 30 minutes
+spent comparing now will save 2-3 hours if we choose the wrong direction.
+Read both this section and `server/internal/daemon/execenv/runtime_config.go`
+in the multica repo to see the multica MCP config shape concretely, then
+commit to one architecture. The rest of this spec assumes A1; if the
+choice flips, A2/A3 stay largely the same (just transport details change).
+
+### What we explicitly do NOT take from multica
+
+- **REST CLI subcommands on top of MCP.** Multica has `multica issue get`,
+  `multica issue comment list`, etc. — a parallel surface to MCP. Cliptown
+  doesn't need this dual surface: all 16 cliptown tools fit MCP cleanly,
+  and the agent prompt can describe them in one place.
+- **Heartbeat task-claiming protocol.** Multica's daemon polls for tasks;
+  cliptown's world pushes via WS frames. Don't change this.
+- **Per-task workspace via `execenv`.** Cliptown's canonical artifact path
+  is enforced server-side; we don't need the daemon to build a workspace
+  scaffold. The world's sandbox check already rejects bad paths.
