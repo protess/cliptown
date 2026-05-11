@@ -1,0 +1,16 @@
+{
+  "name": "@cliptown/e2e-real-llm",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo no-op",
+    "start": "tsx ./src/run.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsx": "^4.19.2",
+    "typescript": "^5.5"
+  }
+}
