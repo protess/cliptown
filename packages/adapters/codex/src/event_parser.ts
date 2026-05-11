@@ -1,5 +1,4 @@
-// packages/adapters/codex/src/event_parser.ts
-import type { HookEvent, HookKind } from "@cliptown/adapter-core";
+import type { HookEvent, HookKind, UsageReport } from "@cliptown/adapter-core";
 
 /**
  * Streaming JSONL parser for codex's `exec --json` stdout. Emits HookEvents
@@ -11,7 +10,7 @@ import type { HookEvent, HookKind } from "@cliptown/adapter-core";
  * drive parseChunk + finalize directly with fixture strings.
  */
 
-export interface CodexUsageAccum {
+interface CodexUsageAccum {
   in_tokens: number;
   out_tokens: number;
   saw: boolean;
@@ -77,6 +76,21 @@ export function finalize(state: CodexParserState, info: FinalizeInfo): FinalizeR
     ts_ms: Date.now(),
   });
   return { hooks };
+}
+
+/**
+ * Convert the parser's running token accumulator into a UsageReport. Returns
+ * undefined when no `turn.completed.usage` frame was observed (the codex
+ * stream did not include billable token counts). Lets callers ask for the
+ * UsageReport without reaching into internal state.
+ */
+export function toUsageReport(state: CodexParserState, modelId: string): UsageReport | undefined {
+  if (!state.usage.saw) return undefined;
+  return {
+    in_tokens: state.usage.in_tokens,
+    out_tokens: state.usage.out_tokens,
+    model_id: modelId,
+  };
 }
 
 function parseLine(line: string, state: CodexParserState, out: HookEvent[]): void {

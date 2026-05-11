@@ -1,6 +1,5 @@
-// packages/adapters/codex/test/event_parser.test.ts
 import { describe, it, expect } from "vitest";
-import { emptyState, parseChunk, finalize } from "../src/event_parser.js";
+import { emptyState, parseChunk, finalize, toUsageReport } from "../src/event_parser.js";
 
 describe("codex event_parser", () => {
   it("emits pre_tool then post_tool for a command_execution item", () => {
@@ -23,7 +22,11 @@ describe("codex event_parser", () => {
     expect(hooks[1].payload).toMatchObject({ type: "command_execution", status: "completed", exit_code: 0 });
     expect(hooks[0].seq).toBe(1);
     expect(hooks[1].seq).toBe(2);
-    expect(state.usage).toEqual({ in_tokens: 150, out_tokens: 20, saw: true });
+    expect(toUsageReport(state, "codex-test")).toEqual({
+      in_tokens: 150,
+      out_tokens: 20,
+      model_id: "codex-test",
+    });
   });
 
   it("emits pre_tool/post_tool for mcp_tool_call using item.tool field", () => {
@@ -108,5 +111,18 @@ describe("codex event_parser", () => {
     const { hooks } = finalize(state, { exit_code: 0, signal: undefined, stderr_tail: "" });
     // First the flushed post_tool, then session_stop.
     expect(hooks.map((h) => h.kind)).toEqual(["post_tool", "session_stop"]);
+  });
+
+  it("finalize includes signal in payload when present", () => {
+    const state = emptyState();
+    const { hooks } = finalize(state, { exit_code: 143, signal: "SIGTERM", stderr_tail: "" });
+    expect(hooks).toHaveLength(1);
+    expect(hooks[0].kind).toBe("session_error");
+    expect(hooks[0].payload).toMatchObject({ exit_code: 143, signal: "SIGTERM" });
+  });
+
+  it("toUsageReport returns undefined when no turn.completed.usage was observed", () => {
+    const state = emptyState();
+    expect(toUsageReport(state, "any-model")).toBeUndefined();
   });
 });
