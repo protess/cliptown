@@ -63,6 +63,20 @@ describe("hook bridge", () => {
     await expect(fetch(`http://127.0.0.1:${b.port}/hook/pre_tool`, { method: "POST", body: "{}" }))
       .rejects.toThrow();
   });
+
+  it("prefers tool_name over tool field (claude CLI payload shape)", async () => {
+    const events: HookEvent[] = [];
+    const b = await startHookBridge((e) => events.push(e));
+    const r = await postJson(b.port, "/hook/pre_tool", {
+      hook_event_name: "PreToolUse",
+      tool_name: "Write",
+      tool_input: { file_path: "/tmp/x.txt", content: "hi" },
+    });
+    expect(r.ok).toBe(true);
+    expect(events).toHaveLength(1);
+    expect(events[0].tool).toBe("Write");
+    await b.close();
+  });
 });
 
 describe("claudeCodeAdapter", () => {
