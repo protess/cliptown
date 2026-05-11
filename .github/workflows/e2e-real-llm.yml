@@ -38,15 +38,42 @@ jobs:
         run: cargo build --workspace --release
       - name: Build TS
         run: pnpm -r build
-      - name: Run E2E real-LLM
+      - name: Validate budget cap input
         run: |
           set -e
-          # The actual real-LLM E2E runner is wired in Phase 1 (M5+ infrastructure).
-          # For Phase 0 the workflow exists as the manual gate; the runner step
-          # below validates the budget cap is enforced by aborting if it's <= 0.
           if [ -z "$E2E_BUDGET_CAP_USD" ] || [ "$(echo "$E2E_BUDGET_CAP_USD <= 0" | bc -l)" = "1" ]; then
-            echo "::error::Invalid budget cap"
+            echo "::error::Invalid budget cap: '$E2E_BUDGET_CAP_USD'"
             exit 1
           fi
-          echo "Real-LLM E2E placeholder — runner lands in Phase 1"
           echo "Budget cap: \$$E2E_BUDGET_CAP_USD"
+      - name: Install claude CLI
+        # M9.10 C — pin a known claude-code version. `@latest` here would
+        # silently break the workflow on upstream releases; bump
+        # deliberately after running scripts/smoke-real-llm.sh against the
+        # new version. The pin captures the version that exists at the time
+        # this step is written, not a verified-good version — the first
+        # successful workflow run is the verification.
+        run: npm install -g @anthropic-ai/claude-code@2.1.138
+      - name: Run E2E real-LLM
+        id: run_e2e
+        run: |
+          set -o pipefail
+          # `--silent` strips pnpm's own logging so the JSON summary on stdout
+          # is the only thing piped to the result file. The runner exits
+          # non-zero on any failure; pipefail propagates that to this step.
+          pnpm -F @cliptown/e2e-real-llm --silent start | tee /tmp/e2e-result.json
+      - name: Publish result to job summary
+        # Always runs so the JSON summary lands in the GitHub job summary
+        # even when the runner failed (which is when operators need it most).
+        if: always()
+        run: |
+          {
+            echo '## E2E Real-LLM Result';
+            echo '```json';
+            if [ -s /tmp/e2e-result.json ]; then
+              cat /tmp/e2e-result.json
+            else
+              echo '(runner produced no JSON output — check the previous step log)'
+            fi
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
