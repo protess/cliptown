@@ -15,6 +15,18 @@ importers:
         specifier: ^1
         version: 1.59.1
 
+  e2e/real-llm:
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.39
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.5
+        version: 5.9.3
+
   packages/adapters/claude-code:
     dependencies:
       '@cliptown/adapter-core':
