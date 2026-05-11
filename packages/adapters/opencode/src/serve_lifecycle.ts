@@ -56,7 +56,7 @@ export async function startServe(opts: StartServeOpts): Promise<ServeHandle> {
   });
 
   const url = await new Promise<string>((resolve, reject) => {
-    let stderrBuf = "";
+    let buf = "";
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
@@ -64,19 +64,26 @@ export async function startServe(opts: StartServeOpts): Promise<ServeHandle> {
       reject(new Error(`opencode serve did not announce listening URL within ${readyMs}ms`));
     }, readyMs);
 
-    const onChunk = (b: Buffer) => {
-      const s = b.toString("utf-8");
-      opts.onLog?.("stderr", s);
-      stderrBuf += s;
-      const m = LISTENING_RE.exec(stderrBuf);
-      if (m && !settled) {
+    const matchListening = (chunk: string): void => {
+      if (settled) return;
+      buf += chunk;
+      const m = LISTENING_RE.exec(buf);
+      if (m) {
         settled = true;
         clearTimeout(timer);
         resolve(m[1].replace(/\/$/, ""));
       }
     };
-    child.stderr?.on("data", onChunk);
-    child.stdout?.on("data", (b: Buffer) => opts.onLog?.("stdout", b.toString("utf-8")));
+    child.stdout?.on("data", (b: Buffer) => {
+      const s = b.toString("utf-8");
+      opts.onLog?.("stdout", s);
+      matchListening(s);
+    });
+    child.stderr?.on("data", (b: Buffer) => {
+      const s = b.toString("utf-8");
+      opts.onLog?.("stderr", s);
+      matchListening(s);
+    });
     child.on("exit", (code) => {
       if (settled) return;
       settled = true;
