@@ -6,8 +6,9 @@ describe("opencodeAdapter shape", () => {
     expect(opencodeAdapter.id).toBe("opencode");
     expect(opencodeAdapter.capabilities.inject_context).toBe(true);
     expect(opencodeAdapter.capabilities.block_on_stop).toBe(false);
-    expect(opencodeAdapter.capabilities.hooks).toContain("session_stop");
-    expect(opencodeAdapter.capabilities.hooks).toContain("session_error");
+    expect(opencodeAdapter.capabilities.hooks).toEqual([
+      "pre_tool", "post_tool", "session_stop", "session_error",
+    ]);
     expect(typeof opencodeAdapter.spawn).toBe("function");
   });
 });

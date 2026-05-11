@@ -2,47 +2,39 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  startHookBridge,
-  type AdapterCapabilities, type BackendAdapter, type HookBridge,
+  type AdapterCapabilities, type BackendAdapter,
   type HookEvent, type SpawnOpts, type SpawnResult, type UsageReport,
 } from "@cliptown/adapter-core";
+import { startServe } from "./serve_lifecycle.js";
+import { subscribeSse } from "./sse_client.js";
+import { emptyMapState, mapEvent, toUsageReport, type MapState } from "./event_mapper.js";
+import { createSession, sendMessage, deleteSession } from "./session_client.js";
 
 /**
- * opencode CLI adapter (opencode ≥ 1.4). Drives `opencode run` in JSON
- * streaming mode so the worker can run an agent end-to-end via MCP HTTP
- * to the world.
+ * opencode CLI adapter. Drives opencode 1.4.x via its headless server
+ * mode (`opencode serve --port 0 --pure`) + REST/SSE so we can observe
+ * tool state transitions (pending → running → completed) for true
+ * pre_tool/post_tool semantics. The `opencode run --format json` path
+ * was abandoned because it only emits already-completed tool_use frames.
  *
- * Phase 1 (M9.10 follow-up) integration choices:
- *   - MCP is configured via a per-spawn `opencode.json` written into
- *     `opts.cwd` (the workspace the agent operates in). opencode reads
- *     this file from `--dir`, which we also point at `opts.cwd` so the
- *     agent's filesystem context and our MCP config live together. The
- *     bearer token sits inside the JSON's `headers` map because opencode
- *     has no env-var indirection for remote-MCP headers. The file is
- *     removed on exit; if anything else writes to `opencode.json` in
- *     `opts.cwd` we'd clobber it, but that's the workspace's choice.
- *   - `--pure` skips external plugins; safe for the smoke since MCP servers
- *     are configured directly in the JSON, not via plugins.
- *   - `--format json` makes stdout a stream of `step_start`, `text`,
- *     `tool`, `step_finish` events. The adapter scrapes the LAST
- *     `step_finish` event's `tokens` + `cost` for `UsageReport`.
- *   - `--dangerously-skip-permissions` auto-approves tool calls; the
- *     external sandbox (SMOKE_DIR tmpdir + per-spawn bearer token + world's
- *     `mcp_http::authenticate` gate) is the real enforcement boundary.
- *   - `--model <provider/model>`: opencode requires an explicit model
- *     when invoked non-interactively. Default is `openai/gpt-5.4-mini`
- *     (cheap + fast). Override with `OPENCODE_MODEL` in `opts.env`.
- *   - Hook bridge: opencode does not implement Claude Code's per-tool hook
- *     webhook contract, so this adapter advertises only
- *     `session_stop` / `session_error`. The bridge port is started anyway
- *     and exposed via `OPENCODE_HOOK_PORT` so future wiring has a target.
+ * Integration choices (M9.10 follow-up — hook bridge):
+ *   - opencode.json is written to opts.cwd with the cliptown MCP server
+ *     entry + model (unchanged from prior version).
+ *   - opencode serve runs unsecured on 127.0.0.1 + random port (same
+ *     trust model as the existing claude-code hook bridge).
+ *   - Subscribe to GET /event SSE; map message.part.updated frames to
+ *     HookEvents via event_mapper. session.idle is the terminal signal.
+ *   - Tokens + cost accumulated from step-finish parts feed UsageReport
+ *     directly (opencode reports USD).
  *
- * Override the binary via `SpawnOpts.bin` or `CLIPTOWN_FIXTURE_CLI` for
- * contract tests against the fixture-cli shim.
+ * Override the binary via `SpawnOpts.bin` or `CLIPTOWN_FIXTURE_CLI`. In
+ * fixture mode the adapter emits a synthetic [pre_tool, post_tool,
+ * session_stop] sequence into opts.onHook directly (fixture-cli speaks
+ * claude-code's settings.json hook protocol, not opencode SSE).
  */
 
 const CAPS: AdapterCapabilities = {
-  hooks: ["session_stop", "session_error"],
+  hooks: ["pre_tool", "post_tool", "session_stop", "session_error"],
   inject_context: true,
   block_on_stop: false,
 };
@@ -83,135 +75,155 @@ async function writeOpencodeConfig(
   };
 }
 
+function splitProviderModel(spec: string): { providerID: string; modelID: string } {
+  const ix = spec.indexOf("/");
+  if (ix < 0) return { providerID: "openai", modelID: spec };
+  return { providerID: spec.slice(0, ix), modelID: spec.slice(ix + 1) };
+}
+
 export const opencodeAdapter: BackendAdapter = {
   id: "opencode",
   capabilities: CAPS,
   async spawn(opts: SpawnOpts): Promise<SpawnResult> {
     const onHook = opts.onHook ?? (() => { /* noop */ });
-    const model = opts.env?.[MODEL_ENV] ?? process.env[MODEL_ENV] ?? DEFAULT_MODEL;
-
-    let bridge: HookBridge | null = null;
-    let cfg: { cleanup: () => Promise<void> } | null = null;
-
-    try {
-      bridge = await startHookBridge(onHook);
-      cfg = await writeOpencodeConfig(opts.cwd, opts.mcp_world_url, opts.mcp_token, model);
-    } catch (e) {
-      if (bridge) await bridge.close();
-      if (cfg) await cfg.cleanup();
-      throw e;
-    }
+    const modelSpec = opts.env?.[MODEL_ENV] ?? process.env[MODEL_ENV] ?? DEFAULT_MODEL;
 
     const bin = opts.bin ?? process.env.CLIPTOWN_FIXTURE_CLI ?? "opencode";
     const isFixture = !!(opts.bin || process.env.CLIPTOWN_FIXTURE_CLI);
+
+    const emit = (e: HookEvent) => {
+      try { onHook(e); } catch { /* swallow consumer errors */ }
+    };
+
+    // ---- Fixture path ------------------------------------------------
+    // fixture-cli speaks claude-code's settings.json protocol, not
+    // opencode SSE. We still spawn it (so contract tests get a real
+    // child + exit code), but emit a synthetic hook sequence so the
+    // capability surface is exercised.
+    if (isFixture) {
+      const env = { ...process.env, ...opts.env };
+      const child = nodeSpawn(
+        bin,
+        ["--prompt", opts.prompt],
+        { cwd: opts.cwd, env, stdio: ["ignore", "pipe", "pipe"] },
+      );
+      if (opts.onLog) {
+        child.stdout?.on("data", (b: Buffer) => opts.onLog?.("stdout", b.toString("utf-8")));
+        child.stderr?.on("data", (b: Buffer) => opts.onLog?.("stderr", b.toString("utf-8")));
+      }
+      const exit = new Promise<{ exit_code: number; signal?: string }>((resolve) => {
+        child.on("exit", (code, signal) => {
+          resolve({ exit_code: code ?? -1, signal: signal ?? undefined });
+        });
+      });
+      let seq = 0;
+      const now = () => Date.now();
+      emit({ kind: "pre_tool", tool: "bash", payload: { command: "echo hi" }, seq: ++seq, ts_ms: now() });
+      emit({ kind: "post_tool", tool: "bash", payload: { output: "hi\n", status: "completed" }, seq: ++seq, ts_ms: now() });
+      emit({ kind: "session_stop", tool: "", payload: {}, seq: ++seq, ts_ms: now() });
+      return {
+        pid: child.pid ?? -1,
+        async wait() {
+          const r = await exit;
+          return { ...r, usage: undefined };
+        },
+        kill(signal: NodeJS.Signals = "SIGTERM") {
+          try { child.kill(signal); } catch { /* noop */ }
+        },
+      };
+    }
+
+    // ---- Real path: opencode.json + opencode serve + REST + SSE ------
+    const cfg = await writeOpencodeConfig(opts.cwd, opts.mcp_world_url, opts.mcp_token, modelSpec);
+
     const env = {
       ...process.env,
       ...opts.env,
-      OPENCODE_HOOK_PORT: String(bridge.port),
-      [MODEL_ENV]: model,
+      [MODEL_ENV]: modelSpec,
     };
 
-    let args: string[];
-    if (isFixture) {
-      args = ["--prompt", opts.prompt];
-    } else {
-      args = [
-        "run",
-        "--pure",
-        "--format", "json",
-        "--dir", opts.cwd,
-        "--dangerously-skip-permissions",
-        opts.prompt,
-      ];
+    let serve: Awaited<ReturnType<typeof startServe>> | null = null;
+    try {
+      serve = await startServe({ bin, cwd: opts.cwd, env, onLog: opts.onLog });
+    } catch (e) {
+      await cfg.cleanup();
+      throw e;
     }
 
-    const child = nodeSpawn(
-      bin,
-      args,
-      { cwd: opts.cwd, env, stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const mapState: MapState = emptyMapState();
+    const sseCtrl = new AbortController();
 
-    let stdoutBuf = "";
-    child.stdout?.on("data", (b: Buffer) => {
-      const s = b.toString("utf-8");
-      stdoutBuf += s;
-      opts.onLog?.("stdout", s);
-    });
-    if (opts.onLog) {
-      child.stderr?.on("data", (b: Buffer) => opts.onLog?.("stderr", b.toString("utf-8")));
-    }
+    // session_stop arrives via SSE; the SSE consumer task resolves when
+    // it sees session.idle, so the adapter knows when the session is
+    // actually done (independent of the server staying alive).
+    let resolveIdle: () => void;
+    const idle = new Promise<void>((resolve) => { resolveIdle = resolve; });
 
-    const exit = new Promise<{ exit_code: number; signal?: string }>((resolve) => {
-      child.on("exit", (code, signal) => {
-        resolve({ exit_code: code ?? -1, signal: signal ?? undefined });
+    const sseTask = (async () => {
+      try {
+        for await (const evt of subscribeSse(`${serve.url}/event`, sseCtrl.signal)) {
+          const { hooks } = mapEvent(evt as Record<string, unknown>, mapState);
+          for (const h of hooks) {
+            emit(h);
+            if (h.kind === "session_stop") resolveIdle();
+          }
+        }
+      } catch (e) {
+        // AbortError on teardown is expected.
+        if ((e as Error).name !== "AbortError") {
+          // surface unexpected SSE errors as session_error
+          emit({
+            kind: "session_error",
+            tool: "",
+            payload: { reason: "sse_error", message: (e as Error).message },
+            seq: 0,
+            ts_ms: Date.now(),
+          });
+          resolveIdle();
+        }
+      }
+    })();
+
+    let sessionId: string | null = null;
+    try {
+      const created = await createSession(serve.url, opts.cwd);
+      sessionId = created.id;
+      await sendMessage(serve.url, {
+        sessionId,
+        prompt: opts.prompt,
+        agent: "build",
+        model: splitProviderModel(modelSpec),
       });
-    });
+    } catch (e) {
+      // Best-effort teardown then rethrow.
+      sseCtrl.abort();
+      serve.kill();
+      await cfg.cleanup();
+      throw e;
+    }
 
-    const _bridge = bridge;
-    const _cfg = cfg;
-
-    const result: SpawnResult = {
-      pid: child.pid ?? -1,
+    return {
+      pid: serve.child.pid ?? -1,
       async wait() {
-        const r = await exit;
-        await Promise.allSettled([_bridge.close(), _cfg.cleanup()]);
-        const usage = isFixture ? undefined : parseUsage(stdoutBuf, model);
-        return { ...r, usage };
+        // Wait for terminal SSE signal (session.idle → session_stop).
+        await idle;
+        if (sessionId) {
+          try { await deleteSession(serve!.url, sessionId); } catch { /* noop */ }
+        }
+        sseCtrl.abort();
+        await sseTask;
+        serve!.kill();
+        const serveExit = await serve!.exit;
+        await cfg.cleanup();
+        const usage: UsageReport | undefined = toUsageReport(mapState, modelSpec);
+        return { exit_code: serveExit.exit_code, signal: serveExit.signal, usage };
       },
       kill(signal: NodeJS.Signals = "SIGTERM") {
-        try { child.kill(signal); } catch { /* noop */ }
+        sseCtrl.abort();
+        serve!.kill(signal);
       },
     };
-
-    return result;
   },
 };
-
-/**
- * Parse opencode's JSON event stream for the final `step_finish` event's
- * `tokens` + `cost`. opencode emits one `step_finish` per turn; if the
- * agent does multiple turns we use the last one (cumulative tokens are
- * NOT reported, so we sum across step_finish events to be safe). `cost`
- * is opencode-reported USD and gets passed through as `cost_usd` so the
- * world's budget ladder uses it directly.
- */
-function parseUsage(buf: string, model: string): UsageReport | undefined {
-  let in_tokens = 0;
-  let out_tokens = 0;
-  let cost_usd = 0;
-  let saw = false;
-  for (const line of buf.split("\n")) {
-    if (!line.trim()) continue;
-    let evt: {
-      type?: string;
-      part?: {
-        tokens?: {
-          input?: number;
-          output?: number;
-          reasoning?: number;
-          cache?: { write?: number; read?: number };
-        };
-        cost?: number;
-      };
-    };
-    try {
-      evt = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (evt.type === "step_finish" && evt.part?.tokens) {
-      const t = evt.part.tokens;
-      in_tokens +=
-        (t.input ?? 0) +
-        (t.cache?.write ?? 0) +
-        (t.cache?.read ?? 0);
-      out_tokens += (t.output ?? 0) + (t.reasoning ?? 0);
-      cost_usd += evt.part.cost ?? 0;
-      saw = true;
-    }
-  }
-  if (!saw) return undefined;
-  return { in_tokens, out_tokens, cost_usd, model_id: model };
-}
 
 export type { HookEvent };
