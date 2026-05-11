@@ -2,19 +2,16 @@
 
 ## Open
 
-### Chat / Directive (M5 follow-up)
-
-#### Body-length validation on chat/directive
-**Priority:** P2
-**Source:** Codex adversarial review on M5 ship (P2 #1)
-
-Workers can send unbounded body strings via `speak` (chat or directive) and operators can send unbounded `OperatorDirective` bodies. The new broadcast path now amplifies this: huge bodies get cloned into Chat/Directive frames, broadcast to all operator consoles, and stored in the frontend's 500-entry messages array.
-
-Combined with the broadcast-channel lag-loss path (capacity 4096, Lagged-fatal-close), a chatty/malicious agent can push real events out of the buffer.
-
-Fix: add `MAX_BODY_LENGTH` constant (suggest 4096 chars), validate at the top of `cmd_console::OperatorDirective`, `mcp_dispatch::handle_speak`, and `mcp_dispatch::handle_task_request_changes`. Return `bad_args` / `error{reason:"body_too_long"}` if exceeded.
+_(empty)_
 
 ## Completed
+
+### Body-length validation on chat/directive (P2) — 2026-05-11
+**Source:** Codex adversarial review on M5 ship (P2 #1)
+
+Was: workers could send unbounded `body` via `speak`, managers could send unbounded `feedback` via `task_request_changes`, and operators could send unbounded `body` via `OperatorDirective`. Each cloned the full string into the broadcast channel (capacity 4096, Lagged-fatal-close), the SQL `messages` row, and the frontend's 500-entry messages array — a chatty / malicious agent or operator could starve the operator console by pushing real events out of the buffer.
+
+Fixed: `mcp_dispatch::MAX_BODY_LENGTH = 4096` (chars) + `check_body_length` helper guarding the three producer call sites pre-side-effect. Workers see `mcp_error{code:"body_too_long"}`; operators see `error{reason:"body_too_long"}`. Regression guards: `speak_rejects_body_too_long`, `speak_accepts_body_at_cap`, `task_request_changes_rejects_feedback_too_long`, `no_broadcast_on_body_too_long`.
 
 ### `emit_system_event` silent JSON fallback on malformed payload (P3) — 2026-05-11
 **Source:** Codex adversarial review on M5 ship

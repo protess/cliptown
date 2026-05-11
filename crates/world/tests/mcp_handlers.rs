@@ -257,6 +257,44 @@ async fn speak_chat_fans_to_room_peers() {
     }
 }
 
+/// Body-length guard (MAX_BODY_LENGTH=4096 chars). A worker with an
+/// unbounded `body` would otherwise clone a huge string into the
+/// broadcast channel, the SQL messages row, and the frontend's 500-entry
+/// messages array — combined with the broadcast channel's lag-loss
+/// fatal-close, a chatty agent could starve the operator console.
+#[tokio::test]
+async fn speak_rejects_body_too_long() {
+    let mut fx = fixture().await;
+    fx.make_rx("m1");
+    let long = "x".repeat(4097);
+    let r = fx
+        .call("e1", "speak", json!({"body": long, "kind": "chat"}))
+        .await;
+    assert_eq!(r["type"], "mcp_error", "{r}");
+    assert_eq!(r["code"], "body_too_long");
+    // No SQL row written, no fan-out, no broadcast.
+    let count: (i64,) = sqlx::query_as("SELECT count(*) FROM messages WHERE kind='chat'")
+        .fetch_one(&fx.pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 0);
+    assert_eq!(fx.drain("m1").len(), 0);
+    fx.expect_no_broadcasts();
+}
+
+/// Exactly at the cap (4096 chars) must succeed — the limit is a hard
+/// "exceeds 4096" gate, not "≥ 4096".
+#[tokio::test]
+async fn speak_accepts_body_at_cap() {
+    let mut fx = fixture().await;
+    fx.make_rx("m1");
+    let at_cap = "x".repeat(4096);
+    let r = fx
+        .call("e1", "speak", json!({"body": at_cap, "kind": "chat"}))
+        .await;
+    assert_eq!(r["type"], "mcp_reply", "{r}");
+}
+
 #[tokio::test]
 async fn speak_directive_requires_manager_relationship() {
     let mut fx = fixture().await;
@@ -515,6 +553,30 @@ async fn task_request_changes_increments_round_and_notifies() {
         other => panic!("expected Directive broadcast frame, got {:?}", other),
     }
     // No further frames after the one Directive.
+    fx.expect_no_broadcasts();
+}
+
+/// Body-length guard on the review-feedback path. Same rationale as
+/// speak_rejects_body_too_long: huge `feedback` strings would amplify
+/// into the broadcast channel + SQL row.
+#[tokio::test]
+async fn task_request_changes_rejects_feedback_too_long() {
+    let mut fx = fixture().await;
+    sqlx::query("UPDATE tasks SET status = 'awaiting_review' WHERE id = 'T1'")
+        .execute(&fx.pool).await.unwrap();
+    fx.make_rx("e1");
+    let long = "y".repeat(4097);
+    let r = fx
+        .call("m1", "task_request_changes", json!({"task_id":"T1","feedback":long}))
+        .await;
+    assert_eq!(r["type"], "mcp_error", "{r}");
+    assert_eq!(r["code"], "body_too_long");
+    // task state must be unchanged (no UPDATE happened).
+    let row: (String, i64) =
+        sqlx::query_as("SELECT status, review_round FROM tasks WHERE id='T1'")
+            .fetch_one(&fx.pool).await.unwrap();
+    assert_eq!(row.0, "awaiting_review");
+    assert_eq!(row.1, 0);
     fx.expect_no_broadcasts();
 }
 
