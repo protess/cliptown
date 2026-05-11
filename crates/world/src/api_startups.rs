@@ -237,6 +237,14 @@ pub async fn create_startup(
     // know which secret to authenticate with. Unset in production → per-agent
     // random secrets, same as before.
     let fixed_test_secret = std::env::var("CLIPTOWN_TEST_FIXED_AGENT_SECRET").ok();
+    // Test/dev override: when `CLIPTOWN_TEST_DISABLE_SUPERVISOR=1`, skip the
+    // supervisor.spawn_agent call entirely. Used by the M9.10 real-LLM smoke,
+    // which spawns its single worker out-of-band — letting the supervisor
+    // try (and fail with the relative `packages/worker/bin/worker` path) just
+    // pollutes world.log with `spawn_agent failed` warnings for 30s before
+    // the backoff retries exhaust. Unset in production.
+    let supervisor_disabled =
+        std::env::var("CLIPTOWN_TEST_DISABLE_SUPERVISOR").as_deref() == Ok("1");
     for (_role, aid, backend, _mgr) in &agents {
         let secret = fixed_test_secret
             .clone()
@@ -253,6 +261,9 @@ pub async fn create_startup(
             workspace: workspace_path.clone(),
             backend: backend.to_string(),
         };
+        if supervisor_disabled {
+            continue;
+        }
         if let Err(e) = s.supervisor.spawn_agent(cfg).await {
             tracing::warn!(component = "api_startups", agent_id = %aid, error = %e, "spawn_agent failed");
         }
