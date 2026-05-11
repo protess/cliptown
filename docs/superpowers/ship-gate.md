@@ -15,7 +15,7 @@ proofs for each invariant; Phase 1 lifts each to a Playwright UI proof.
 | 6 | Review cycle (round++ + max-rounds escalation) | M9.6 / M5.6 | `crates/world/tests/e2e_review_cycle.rs` | `packages/frontend/e2e/ship-gate.spec.ts` § 11.6 |
 | 7 | Cross-startup chat in cafe (public room) | M9.7 / M7.2 | `crates/world/tests/e2e_cafe.rs` (routing) | `packages/frontend/e2e/ship-gate.spec.ts` § 11.7 (rendering) |
 | 8 | Multi-tenant isolation | M9.8 / M6.1 | `crates/world/tests/e2e_isolation.rs` (delivery) | `packages/frontend/e2e/ship-gate.spec.ts` § 11.8 (operator view) |
-| 9 | All 3 adapters complete a task end-to-end | M9.9 / M8.3 | `packages/worker/test/contract.test.ts` (cross-adapter shape) | `scripts/smoke-real-llm.sh` + `pnpm -F @cliptown/e2e-real-llm start` — claude_code verified 2026-05-11 (claude-code CLI 2.1.138, haiku → `awaiting_review`, canonical artifact_path); codex/opencode pending A2-equivalent worker wiring |
+| 9 | All 3 adapters complete a task end-to-end | M9.9 / M8.3 | `packages/worker/test/contract.test.ts` (cross-adapter shape) | `scripts/smoke-real-llm.sh BACKEND=<claude_code\|codex\|opencode>` + `pnpm -F @cliptown/e2e-real-llm start` — all 3 verified 2026-05-11: claude-code 2.1.138, codex-cli 0.124, opencode 1.4.3. Each drops a haiku at the canonical `workspaces/<sid>/artifacts/<tid>.md`, task → `awaiting_review`. See [Real-LLM run](#real-llm-run-m910) for the per-backend matrix. |
 
 ## Running the ship gate
 
@@ -51,33 +51,29 @@ a GitHub Actions workflow. The maintainer runs it locally instead:
 Budget is capped at `$0.50/run` via `BUDGET_CAP_USD` / `E2E_BUDGET_CAP_USD`;
 breach fails the run. Triggered manually by maintainers.
 
-### Latest verified pass
+### Latest verified pass — all three adapters (2026-05-11)
 
-```text
-date: 2026-05-11
-claude-code CLI: 2.1.138 (OAuth)
-backend: claude_code
-duration: ~32s
-{
-  "ok": true,
-  "task_status": "awaiting_review",
-  "artifact_path": "workspaces/<sid>/artifacts/smoke-haiku.md",
-  "artifact_bytes": 71,
-  "budget_spent_usd": 0
-}
-```
+| backend       | CLI version    | artifact_bytes | task_status       | cost reported |
+|---------------|----------------|----------------|-------------------|---------------|
+| `claude_code` | claude 2.1.138 | 78             | `awaiting_review` | $0.31 (authoritative — claude-code reports `total_cost_usd`) |
+| `codex`       | codex 0.124    | 76             | `awaiting_review` | unset → world's pricing-table fallback ($0 for `codex-default`; see below) |
+| `opencode`    | opencode 1.4.3 | 67             | `awaiting_review` | $0.0000 (opencode-reported, model `openai/gpt-5.4-mini` on this user's plan) |
 
-`budget_spent_usd=0` is a Phase 1 limitation, not a billing claim: the
-claude-code CLI under OAuth does not push token usage into the worker's
-hook stream, so the world's `report_budget` ladder never fires for these
-runs. The world-side cap is still enforced if/when a report arrives.
+Each row was produced by `BACKEND=<id> bash scripts/smoke-real-llm.sh`
+with the canonical haiku artifact lifted from a fresh tmpdir. The JSON
+runner (`pnpm -F @cliptown/e2e-real-llm start`) produces equivalent
+output and is the machine-readable proof attached to this gate.
 
-### Scope of the verified pass
+### Known cost-reporting limitations
 
-Only `claude_code` is exercised end-to-end. `codex` and `opencode` share
-the MCP HTTP adapter contract (A1') and contract-test shape coverage but
-their worker `--real` path throws `not_yet_supported_in_real_mode` until
-each gets its own A2-equivalent prompt/CLI wiring (tracked as M9.10
-follow-up, not blocking § 11.9 close because the invariant is a "task
-completes" proof — claude_code completing the haiku and landing the
-artifact at the canonical path proves the chain works).
+- **codex** — the CLI's JSONL stream emits token counts but no dollar
+  cost, and `codex-default` (our placeholder model_id when the resolved
+  model isn't surfaced) isn't in the world's hardcoded
+  `price_per_mtok` table. Budget accrues $0 for codex runs until either
+  codex starts emitting a cost field or we pass `--model` explicitly and
+  add the resolved key to the price table.
+- **opencode** — reports a real cost field; for this user's
+  `openai/gpt-5.4-mini` plan that value is `$0.0000`. Not a bug — the
+  CLI's own number passes through verbatim to `startups.budget_spent_usd`.
+- **claude_code** — the only backend that currently produces a non-zero
+  authoritative cost (`total_cost_usd` from `--output-format json`).
