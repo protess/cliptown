@@ -1,17 +1,19 @@
 /**
- * M9.10 B — CI E2E real-LLM runner.
+ * M9.10 B — real-LLM E2E runner (machine-readable, maintainer-run).
  *
  * Same end-to-end exercise as `scripts/smoke-real-llm.sh` (sub-task A3),
- * but written for CI: structured JSON summary to stdout, non-zero exit on
- * any failure, no human-friendly pretty-printing. Called by
- * `.github/workflows/e2e-real-llm.yml` (sub-task C).
+ * but with structured JSON summary on stdout instead of colored human
+ * output. Non-zero exit on any failure. Was originally written for sub-task
+ * C's CI workflow; the workflow was removed (cliptown is open source, we
+ * don't require contributors to provide Anthropic API keys in CI secrets),
+ * so this runner now lives as a maintainer-run local artifact whose JSON
+ * output is the proof attached to ship-gate § 11.9.
  *
- * Pre-requisites (CI workflow must set these up):
+ * Pre-requisites the maintainer must satisfy:
  *   - `claude` CLI on PATH (`npm install -g @anthropic-ai/claude-code`)
  *   - `ANTHROPIC_API_KEY` exported (not preflight-validated here — the CLI
  *     surfaces its own auth error when it tries to reach api.anthropic.com)
- *   - `cargo` + `pnpm` + `sqlite3` + `curl` on PATH (ubuntu-latest has all
- *     except claude; pnpm comes via corepack)
+ *   - `cargo` + `pnpm` + `sqlite3` + `curl` on PATH
  *
  * Tunable env:
  *   - `E2E_BUDGET_CAP_USD` (default 0.50)

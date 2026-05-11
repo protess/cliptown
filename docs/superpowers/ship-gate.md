@@ -40,4 +40,14 @@ UI proofs that need synthetic ConsoleOutbound frames (§ 11.2, § 11.3, § 11.4,
 
 ## Real-LLM run (M9.10)
 
-`.github/workflows/e2e-real-llm.yml` runs the real-LLM E2E on workflow_dispatch only. Budget capped at `$0.50/run` via `E2E_BUDGET_CAP_USD`; breach fails the run. Triggered manually by maintainers.
+cliptown is an open-source project; we deliberately do not require a private
+Anthropic API key to live in CI secrets, so the real-LLM E2E is not wired as
+a GitHub Actions workflow. The maintainer runs it locally instead:
+
+- `scripts/smoke-real-llm.sh` — bash, human-debuggable, colored output.
+- `pnpm -F @cliptown/e2e-real-llm start` — TypeScript runner that emits a
+  single JSON summary on stdout (used by the maintainer to attach
+  machine-readable proof to this gate cell).
+
+Budget is capped at `$0.50/run` via `BUDGET_CAP_USD` / `E2E_BUDGET_CAP_USD`;
+breach fails the run. Triggered manually by maintainers.
