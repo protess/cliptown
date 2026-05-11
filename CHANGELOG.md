@@ -59,6 +59,15 @@ The longest milestone of Phase 0. Closed in 9 PRs across two arcs:
   pricing table otherwise. Smoke output now shows
   `budget_spent_usd ≈ $0.31` instead of `$0` — the cap (default $0.50)
   has real teeth.
+- `#31` codex + opencode adapters lifted to A2-equivalent. `codex exec
+  --json` + `-c mcp_servers.cliptown.{url,bearer_token_env_var}` +
+  `--dangerously-bypass-approvals-and-sandbox` (full-auto skips shell
+  but not MCP). `opencode run --format json --pure --dir <cwd>
+  --dangerously-skip-permissions` with per-spawn `opencode.json` in the
+  workspace. `pickAdapter` drops the `not_yet_supported_in_real_mode`
+  throws. Bundled with a `fix(m9.10)` commit for the MCP HTTP
+  notifications response: claude tolerated `{}` 200; rmcp 0.6+ used by
+  codex rejected it. Spec-compliant 202 + empty body now.
 
 ### Phase 0 hardening (TODOS.md → Completed)
 
@@ -81,13 +90,14 @@ The longest milestone of Phase 0. Closed in 9 PRs across two arcs:
 
 ### Known limitations carried into Phase 1
 
-- `codex` and `opencode` adapters share the MCP HTTP contract but their
-  worker `--real` path throws `not_yet_supported_in_real_mode`. § 11.9
-  is verified with `claude_code` only; each follow-on adapter gets its
-  own A2-equivalent prompt/CLI wiring as a Phase 1 task.
-- `total_cost_usd` is only scraped from `claude-code` today. `codex` and
-  `opencode` adapters return `usage: undefined` and the world falls back
-  to the pricing table for those models.
+- All three adapters complete a task end-to-end (#31). `codex` reports
+  token counts but no dollar cost, and its placeholder `model_id`
+  (`codex-default`) misses the world's hardcoded `price_per_mtok`
+  table — budget accrues $0 for codex runs until either codex starts
+  emitting a cost field or we pass `--model` explicitly and add the
+  resolved key. `opencode` reports cost directly; for this user's
+  `openai/gpt-5.4-mini` plan that value happens to be $0. `claude_code`
+  is the only backend currently producing a non-zero authoritative cost.
 - Two criterion benches are still placeholders (sum 0..1000 for "tick
   latency", in-process 1k-msg mpsc for "throughput"). Phase 1 swaps in
   real `loop_::spawn`-driven harnesses.
