@@ -106,8 +106,16 @@ pub async fn apply_report(
     model_id: &str,
     in_tokens: u64,
     out_tokens: u64,
+    // When the worker scraped an authoritative cost from the CLI (e.g.
+    // claude-code's `total_cost_usd`), use it; otherwise fall back to the
+    // hardcoded pricing table. Lets new model SKUs surface real spend without
+    // requiring a world deploy to refresh the table.
+    cost_override: Option<f64>,
 ) -> Result<(f64, f64, Option<Threshold>), sqlx::Error> {
-    let cost = cost_usd(model_id, in_tokens, out_tokens);
+    let cost = match cost_override {
+        Some(c) if c.is_finite() && c >= 0.0 => c,
+        _ => cost_usd(model_id, in_tokens, out_tokens),
+    };
 
     let row: Option<(f64, f64)> = sqlx::query_as(
         "SELECT budget_spent_usd, budget_cap_usd FROM startups WHERE id = ?",

@@ -49,11 +49,25 @@ export interface SpawnOpts {
   onLog?: (stream: "stdout" | "stderr", line: string) => void;
 }
 
+/**
+ * Token/cost telemetry the adapter scraped from the CLI's final output. Lets
+ * the worker forward a `ReportBudget` WS frame to the world so the per-startup
+ * `budget_spent_usd` ladder reflects real spend. Optional — fixtures and CLIs
+ * that don't surface usage simply leave this undefined.
+ */
+export interface UsageReport {
+  in_tokens: number;
+  out_tokens: number;
+  cost_usd: number;
+  model_id: string;
+}
+
 export interface SpawnResult {
   /** OS process id of the spawned CLI. */
   pid: number;
-  /** Resolves when the CLI exits, with exit code + signal. */
-  wait(): Promise<{ exit_code: number; signal?: string }>;
+  /** Resolves when the CLI exits. `usage` is populated when the adapter could
+   *  parse the CLI's final response (e.g. claude-code with `--output-format json`). */
+  wait(): Promise<{ exit_code: number; signal?: string; usage?: UsageReport }>;
   /** Forcibly terminate the CLI (SIGTERM by default). */
   kill(signal?: NodeJS.Signals): void;
 }

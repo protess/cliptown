@@ -232,6 +232,29 @@ async function main(): Promise<void> {
     console.log(
       `[worker] adapter exited code=${exit.exit_code} signal=${exit.signal ?? "none"}`,
     );
+    // M9.10 budget telemetry: when the adapter scraped a UsageReport from
+    // the CLI's final output, forward it to the world as a `report_budget`
+    // WS frame so `startups.budget_spent_usd` reflects real spend. Best-
+    // effort — adapters without usage data (codex/opencode today, fixture
+    // CLIs in contract tests) simply skip this hop.
+    if (exit.usage) {
+      const u = exit.usage;
+      console.log(
+        `[worker] usage: model=${u.model_id} in=${u.in_tokens} out=${u.out_tokens} cost=$${u.cost_usd.toFixed(4)}`,
+      );
+      handle.send({
+        type: "report_budget",
+        v: 1,
+        in_tokens: u.in_tokens,
+        out_tokens: u.out_tokens,
+        model_id: u.model_id,
+        cost_usd: u.cost_usd,
+      });
+      // Tiny grace period so the WS write flushes before we close the
+      // socket below. Without it, the world occasionally never sees the
+      // frame on a one-shot worker that exits immediately.
+      await new Promise((r) => setTimeout(r, 200));
+    }
     handle.close();
     return;
   }

@@ -7,7 +7,20 @@ use ts_rs::TS;
 pub enum WorkerInbound {
     Hello { v: u8, agent_id: String, startup_id: String, secret: String },
     McpCall { v: u8, corr_id: String, tool: String, args: serde_json::Value },
-    ReportBudget { v: u8, in_tokens: u64, out_tokens: u64, model_id: String, task_id: Option<String> },
+    /// Worker tells the world about token spend on a CLI turn. When the
+    /// adapter could scrape an authoritative cost from the CLI (e.g.
+    /// claude-code's `total_cost_usd`), `cost_usd` carries it and the world
+    /// uses it directly. When absent, the world falls back to its hardcoded
+    /// `budget::price_per_mtok` table keyed on `model_id`.
+    ReportBudget {
+        v: u8,
+        in_tokens: u64,
+        out_tokens: u64,
+        model_id: String,
+        task_id: Option<String>,
+        #[serde(default)]
+        cost_usd: Option<f64>,
+    },
     ReportFsOp { v: u8, op: String, path: String, bytes: i64, ok: bool, error: Option<String> },
     CliSessionStarted { v: u8, task_id: Option<String>, prompt_hash: String },
     CliSessionEnded { v: u8, task_id: Option<String>, exit_code: i32, summary: Option<String> },
