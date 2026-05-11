@@ -5,6 +5,8 @@ import { connect, type WorkerHandle } from "./ws.js";
 import { createMcpProxy, type McpProxy, MCP_TOOL_NAMES } from "./mcp.js";
 import { LLMMock, type ToolUse } from "./llm_mock.js";
 import { resolveSandbox } from "./sandbox.js";
+import type { BackendAdapter } from "@cliptown/adapter-core";
+import { claudeCodeAdapter } from "@cliptown/adapter-claude-code";
 
 export interface ParsedArgs {
   worldUrl: string;
@@ -16,6 +18,13 @@ export interface ParsedArgs {
   mock: boolean;
   fixture: string | undefined;
   prompt: string;
+  /**
+   * M9.10 A2: one-shot real-LLM mode. When set, the worker connects to WS,
+   * spawns the picked backend adapter (which talks to the world's `/mcp`
+   * HTTP endpoint directly per A1'), waits for the CLI to exit, then closes
+   * the WS and exits. Mutually exclusive with `--mock`.
+   */
+  real: boolean;
 }
 
 export function parseWorkerArgs(argv: string[]): ParsedArgs {
@@ -31,6 +40,7 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
       "mock":       { type: "boolean", default: false },
       "fixture":    { type: "string" },
       "prompt":     { type: "string", default: "" },
+      "real":       { type: "boolean", default: false },
     },
     strict: true,
     allowPositionals: false,
@@ -53,6 +63,7 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
     mock:      Boolean(values["mock"]),
     fixture:   typeof values["fixture"] === "string" ? values["fixture"] : undefined,
     prompt:    String(values["prompt"]),
+    real:      Boolean(values["real"]),
   };
 }
 
@@ -81,6 +92,26 @@ export function substitutePlaceholders(
     }
   }
   return out;
+}
+
+/**
+ * Pick the BackendAdapter for the requested CLI. M9.10 A2 lands `claude_code`
+ * first; codex/opencode are wired through A1' (their `mcp.json` shape already
+ * matches) but driving them end-to-end isn't in scope for this milestone, so
+ * we throw a discoverable error rather than silently using a half-tested path.
+ */
+export function pickAdapter(backend: string): BackendAdapter {
+  switch (backend) {
+    case "claude_code":
+      return claudeCodeAdapter;
+    case "codex":
+    case "opencode":
+      throw new Error(
+        `backend "${backend}" not_yet_supported_in_real_mode — M9.10 A2 lands claude_code first`,
+      );
+    default:
+      throw new Error(`unknown backend: ${backend}`);
+  }
 }
 
 /** Run a single tool_use against the MCP proxy or local fs (writeFile). */
@@ -164,6 +195,45 @@ async function main(): Promise<void> {
       }
     }
     console.log(`[worker] mock sequence complete; idling for inbound frames`);
+  } else if (args.real) {
+    // M9.10 A2 — one-shot real-LLM mode. Worker becomes a process supervisor:
+    // spawn the adapter, log hooks + stdio, wait for CLI exit, close WS, done.
+    // MCP traffic flows CLI → world `/mcp` (HTTP) directly per A1' — the
+    // worker's `McpProxy` is unused in this path.
+    const adapter = pickAdapter(args.backend);
+    // `args.worldUrl` is the WS endpoint (ws://host:port/ws/worker). The HTTP
+    // base for `/mcp` strips the path and switches scheme. wss:// → https://
+    // works too because we replace the literal `ws` prefix.
+    const httpBase = new URL(args.worldUrl);
+    httpBase.protocol = httpBase.protocol === "wss:" ? "https:" : "http:";
+    httpBase.pathname = "";
+    httpBase.search = "";
+    httpBase.hash = "";
+    const mcpWorldUrl = httpBase.toString().replace(/\/$/, "");
+    // Per `crates/world/src/mcp_http.rs::authenticate`, the bearer token is
+    // `<agent_id>:<secret>` so the world can resolve which agent is calling
+    // without a separate header.
+    const mcpToken = `${args.agentId}:${args.secret}`;
+    console.log(
+      `[worker] real mode: spawning ${args.backend} → MCP @ ${mcpWorldUrl}/mcp`,
+    );
+    const spawned = await adapter.spawn({
+      prompt: args.prompt,
+      cwd: workspaceRoot,
+      mcp_world_url: mcpWorldUrl,
+      mcp_token: mcpToken,
+      onHook: (e) => console.log(`[worker] hook: ${e.kind} tool=${e.tool}`),
+      onLog: (stream, line) => {
+        const out = stream === "stderr" ? process.stderr : process.stdout;
+        out.write(`[${args.backend}] ${line}`);
+      },
+    });
+    const exit = await spawned.wait();
+    console.log(
+      `[worker] adapter exited code=${exit.exit_code} signal=${exit.signal ?? "none"}`,
+    );
+    handle.close();
+    return;
   }
 
   // Stay alive until SIGINT, SIGTERM, OR the world closes the WS.
