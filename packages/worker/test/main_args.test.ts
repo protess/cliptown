@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseWorkerArgs, substitutePlaceholders } from "../src/main.js";
+import { parseWorkerArgs, substitutePlaceholders, pickAdapter } from "../src/main.js";
 
 describe("worker arg parsing", () => {
   const baseArgs = [
@@ -21,6 +21,14 @@ describe("worker arg parsing", () => {
     expect(a.mock).toBe(false);
     expect(a.fixture).toBeUndefined();
     expect(a.prompt).toBe("");
+    expect(a.real).toBe(false); // default
+  });
+
+  it("accepts --real for one-shot real-LLM mode", () => {
+    const a = parseWorkerArgs([...baseArgs, "--real", "--prompt", "write spec"]);
+    expect(a.real).toBe(true);
+    expect(a.prompt).toBe("write spec");
+    expect(a.mock).toBe(false);
   });
 
   it("throws on missing --world-url", () => {
@@ -91,5 +99,21 @@ describe("substitutePlaceholders", () => {
   it("is a no-op when the placeholder is absent", () => {
     const args = { task_id: "T1", artifact_path: "workspaces/s1/artifacts/T1.md" };
     expect(substitutePlaceholders(args, "s9")).toEqual(args);
+  });
+});
+
+describe("pickAdapter (M9.10 A2)", () => {
+  it("returns claudeCodeAdapter for claude_code", () => {
+    const a = pickAdapter("claude_code");
+    expect(a.id).toBe("claude_code");
+  });
+
+  it("throws not_yet_supported_in_real_mode for codex/opencode", () => {
+    expect(() => pickAdapter("codex")).toThrow(/not_yet_supported_in_real_mode/);
+    expect(() => pickAdapter("opencode")).toThrow(/not_yet_supported_in_real_mode/);
+  });
+
+  it("throws unknown backend for anything else", () => {
+    expect(() => pickAdapter("gpt5")).toThrow(/unknown backend/);
   });
 });
