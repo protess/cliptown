@@ -6,8 +6,9 @@ describe("codexAdapter shape", () => {
     expect(codexAdapter.id).toBe("codex");
     expect(codexAdapter.capabilities.block_on_stop).toBe(false);
     expect(codexAdapter.capabilities.inject_context).toBe(false);
-    expect(codexAdapter.capabilities.hooks).toContain("session_stop");
-    expect(codexAdapter.capabilities.hooks).toContain("session_error");
+    expect(codexAdapter.capabilities.hooks).toEqual([
+      "pre_tool", "post_tool", "session_stop", "session_error",
+    ]);
     expect(typeof codexAdapter.spawn).toBe("function");
   });
 });
