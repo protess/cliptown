@@ -13,7 +13,11 @@ import {
  *   - block_on_stop: false (codex has no stop-blocking mechanism comparable to
  *     Claude Code's Stop hook; the worker treats stop as best-effort).
  *   - inject_context: false (no resume-style prompt injection for Phase 0).
- *   - MCP config written as JSON pointing at the worker socket via `nc -U`.
+ *   - MCP config points the CLI at the world's `/mcp` HTTP endpoint
+ *     (M9.10 A1' — MCP-at-the-world). Codex's actual MCP config key may
+ *     differ; the shape below is contract-compatible and matches what the
+ *     core `SpawnOpts` exposes. Real Codex MCP wiring lands when this
+ *     adapter is exercised end-to-end.
  *   - Hooks bridge: codex's hook protocol differs from Claude Code's (TODO M9+);
  *     Phase 0 reuses the shared HTTP bridge and exposes the bridge port via
  *     `CODEX_HOOK_PORT` so the CLI (or a wrapper) can POST normalized events.
@@ -29,21 +33,21 @@ const CAPS: AdapterCapabilities = {
   block_on_stop: false,
 };
 
-function mcpJson(socketPath: string): object {
+function mcpJson(worldUrl: string, token: string): object {
   return {
     mcp: {
       cliptown: {
-        type: "stdio",
-        command: "nc",
-        args: ["-U", socketPath],
+        type: "http",
+        url: `${worldUrl}/mcp`,
+        headers: { Authorization: `Bearer ${token}` },
       },
     },
   };
 }
 
-async function buildConfig(mcpSocketPath: string): Promise<{ cfgDir: string; cleanup: () => Promise<void> }> {
+async function buildConfig(worldUrl: string, token: string): Promise<{ cfgDir: string; cleanup: () => Promise<void> }> {
   const cfgDir = await mkdtemp(join(tmpdir(), "ct-codex-"));
-  await writeFile(join(cfgDir, "config.json"), JSON.stringify(mcpJson(mcpSocketPath), null, 2));
+  await writeFile(join(cfgDir, "config.json"), JSON.stringify(mcpJson(worldUrl, token), null, 2));
   return {
     cfgDir,
     async cleanup() {
@@ -63,7 +67,7 @@ export const codexAdapter: BackendAdapter = {
 
     try {
       bridge = await startHookBridge(onHook);
-      cfg = await buildConfig(opts.mcp_socket_path);
+      cfg = await buildConfig(opts.mcp_world_url, opts.mcp_token);
     } catch (e) {
       if (bridge) await bridge.close();
       if (cfg) await cfg.cleanup();

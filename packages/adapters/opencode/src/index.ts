@@ -35,21 +35,25 @@ const CAPS: AdapterCapabilities = {
 const PROVIDER_ENV = "OPENCODE_PROVIDER";
 const DEFAULT_PROVIDER = "anthropic";
 
-function mcpJson(socketPath: string): object {
+function mcpJson(worldUrl: string, token: string): object {
+  // M9.10 A1' — MCP-at-the-world. Opencode's actual MCP config key may differ;
+  // the shape below is contract-compatible and matches the core `SpawnOpts`
+  // exposure. Real opencode MCP wiring lands when this adapter is exercised
+  // end-to-end.
   return {
     mcp_servers: {
       cliptown: {
-        type: "stdio",
-        command: "nc",
-        args: ["-U", socketPath],
+        type: "http",
+        url: `${worldUrl}/mcp`,
+        headers: { Authorization: `Bearer ${token}` },
       },
     },
   };
 }
 
-async function buildConfig(mcpSocketPath: string): Promise<{ cfgDir: string; cleanup: () => Promise<void> }> {
+async function buildConfig(worldUrl: string, token: string): Promise<{ cfgDir: string; cleanup: () => Promise<void> }> {
   const cfgDir = await mkdtemp(join(tmpdir(), "ct-opencode-"));
-  await writeFile(join(cfgDir, "config.json"), JSON.stringify(mcpJson(mcpSocketPath), null, 2));
+  await writeFile(join(cfgDir, "config.json"), JSON.stringify(mcpJson(worldUrl, token), null, 2));
   return {
     cfgDir,
     async cleanup() {
@@ -69,7 +73,7 @@ export const opencodeAdapter: BackendAdapter = {
 
     try {
       bridge = await startHookBridge(onHook);
-      cfg = await buildConfig(opts.mcp_socket_path);
+      cfg = await buildConfig(opts.mcp_world_url, opts.mcp_token);
     } catch (e) {
       if (bridge) await bridge.close();
       if (cfg) await cfg.cleanup();
