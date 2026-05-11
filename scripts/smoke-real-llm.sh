@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+#
+# M9.10 A3 — local real-LLM smoke test.
+#
+# End-to-end exercise of the worker → claude-code adapter → MCP HTTP → world
+# chain using a real `claude` CLI and a real Anthropic API key. Costs ~$0.05
+# per successful run (haiku-sized output) and caps at $0.50 via the world's
+# per-startup budget.
+#
+# Pre-requisites the operator must satisfy:
+#   - `claude` CLI on PATH (install with `npm install -g @anthropic-ai/claude-code`)
+#   - `ANTHROPIC_API_KEY` exported (not preflight-validated here — the CLI
+#     emits the actual auth error if the key is unset or rejected)
+#   - `cargo`, `pnpm`, `sqlite3`, `jq`, `curl` on PATH
+#
+# Script flow (matches the design spec § A3):
+#   1. Pre-flight tool + env checks.
+#   2. Build the world binary once (release mode).
+#   3. Boot the world inside a fresh tmpdir with $CLIPTOWN_DB pointed inside.
+#   4. POST /api/startups to allocate a startup + founder/engineer/designer
+#      (also auto-populates `world.avatars` via Cmd::InsertAvatars).
+#   5. Seed a parent task (founder) + child task (engineer) via SQL.
+#   6. Spawn the worker with --real --prompt=<haiku-with-task_done>.
+#   7. Wait for worker exit; verify artifact on disk + DB row + budget.
+#
+# All resources land under $SMOKE_DIR which is removed on exit unless
+# KEEP_TMP=1 is set (useful for debugging a failed run).
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+BUDGET_CAP_USD="${BUDGET_CAP_USD:-0.50}"
+WORLD_BIND="${WORLD_BIND:-127.0.0.1:8080}"
+OPERATOR_TOKEN="${CLIPTOWN_OPERATOR_TOKEN:-dev-token}"
+AGENT_SECRET="${AGENT_SECRET:-dev-secret}"
+TASK_ID="smoke-haiku"
+
+# ── colored status helpers ─────────────────────────────────────────────────
+say()  { printf "\033[1;36m[smoke]\033[0m %s\n" "$*"; }
+warn() { printf "\033[1;33m[smoke]\033[0m %s\n" "$*" >&2; }
+fail() { printf "\033[1;31m[smoke FAIL]\033[0m %s\n" "$*" >&2; exit 1; }
+
+# ── 1. pre-flight ──────────────────────────────────────────────────────────
+# Note: ANTHROPIC_API_KEY presence is NOT validated here. If it's missing or
+# wrong, the `claude` CLI itself emits a clear auth error during the worker
+# step, which is more informative than our preflight could be (it can speak
+# to whether the key is unset vs invalid vs rate-limited).
+say "pre-flight"
+for tool in claude cargo pnpm sqlite3 jq curl; do
+  command -v "$tool" >/dev/null 2>&1 || fail "missing required tool: $tool"
+done
+claude --version >/dev/null 2>&1 || fail "\`claude --version\` failed; CLI not usable"
+
+# ── 2. tmpdir + cleanup trap ───────────────────────────────────────────────
+SMOKE_DIR="$(mktemp -d -t cliptown-smoke.XXXXXX)"
+WORLD_PID=""
+cleanup() {
+  local rc=$?
+  if [[ -n "$WORLD_PID" ]] && kill -0 "$WORLD_PID" 2>/dev/null; then
+    say "stopping world (pid=$WORLD_PID)"
+    kill "$WORLD_PID" 2>/dev/null || true
+    wait "$WORLD_PID" 2>/dev/null || true
+  fi
+  if [[ "${KEEP_TMP:-0}" == "1" ]]; then
+    say "KEEP_TMP=1 → preserving $SMOKE_DIR"
+  else
+    rm -rf "$SMOKE_DIR"
+  fi
+  exit $rc
+}
+trap cleanup EXIT INT TERM
+say "tmpdir: $SMOKE_DIR"
+
+# ── 3. build + boot world ──────────────────────────────────────────────────
+say "building cliptown-world (release)"
+(cd "$REPO_ROOT" && cargo build --release -p cliptown-world >/dev/null 2>&1) \
+  || fail "cargo build failed; rerun manually to see errors"
+
+# world needs cliptown.toml in CWD + writes workspaces/<sid>/ in CWD
+cp "$REPO_ROOT/cliptown.toml" "$SMOKE_DIR/cliptown.toml"
+
+say "booting world at $WORLD_BIND (db=$SMOKE_DIR/cliptown.db)"
+(
+  cd "$SMOKE_DIR"
+  CLIPTOWN_DB="$SMOKE_DIR/cliptown.db" \
+  CLIPTOWN_ADDR="$WORLD_BIND" \
+  "$REPO_ROOT/target/release/cliptown-world" \
+    >"$SMOKE_DIR/world.log" 2>&1 &
+  echo $! >"$SMOKE_DIR/world.pid"
+)
+WORLD_PID="$(cat "$SMOKE_DIR/world.pid")"
+
+# poll /health until ready (max 30s — release-build cold-start is ~1s in practice)
+say "waiting for world /health"
+for i in $(seq 1 60); do
+  if curl -sf "http://$WORLD_BIND/health" >/dev/null 2>&1; then
+    say "world ready after ${i}*0.5s"
+    break
+  fi
+  sleep 0.5
+  if ! kill -0 "$WORLD_PID" 2>/dev/null; then
+    cat "$SMOKE_DIR/world.log" >&2
+    fail "world exited before /health responded"
+  fi
+done
+curl -sf "http://$WORLD_BIND/health" >/dev/null \
+  || fail "world /health never responded; see $SMOKE_DIR/world.log"
+
+# ── 4. create startup via /api/startups ────────────────────────────────────
+say "creating startup via /api/startups"
+CREATE_RESP="$(curl -sf -X POST "http://$WORLD_BIND/api/startups" \
+  -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  -H "content-type: application/json" \
+  -d "{\"name\":\"smoke\",\"goal_text\":\"haiku\",\"budget_cap_usd\":$BUDGET_CAP_USD,\"backends\":{\"founder\":\"claude_code\",\"engineer\":\"claude_code\",\"designer\":\"claude_code\"}}")" \
+  || fail "/api/startups POST failed"
+
+STARTUP_ID="$(jq -r '.id' <<<"$CREATE_RESP")"
+ENGINEER_ID="$(jq -r '.agents[] | select(.role=="engineer") | .id' <<<"$CREATE_RESP")"
+FOUNDER_ID="$(jq -r '.agents[] | select(.role=="founder") | .id' <<<"$CREATE_RESP")"
+[[ -n "$STARTUP_ID" && "$STARTUP_ID" != "null" ]] || fail "could not parse startup_id from: $CREATE_RESP"
+[[ -n "$ENGINEER_ID" && "$ENGINEER_ID" != "null" ]] || fail "could not parse engineer_id"
+say "startup=$STARTUP_ID engineer=$ENGINEER_ID founder=$FOUNDER_ID"
+
+# ── 5. seed parent + engineer task via SQL ─────────────────────────────────
+# mcp_dispatch::handle_task_done's subtask_done fanout expects the engineer's
+# task to have a parent assigned to a manager. Create both rows in one go.
+say "seeding parent task T-parent and engineer task $TASK_ID"
+sqlite3 "$SMOKE_DIR/cliptown.db" <<SQL
+INSERT INTO tasks (id, startup_id, parent_id, title, description, status, assignee_agent_id, created_at, updated_at)
+VALUES ('T-parent', '$STARTUP_ID', NULL, 'parent', 'd', 'in_progress', '$FOUNDER_ID', unixepoch(), unixepoch());
+INSERT INTO tasks (id, startup_id, parent_id, title, description, status, assignee_agent_id, created_at, updated_at)
+VALUES ('$TASK_ID', '$STARTUP_ID', 'T-parent', 'Write a haiku', 'd', 'in_progress', '$ENGINEER_ID', unixepoch(), unixepoch());
+SQL
+
+# pre-create the workspace so claude's Write tool + world's sandbox::resolve
+# agree on the directory layout.
+mkdir -p "$SMOKE_DIR/workspaces/$STARTUP_ID/artifacts"
+
+# ── 6. spawn worker in --real mode ─────────────────────────────────────────
+ARTIFACT_REL="workspaces/$STARTUP_ID/artifacts/$TASK_ID.md"
+ARTIFACT_ABS="$SMOKE_DIR/$ARTIFACT_REL"
+
+# Prompt is intentionally explicit. Constraints we care about for the smoke:
+#   - Output ≤ ~50 tokens (haiku) so a single run stays well under $0.05.
+#   - Engineer MUST hit the canonical artifact path or task_done returns
+#     bad_artifact_path. The path is templated by the script.
+#   - Engineer MUST call task_done so the SQL row transitions.
+PROMPT=$(cat <<EOF
+You are an engineer in a simulated environment. You have ONE task. Follow these steps in order:
+
+1. Use the Write tool to create a file at this EXACT relative path:
+     $ARTIFACT_REL
+   The file content must be a three-line haiku about clipboards. The file does not exist yet.
+
+2. After the file is written, call the MCP tool \`mcp__cliptown__task_done\` with arguments:
+     task_id: "$TASK_ID"
+     artifact_path: "$ARTIFACT_REL"
+
+Do not use any other tools. Do not edit or re-read the file. Stop immediately after task_done returns.
+EOF
+)
+
+say "spawning worker in --real mode"
+WORKER_LOG="$SMOKE_DIR/worker.log"
+set +e
+(
+  cd "$SMOKE_DIR"
+  pnpm --silent -F @cliptown/worker start -- \
+    --world-url "ws://$WORLD_BIND/ws/worker" \
+    --agent-id "$ENGINEER_ID" \
+    --startup-id "$STARTUP_ID" \
+    --secret "$AGENT_SECRET" \
+    --backend claude_code \
+    --workspace "$SMOKE_DIR" \
+    --real \
+    --prompt "$PROMPT" \
+    >"$WORKER_LOG" 2>&1
+)
+WORKER_RC=$?
+set -e
+say "worker exited rc=$WORKER_RC (log: $WORKER_LOG)"
+[[ "$WORKER_RC" -eq 0 ]] || { cat "$WORKER_LOG" >&2; fail "worker exited non-zero"; }
+
+# ── 7. verifications ───────────────────────────────────────────────────────
+say "verify: artifact on disk at $ARTIFACT_REL"
+[[ -s "$ARTIFACT_ABS" ]] || fail "artifact missing or empty: $ARTIFACT_ABS"
+say "artifact bytes=$(wc -c <"$ARTIFACT_ABS")"
+
+say "verify: task row in SQL"
+TASK_ROW="$(sqlite3 -separator '|' "$SMOKE_DIR/cliptown.db" \
+  "SELECT status, artifact_path FROM tasks WHERE id = '$TASK_ID';")"
+TASK_STATUS="${TASK_ROW%%|*}"
+TASK_PATH="${TASK_ROW#*|}"
+say "task status=$TASK_STATUS artifact_path=$TASK_PATH"
+[[ "$TASK_STATUS" == "awaiting_review" ]] \
+  || fail "expected task status=awaiting_review, got '$TASK_STATUS'"
+[[ "$TASK_PATH" == "$ARTIFACT_REL" ]] \
+  || fail "expected artifact_path=$ARTIFACT_REL, got '$TASK_PATH'"
+
+say "verify: budget under cap"
+SPENT="$(sqlite3 "$SMOKE_DIR/cliptown.db" \
+  "SELECT budget_spent_usd FROM startups WHERE id = '$STARTUP_ID';")"
+say "budget_spent_usd=$SPENT (cap=$BUDGET_CAP_USD)"
+# spent may be 0.0 if the worker never reported (Phase 0 doesn't always wire
+# ReportBudget through claude-code hooks). Cap-overshoot is what we care about.
+awk -v s="$SPENT" -v c="$BUDGET_CAP_USD" 'BEGIN { exit !(s+0 <= c+0) }' \
+  || fail "spend $SPENT exceeded cap $BUDGET_CAP_USD"
+
+say "PASS — A3 smoke complete"
