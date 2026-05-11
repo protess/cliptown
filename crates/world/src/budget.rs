@@ -32,6 +32,13 @@ const PAUSE_REASON_BUDGET: &str = "budget_exhausted";
 /// model_id → ($/Mtok input, $/Mtok output). Phase 0 placeholders sourced from
 /// anthropic.com/pricing & openai.com/api/pricing as of 2024-vintage data.
 /// Re-verify against current vendor pricing before any non-zero-cost run.
+///
+/// `gpt-5-chatgpt` is a cliptown-owned identifier the codex adapter emits
+/// when the user is authenticated via a ChatGPT account (the CLI rejects
+/// any explicit `--model` / `-c model=...` override in that mode, so the
+/// upstream name isn't pinnable from outside). Treat it as "whatever
+/// model the user's ChatGPT subscription currently routes to" — update
+/// the rates when OpenAI rotates the underlying model significantly.
 pub fn price_per_mtok(model_id: &str) -> Option<(f64, f64)> {
     match model_id {
         // Anthropic
@@ -41,6 +48,7 @@ pub fn price_per_mtok(model_id: &str) -> Option<(f64, f64)> {
         // OpenAI (Codex)
         "gpt-4o" | "gpt-4o-2024-08-06" => Some((2.50, 10.00)),
         "gpt-4o-mini" => Some((0.15, 0.60)),
+        "gpt-5-chatgpt" => Some((1.25, 10.00)),
         // OpenCode default
         "opencode-default" => Some((1.00, 5.00)),
         _ => None,

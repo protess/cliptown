@@ -46,11 +46,36 @@ const CAPS: AdapterCapabilities = {
 
 const TOKEN_ENV_VAR = "CLIPTOWN_MCP_TOKEN";
 
+/**
+ * Tag for the `model_id` field of the worker's `report_budget` frame.
+ *
+ * codex CLI, when authenticated via a ChatGPT account (the common case for
+ * developer machines), routes requests to whatever model the subscription
+ * provides. The CLI rejects any explicit `--model` / `-c model=...` override
+ * with `"The '<name>' model is not supported when using Codex with a
+ * ChatGPT account."` — so we cannot pin a stable upstream model name. The
+ * JSONL stream also does not surface the resolved model.
+ *
+ * We tag with a stable cliptown-owned identifier (`gpt-5-chatgpt`) instead
+ * of letting the upstream name drift. The world's `price_per_mtok` table
+ * has an entry for this identifier so the budget ladder fills in; if
+ * OpenAI rotates the underlying model significantly we update the table
+ * entry's per-Mtok rates without touching the adapter.
+ *
+ * Override via `CODEX_MODEL_ID` env when an operator runs codex against
+ * a non-ChatGPT auth path (API key, OSS provider, etc.) where they know
+ * the resolved model. The override flows straight to the world unchanged
+ * so the operator can hand-edit the pricing table for that name.
+ */
+const MODEL_ID_ENV = "CODEX_MODEL_ID";
+const DEFAULT_MODEL_ID = "gpt-5-chatgpt";
+
 export const codexAdapter: BackendAdapter = {
   id: "codex",
   capabilities: CAPS,
   async spawn(opts: SpawnOpts): Promise<SpawnResult> {
     const onHook = opts.onHook ?? (() => { /* noop */ });
+    const modelId = opts.env?.[MODEL_ID_ENV] ?? process.env[MODEL_ID_ENV] ?? DEFAULT_MODEL_ID;
 
     let bridge: HookBridge | null = null;
     // Codex doesn't need a config file — the adapter injects all config via
@@ -141,7 +166,7 @@ export const codexAdapter: BackendAdapter = {
           _bridge.close(),
           rm(_cfgDir, { recursive: true, force: true }),
         ]);
-        const usage = isFixture ? undefined : parseUsage(stdoutBuf);
+        const usage = isFixture ? undefined : parseUsage(stdoutBuf, modelId);
         return { ...r, usage };
       },
       kill(signal: NodeJS.Signals = "SIGTERM") {
@@ -158,12 +183,10 @@ export const codexAdapter: BackendAdapter = {
  * `{input_tokens, cached_input_tokens, output_tokens}` per turn; we sum
  * input + cached to feed the world's tokens-billed accounting (matches how
  * the claude-code adapter treats cache reads). `cost_usd` is intentionally
- * undefined: codex doesn't report a dollar figure, so the world falls back
- * to its `price_per_mtok` table keyed on `model_id`. The CLI also doesn't
- * surface the resolved model in the stream — we tag with `codex-default`
- * so the pricing-table miss is loud but doesn't crash the report flow.
+ * undefined — codex doesn't report a dollar figure, so the world falls
+ * back to its `price_per_mtok` table keyed on the `modelId` argument.
  */
-function parseUsage(buf: string): UsageReport | undefined {
+function parseUsage(buf: string, modelId: string): UsageReport | undefined {
   let in_tokens = 0;
   let out_tokens = 0;
   let saw = false;
@@ -182,7 +205,7 @@ function parseUsage(buf: string): UsageReport | undefined {
     }
   }
   if (!saw) return undefined;
-  return { in_tokens, out_tokens, model_id: "codex-default" };
+  return { in_tokens, out_tokens, model_id: modelId };
 }
 
 export type { HookEvent };
