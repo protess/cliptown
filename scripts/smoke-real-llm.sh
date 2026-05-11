@@ -84,6 +84,7 @@ say "booting world at $WORLD_BIND (db=$SMOKE_DIR/cliptown.db)"
   cd "$SMOKE_DIR"
   CLIPTOWN_DB="$SMOKE_DIR/cliptown.db" \
   CLIPTOWN_ADDR="$WORLD_BIND" \
+  CLIPTOWN_TEST_FIXED_AGENT_SECRET="$AGENT_SECRET" \
   "$REPO_ROOT/target/release/cliptown-world" \
     >"$SMOKE_DIR/world.log" 2>&1 &
   echo $! >"$SMOKE_DIR/world.pid"
@@ -145,6 +146,11 @@ ARTIFACT_ABS="$SMOKE_DIR/$ARTIFACT_REL"
 #   - Engineer MUST hit the canonical artifact path or task_done returns
 #     bad_artifact_path. The path is templated by the script.
 #   - Engineer MUST call task_done so the SQL row transitions.
+# Avoid backticks in the prompt — when this string transits any layer that
+# re-evaluates as a shell command line, backtick-quoted segments get
+# command-substituted ("mcp__cliptown__task_done: command not found"). Use
+# single quotes for markdown-style emphasis on the tool name; Claude reads
+# either form fine.
 PROMPT=$(cat <<EOF
 You are an engineer in a simulated environment. You have ONE task. Follow these steps in order:
 
@@ -152,7 +158,7 @@ You are an engineer in a simulated environment. You have ONE task. Follow these 
      $ARTIFACT_REL
    The file content must be a three-line haiku about clipboards. The file does not exist yet.
 
-2. After the file is written, call the MCP tool \`mcp__cliptown__task_done\` with arguments:
+2. After the file is written, call the MCP tool named 'mcp__cliptown__task_done' with arguments:
      task_id: "$TASK_ID"
      artifact_path: "$ARTIFACT_REL"
 
@@ -163,9 +169,23 @@ EOF
 say "spawning worker in --real mode"
 WORKER_LOG="$SMOKE_DIR/worker.log"
 set +e
+# Why we bypass `pnpm -F @cliptown/worker start --` and call tsx directly:
+#   1. pnpm needs to run from inside the workspace to find @cliptown/worker
+#      via pnpm-workspace.yaml — running from SMOKE_DIR silently no-ops
+#      with "No projects found in <cwd>" and rc=0.
+#   2. `pnpm <script> -- <args>` re-shells the script's command line, so any
+#      backticks inside our prompt arg get command-substituted.
+#   3. pnpm forwards a literal "--" as a positional arg to tsx, which then
+#      reaches the worker's parseArgs and trips ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL.
+# `pnpm exec tsx <path> -- <args>` sidesteps all three: the tsx binary is
+# resolved via the workspace's node_modules and args go directly as argv
+# without further shell evaluation.
 (
-  cd "$SMOKE_DIR"
-  pnpm --silent -F @cliptown/worker start -- \
+  cd "$REPO_ROOT"
+  # `-F @cliptown/worker exec` runs the tool from the worker package's own
+  # node_modules (where tsx is a devDep). Plain `pnpm exec` looks in the
+  # workspace root, where tsx isn't installed.
+  pnpm -F @cliptown/worker exec tsx ./src/main.ts \
     --world-url "ws://$WORLD_BIND/ws/worker" \
     --agent-id "$ENGINEER_ID" \
     --startup-id "$STARTUP_ID" \
