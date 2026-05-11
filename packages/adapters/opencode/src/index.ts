@@ -176,11 +176,17 @@ export const opencodeAdapter: BackendAdapter = {
             kind: "session_error",
             tool: "",
             payload: { reason: "sse_error", message: (e as Error).message },
-            seq: 0,
+            seq: ++mapState.seq,
             ts_ms: Date.now(),
           });
-          resolveIdle();
         }
+      } finally {
+        // Always resolve idle so wait() never deadlocks. Whether SSE ended
+        // via session.idle, an abort during kill(), an unexpected error, or
+        // a server crash, the wait()-blocks-on-idle promise must complete.
+        // resolveIdle is idempotent (Promise.resolve always is) so calling
+        // it multiple times across paths is safe.
+        resolveIdle();
       }
     })();
 
