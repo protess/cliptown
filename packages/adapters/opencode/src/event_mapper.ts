@@ -1,4 +1,4 @@
-import type { HookEvent } from "@cliptown/adapter-core";
+import type { HookEvent, UsageReport } from "@cliptown/adapter-core";
 
 /**
  * Maps opencode `/event` SSE events to HookEvents. The interesting
@@ -8,11 +8,19 @@ import type { HookEvent } from "@cliptown/adapter-core";
  * and one post_tool (on first terminal status). step-finish parts feed
  * the UsageReport accumulator.
  *
+ * Wire format: this mapper consumes events from opencode's HTTP SSE
+ * `/event` stream (the outer envelope is `{type, properties}` and the
+ * tool/step parts live under `properties.part`). It does NOT consume
+ * `opencode run --format json` stdout, which uses a different shape
+ * (outer `{type: "step_finish" | "tool_use", part: {...}}`). The two
+ * formats share inner `part.type` values (`step-finish`, `tool`, etc.)
+ * but differ in envelope.
+ *
  * Pure module — no I/O. State lives in MapState so a single mapper
  * instance can span an opencode session.
  */
 
-export interface MapUsageAccum {
+interface MapUsageAccum {
   in_tokens: number;
   out_tokens: number;
   cost_usd: number;
@@ -160,4 +168,23 @@ export function mapEvent(evt: SseEvent, state: MapState): MapResult {
   }
 
   return { hooks };
+}
+
+/**
+ * Convert the mapper's running usage accumulator into a UsageReport.
+ * Returns undefined when no step-finish frame was observed (the agent
+ * never billed tokens). Mirrors `event_parser.toUsageReport` from the
+ * codex adapter so callers don't have to reach into state.usage.
+ *
+ * opencode reports a USD cost figure directly, so cost_usd is always
+ * populated (it may be 0 for free-tier plans).
+ */
+export function toUsageReport(state: MapState, modelId: string): UsageReport | undefined {
+  if (!state.usage.saw) return undefined;
+  return {
+    in_tokens: state.usage.in_tokens,
+    out_tokens: state.usage.out_tokens,
+    cost_usd: state.usage.cost_usd,
+    model_id: modelId,
+  };
 }

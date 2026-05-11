@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { emptyMapState, mapEvent, type MapState } from "../src/event_mapper.js";
+import { emptyMapState, mapEvent, toUsageReport, type MapState } from "../src/event_mapper.js";
 
 function partTool(callID: string, tool: string, status: string, input: unknown = null, output: unknown = null) {
   return {
@@ -91,7 +91,17 @@ describe("opencode event_mapper", () => {
     });
     mapEvent(sf(100, 20, 0.01), state);
     mapEvent(sf(150, 30, 0.02), state);
-    expect(state.usage).toEqual({ in_tokens: 250, out_tokens: 50, cost_usd: 0.03, saw: true });
+    expect(toUsageReport(state, "opencode-test")).toEqual({
+      in_tokens: 250,
+      out_tokens: 50,
+      cost_usd: 0.03,
+      model_id: "opencode-test",
+    });
+  });
+
+  it("toUsageReport returns undefined when no step-finish was observed", () => {
+    const state = emptyMapState();
+    expect(toUsageReport(state, "any-model")).toBeUndefined();
   });
 
   it("ignores irrelevant event types without crashing", () => {
