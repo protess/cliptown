@@ -161,6 +161,11 @@ async function bootWorld(ctx: RunCtx): Promise<void> {
       // without the override the world's auto-generated secret would reject
       // our hello with auth_error. See `crates/world/src/api_startups.rs`.
       CLIPTOWN_TEST_FIXED_AGENT_SECRET: ctx.agentSecret,
+      // Skip the world's auto-spawn of worker children. The smoke spawns
+      // its single worker explicitly below; letting the supervisor try with
+      // the relative `packages/worker/bin/worker` path from this tmpdir
+      // just emits a few rounds of `spawn_agent failed` warnings.
+      CLIPTOWN_TEST_DISABLE_SUPERVISOR: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

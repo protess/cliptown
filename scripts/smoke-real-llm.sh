@@ -85,6 +85,7 @@ say "booting world at $WORLD_BIND (db=$SMOKE_DIR/cliptown.db)"
   CLIPTOWN_DB="$SMOKE_DIR/cliptown.db" \
   CLIPTOWN_ADDR="$WORLD_BIND" \
   CLIPTOWN_TEST_FIXED_AGENT_SECRET="$AGENT_SECRET" \
+  CLIPTOWN_TEST_DISABLE_SUPERVISOR=1 \
   "$REPO_ROOT/target/release/cliptown-world" \
     >"$SMOKE_DIR/world.log" 2>&1 &
   echo $! >"$SMOKE_DIR/world.pid"
