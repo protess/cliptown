@@ -60,6 +60,7 @@ function main(): void {
     args: process.argv.slice(2),
     options: {
       "print":             { type: "string" },
+      "prompt":            { type: "string" },   // codex/opencode fixture path
       "allowedTools":      { type: "string" },
       "mcp-config":        { type: "string" },
       "strict-mcp-config": { type: "boolean", default: false },
@@ -70,8 +71,10 @@ function main(): void {
 
   const settingsPath = process.env.CLAUDE_CODE_SETTINGS;
   if (!settingsPath) {
-    process.stderr.write(`[fixture-cli] CLAUDE_CODE_SETTINGS not set\n`);
-    process.exit(2);
+    // codex/opencode adapters spawn fixture-cli without CLAUDE_CODE_SETTINGS;
+    // they synthesize their own hook sequence. Just exit 0.
+    process.stdout.write(`[fixture-cli] no CLAUDE_CODE_SETTINGS — codex/opencode fixture path; exiting 0\n`);
+    process.exit(0);
   }
   const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as ClaudeSettings;
 
