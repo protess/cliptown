@@ -11,8 +11,9 @@ describe("BackendAdapter contract", () => {
         block_on_stop: true,
       },
       async spawn(opts: SpawnOpts): Promise<SpawnResult> {
-        // SpawnOpts.mcp_socket_path is mandatory — TS would reject if missing.
-        const _path: string = opts.mcp_socket_path;
+        // SpawnOpts.mcp_world_url + mcp_token are mandatory — TS rejects if missing.
+        const _url: string = opts.mcp_world_url;
+        const _tok: string = opts.mcp_token;
         return {
           pid: 1234,
           wait: async () => ({ exit_code: 0 }),
@@ -26,7 +27,8 @@ describe("BackendAdapter contract", () => {
     const r = await stub.spawn({
       prompt: "hi",
       cwd: "/tmp",
-      mcp_socket_path: "/tmp/sock",
+      mcp_world_url: "http://127.0.0.1:8080",
+      mcp_token: "e1:dev-secret",
     });
     expect(r.pid).toBe(1234);
     const exit = await r.wait();
@@ -44,13 +46,15 @@ describe("BackendAdapter contract", () => {
     expect(e.kind).toBe("pre_tool");
   });
 
-  it("SpawnOpts.mcp_socket_path is required (compile-time check via assignment)", () => {
-    // If this line compiles, the field is required (TS rejects missing required fields).
+  it("SpawnOpts.mcp_world_url + mcp_token are required (compile-time check)", () => {
+    // If this line compiles, the fields are required (TS rejects missing).
     const opts: SpawnOpts = {
       prompt: "x",
       cwd: "/tmp",
-      mcp_socket_path: "/tmp/sock",
+      mcp_world_url: "http://127.0.0.1:8080",
+      mcp_token: "e1:dev-secret",
     };
-    expect(opts.mcp_socket_path).toBe("/tmp/sock");
+    expect(opts.mcp_world_url).toBe("http://127.0.0.1:8080");
+    expect(opts.mcp_token).toBe("e1:dev-secret");
   });
 });

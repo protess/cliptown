@@ -43,7 +43,8 @@ const noSleep = async (_ms: number) => { /* skip */ };
 const baseSpawnOpts: SpawnOpts = {
   prompt: "x",
   cwd: "/tmp",
-  mcp_socket_path: "/tmp/x.sock",
+  mcp_world_url: "http://127.0.0.1:0",
+  mcp_token: "e1:dev-secret",
 };
 
 describe("Supervisor — clean exit", () => {

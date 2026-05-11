@@ -24,7 +24,8 @@ describe("M3.3 adapter contract — claudeCodeAdapter end-to-end via fixture CLI
     const spawned = await claudeCodeAdapter.spawn({
       prompt: "fixture run",
       cwd: tmpdir(),
-      mcp_socket_path: "/tmp/cliptown-test-fixture.sock",
+      mcp_world_url: "http://127.0.0.1:0",
+      mcp_token: "e1:dev-secret",
       bin: FIXTURE_BIN,
       onHook: (e) => events.push(e),
     });
@@ -67,7 +68,8 @@ describe("M3.3 adapter contract — claudeCodeAdapter end-to-end via fixture CLI
     const spawned = await claudeCodeAdapter.spawn({
       prompt: "mcp config check",
       cwd: tmpdir(),
-      mcp_socket_path: "/tmp/cliptown-mcp-cfg.sock",
+      mcp_world_url: "http://127.0.0.1:0",
+      mcp_token: "e1:dev-secret",
       bin: FIXTURE_BIN,
       onLog: (stream, line) => { if (stream === "stderr") stderr += line; },
     });

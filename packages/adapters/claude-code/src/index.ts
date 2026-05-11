@@ -10,7 +10,8 @@ import {
 
 /**
  * Claude Code adapter. Spawns the `claude` CLI (or override) configured to:
- *   - call MCP tools via the worker's UNIX socket
+ *   - call MCP tools by POSTing to the world's `/mcp` HTTP endpoint
+ *     (M9.10 A1' — MCP-at-the-world)
  *   - POST hook events to a per-spawn HTTP bridge
  * The bridge normalizes hook payloads to `HookEvent` and forwards them via
  * `opts.onHook`.
@@ -44,21 +45,25 @@ function settingsJson(port: number): object {
   };
 }
 
-function mcpJson(socketPath: string): object {
+function mcpJson(worldUrl: string, token: string): object {
+  // M9.10 A1': MCP lives at the world over HTTP, not at a per-worker Unix
+  // socket. The CLI POSTs JSON-RPC `tools/call` directly to the world's
+  // `/mcp` route with `Authorization: Bearer <agent_id>:<secret>`. See
+  // `crates/world/src/mcp_http.rs`.
   return {
     mcpServers: {
       cliptown: {
-        type: "stdio",
-        command: "nc",
-        args: ["-U", socketPath],
+        type: "http",
+        url: `${worldUrl}/mcp`,
+        headers: { Authorization: `Bearer ${token}` },
       },
     },
   };
 }
 
-async function buildConfig(port: number, mcpSocketPath: string): Promise<{ cfgDir: string; cleanup: () => Promise<void> }> {
+async function buildConfig(port: number, worldUrl: string, token: string): Promise<{ cfgDir: string; cleanup: () => Promise<void> }> {
   const cfgDir = await mkdtemp(join(tmpdir(), "ct-cc-"));
-  await writeFile(join(cfgDir, "mcp.json"), JSON.stringify(mcpJson(mcpSocketPath), null, 2));
+  await writeFile(join(cfgDir, "mcp.json"), JSON.stringify(mcpJson(worldUrl, token), null, 2));
   await writeFile(join(cfgDir, "settings.json"), JSON.stringify(settingsJson(port), null, 2));
   return {
     cfgDir,
@@ -79,7 +84,7 @@ export const claudeCodeAdapter: BackendAdapter = {
 
     try {
       bridge = await startHookBridge(onHook);
-      cfg = await buildConfig(bridge.port, opts.mcp_socket_path);
+      cfg = await buildConfig(bridge.port, opts.mcp_world_url, opts.mcp_token);
     } catch (e) {
       if (bridge) await bridge.close();
       if (cfg) await cfg.cleanup();

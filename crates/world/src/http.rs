@@ -34,6 +34,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/ws/console", get(ws_console))
         .route("/ws/worker", get(ws_worker))
+        // M9.10 A1' — MCP-over-HTTP at the world. See `mcp_http.rs` for the
+        // Bearer auth + JSON-RPC envelope + dispatch routing.
+        .route("/mcp", post(crate::mcp_http::handle_request))
         .with_state(Arc::new(state))
 }
 

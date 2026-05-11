@@ -2,9 +2,11 @@
  * BackendAdapter contract: each LLM CLI (Claude Code, codex, opencode) implements
  * this so the worker can spawn it uniformly and receive normalized hook events.
  *
- * Phase 0 invariants (from spec §6):
- *   - mcp_socket_path is mandatory: the adapter must wire the CLI's MCP config
- *     to point at the worker's MCP socket so tool_use → MCP calls round-trip.
+ * Phase 1 invariants (M9.10 A1' — MCP-at-the-world):
+ *   - `mcp_world_url` + `mcp_token` are mandatory: the adapter wires the CLI's
+ *     MCP config to POST tool calls directly to the world's `/mcp` HTTP
+ *     endpoint with the bearer token. There is no per-worker MCP server; the
+ *     worker is a process supervisor.
  *   - Hooks (pre_tool, post_tool, session_stop, session_error) MUST be normalized
  *     across adapters so the worker doesn't need per-adapter branching.
  */
@@ -28,10 +30,17 @@ export interface SpawnOpts {
   /** Environment variables — merged onto inherited env. */
   env?: NodeJS.ProcessEnv;
   /**
-   * Path to the worker's MCP UNIX socket. The adapter MUST configure the CLI
-   * to connect to this socket for `mcp__cliptown__*` tool calls.
+   * Base HTTP URL of the world's MCP endpoint (e.g. `http://127.0.0.1:8080`).
+   * The adapter MUST configure the CLI to POST `mcp__cliptown__*` tool calls
+   * to `<mcp_world_url>/mcp` with the bearer token below.
    */
-  mcp_socket_path: string;
+  mcp_world_url: string;
+  /**
+   * Bearer token for the world's MCP endpoint. Format: `<agent_id>:<secret>`,
+   * matching `crates/world/src/mcp_http.rs::authenticate`. The CLI sends
+   * `Authorization: Bearer <token>` on every tool call.
+   */
+  mcp_token: string;
   /** Optional override of the CLI binary path; useful in tests. */
   bin?: string;
   /** Optional callback for normalized hook events. */
