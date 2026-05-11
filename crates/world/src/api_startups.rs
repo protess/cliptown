@@ -231,8 +231,16 @@ pub async fn create_startup(
     let world_url = std::env::var("CLIPTOWN_WORLD_WS_URL")
         .unwrap_or_else(|_| "ws://127.0.0.1:8080/ws/worker".to_string());
 
+    // Test/dev override: when `CLIPTOWN_TEST_FIXED_AGENT_SECRET` is set, every
+    // agent the API creates uses that value instead of a fresh UUID. Lets the
+    // M9.10 real-LLM smoke (which spawns its own worker outside the supervisor)
+    // know which secret to authenticate with. Unset in production → per-agent
+    // random secrets, same as before.
+    let fixed_test_secret = std::env::var("CLIPTOWN_TEST_FIXED_AGENT_SECRET").ok();
     for (_role, aid, backend, _mgr) in &agents {
-        let secret = format!("ct-{}", Uuid::new_v4().simple());
+        let secret = fixed_test_secret
+            .clone()
+            .unwrap_or_else(|| format!("ct-{}", Uuid::new_v4().simple()));
         // Worker children inherit this env var; auth.rs reads
         // `CLIPTOWN_AGENT_SECRET_<id>` to validate the hello.
         std::env::set_var(format!("CLIPTOWN_AGENT_SECRET_{}", aid), &secret);

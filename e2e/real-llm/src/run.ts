@@ -156,6 +156,11 @@ async function bootWorld(ctx: RunCtx): Promise<void> {
       ...process.env,
       CLIPTOWN_DB: join(ctx.smokeDir, "cliptown.db"),
       CLIPTOWN_ADDR: ctx.worldBind,
+      // Tell /api/startups to use our agentSecret instead of generating a
+      // random one. The worker we spawn below authenticates with this value;
+      // without the override the world's auto-generated secret would reject
+      // our hello with auth_error. See `crates/world/src/api_startups.rs`.
+      CLIPTOWN_TEST_FIXED_AGENT_SECRET: ctx.agentSecret,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -246,7 +251,11 @@ function buildPrompt(ctx: RunCtx, startupId: string): string {
     `     ${artifactRel}`,
     "   The file content must be a three-line haiku about clipboards. The file does not exist yet.",
     "",
-    "2. After the file is written, call the MCP tool `mcp__cliptown__task_done` with arguments:",
+    // Single quotes around the tool name (not backticks): when this string
+    // transits any layer that re-evaluates as a shell command line, backtick
+    // segments get command-substituted. Single quotes are markdown-equivalent
+    // emphasis as far as the model is concerned.
+    "2. After the file is written, call the MCP tool named 'mcp__cliptown__task_done' with arguments:",
     `     task_id: "${ctx.taskId}"`,
     `     artifact_path: "${artifactRel}"`,
     "",
@@ -269,15 +278,26 @@ async function spawnWorker(
   // verification later wants to inspect what the engineer was asked to do.
   await writeFile(join(ctx.smokeDir, "prompt.txt"), prompt, "utf-8");
 
+  // Three reasons we bypass `pnpm <pkg> start --` and call tsx directly:
+  //   1. pnpm needs to run from inside the workspace to find @cliptown/worker
+  //      via pnpm-workspace.yaml; running from smokeDir silently no-ops with
+  //      "No projects found in <cwd>" and rc=0.
+  //   2. pnpm forwards a literal "--" as a positional arg to the script,
+  //      which then trips the worker's `allowPositionals: false` parseArgs.
+  //   3. pnpm re-shells the script command, so backticks inside the prompt
+  //      arg get command-substituted.
+  // `pnpm -F @cliptown/worker exec tsx ./src/main.ts <args>` resolves tsx
+  // from the worker's own node_modules and passes argv directly without
+  // further shell evaluation.
   await run(
     "spawn_worker",
     "pnpm",
     [
-      "--silent",
       "-F",
       "@cliptown/worker",
-      "start",
-      "--",
+      "exec",
+      "tsx",
+      "./src/main.ts",
       "--world-url",
       `ws://${ctx.worldBind}/ws/worker`,
       "--agent-id",
@@ -294,7 +314,7 @@ async function spawnWorker(
       "--prompt",
       prompt,
     ],
-    { cwd: ctx.smokeDir },
+    { cwd: ctx.repoRoot },
   );
 }
 
