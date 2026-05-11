@@ -11,6 +11,7 @@ pub mod emit;
 pub mod http;
 pub mod loop_;
 pub mod mcp_dispatch;
+pub mod mcp_http;
 pub mod move_sys;
 pub mod path;
 pub mod permissions;
