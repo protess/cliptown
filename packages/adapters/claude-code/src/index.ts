@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   startHookBridge,
   type AdapterCapabilities, type BackendAdapter, type HookBridge,
-  type HookEvent, type SpawnOpts, type SpawnResult,
+  type HookEvent, type SpawnOpts, type SpawnResult, type UsageReport,
 } from "@cliptown/adapter-core";
 
 /**
@@ -92,25 +92,49 @@ export const claudeCodeAdapter: BackendAdapter = {
     }
 
     const bin = opts.bin ?? process.env.CLIPTOWN_FIXTURE_CLI ?? "claude";
+    // Skip `--output-format json` when running against the fixture CLI in
+    // contract tests — fixture-cli doesn't speak that flag and emits its own
+    // synthetic hook sequence instead. Detected via CLIPTOWN_FIXTURE_CLI or
+    // an explicit opts.bin override.
+    const useJsonOutput = !opts.bin && !process.env.CLIPTOWN_FIXTURE_CLI;
     const env = {
       ...process.env,
       ...opts.env,
       // Hook scripts/settings live in cfgDir.
       CLAUDE_CODE_SETTINGS: join(cfg.cfgDir, "settings.json"),
     };
+    const args = [
+      "--print", opts.prompt,
+      "--allowedTools", ALLOWED_TOOLS,
+      "--mcp-config", join(cfg.cfgDir, "mcp.json"),
+      "--strict-mcp-config",
+    ];
+    if (useJsonOutput) {
+      // claude --print --output-format json emits a single JSON object on
+      // stdout containing `usage` + `total_cost_usd` + `modelUsage`. We parse
+      // it at exit to populate UsageReport, which the worker then forwards
+      // to the world as a `report_budget` WS frame (M9.10 budget telemetry).
+      args.push("--output-format", "json");
+    }
     const child = nodeSpawn(
       bin,
-      [
-        "--print", opts.prompt,
-        "--allowedTools", ALLOWED_TOOLS,
-        "--mcp-config", join(cfg.cfgDir, "mcp.json"),
-        "--strict-mcp-config",
-      ],
-      { cwd: opts.cwd, env, stdio: ["pipe", "pipe", "pipe"] },
+      args,
+      // stdin=ignore (effectively /dev/null) silences claude's "no stdin data
+      // received in 3s" warning that fires when stdin is an open but unwritten
+      // pipe. Operator log stays clean; CLI behavior unchanged because we
+      // never piped anything in.
+      { cwd: opts.cwd, env, stdio: ["ignore", "pipe", "pipe"] },
     );
 
+    // Buffer stdout so we can parse the JSON at exit, while still teeing
+    // chunks to onLog for live operator visibility. stderr is tee-only.
+    let stdoutBuf = "";
+    child.stdout?.on("data", (b: Buffer) => {
+      const s = b.toString("utf-8");
+      stdoutBuf += s;
+      opts.onLog?.("stdout", s);
+    });
     if (opts.onLog) {
-      child.stdout?.on("data", (b: Buffer) => opts.onLog?.("stdout", b.toString("utf-8")));
       child.stderr?.on("data", (b: Buffer) => opts.onLog?.("stderr", b.toString("utf-8")));
     }
 
@@ -129,7 +153,8 @@ export const claudeCodeAdapter: BackendAdapter = {
       async wait() {
         const r = await exit;
         await Promise.allSettled([_bridge.close(), _cfg.cleanup()]);
-        return r;
+        const usage = useJsonOutput ? parseUsage(stdoutBuf) : undefined;
+        return { ...r, usage };
       },
       kill(signal: NodeJS.Signals = "SIGTERM") {
         try { child.kill(signal); } catch { /* noop */ }
@@ -139,6 +164,43 @@ export const claudeCodeAdapter: BackendAdapter = {
     return result;
   },
 };
+
+/**
+ * Parse the `claude --print --output-format json` result envelope. Returns
+ * undefined if the buffer isn't valid JSON or doesn't carry the expected
+ * `usage` + `total_cost_usd` shape — defensive because the CLI may evolve
+ * the schema or refuse to emit JSON on error paths.
+ *
+ * `in_tokens` sums input_tokens + cache_creation + cache_read so the world's
+ * budget ladder sees all tokens the model billed for, not just net-new
+ * prompt bytes. `model_id` comes from `modelUsage`'s sole key (claude-code
+ * runs one model per --print invocation).
+ */
+function parseUsage(buf: string): UsageReport | undefined {
+  try {
+    const j = JSON.parse(buf) as {
+      total_cost_usd?: number;
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_creation_input_tokens?: number;
+        cache_read_input_tokens?: number;
+      };
+      modelUsage?: Record<string, unknown>;
+    };
+    if (!j.usage || typeof j.total_cost_usd !== "number") return undefined;
+    const u = j.usage;
+    const in_tokens =
+      (u.input_tokens ?? 0) +
+      (u.cache_creation_input_tokens ?? 0) +
+      (u.cache_read_input_tokens ?? 0);
+    const out_tokens = u.output_tokens ?? 0;
+    const model_id = Object.keys(j.modelUsage ?? {})[0] ?? "claude-unknown";
+    return { in_tokens, out_tokens, cost_usd: j.total_cost_usd, model_id };
+  } catch {
+    return undefined;
+  }
+}
 
 // Re-export for convenience.
 export type { HookEvent };

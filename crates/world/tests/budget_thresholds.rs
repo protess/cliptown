@@ -107,6 +107,7 @@ async fn apply_report_increments_spend_and_logs_event() {
         "claude-3-5-sonnet",
         100_000,
         100_000,
+        None,
     )
     .await
     .unwrap();
@@ -128,12 +129,45 @@ async fn apply_report_increments_spend_and_logs_event() {
     assert!((stored.0 - 1.80).abs() < 1e-9);
 }
 
+/// When the worker supplies an authoritative `cost_usd`, apply_report uses it
+/// directly — even for a model_id missing from the hardcoded pricing table,
+/// where the table-based path would silently bill $0. Regression guard for
+/// the M9.10 budget-telemetry wiring (claude-code's `total_cost_usd`).
+#[tokio::test]
+async fn cost_override_wins_over_pricing_table() {
+    let (_w, pool, _tmp) = fixture().await;
+    let (spent, _cap, threshold) = budget::apply_report(
+        &pool,
+        "s1",
+        "a1",
+        None,
+        "model-not-in-table", // table-based path would compute $0 + warn
+        1_000,
+        1_000,
+        Some(0.42),
+    )
+    .await
+    .unwrap();
+    assert!((spent - 0.42).abs() < 1e-9, "expected $0.42 from override, got {}", spent);
+    assert!(threshold.is_none()); // 4.2% of $10 cap
+
+    // Negative / non-finite overrides must fall back to the table path so a
+    // malformed worker frame can't poison the spend ledger with negative
+    // numbers. The fallback for an unknown model id is $0.
+    let (spent2, _, _) = budget::apply_report(
+        &pool, "s1", "a1", None, "model-not-in-table", 1_000, 1_000, Some(-1.0),
+    )
+    .await
+    .unwrap();
+    assert!((spent2 - spent).abs() < 1e-9, "negative override must not increment spend");
+}
+
 #[tokio::test]
 async fn cross_80_threshold() {
     let (_w, pool, _tmp) = fixture().await;
     // Sonnet input is $3/Mtok → 2.7M input tokens = $8.10 → 81%.
     let (_, _, t) = budget::apply_report(
-        &pool, "s1", "a1", None, "claude-3-5-sonnet", 2_700_000, 0,
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 2_700_000, 0, None,
     )
     .await
     .unwrap();
@@ -145,14 +179,14 @@ async fn cross_95_threshold() {
     let (_w, pool, _tmp) = fixture().await;
     // First push to 80% — trips Warn80.
     let (_, _, t1) = budget::apply_report(
-        &pool, "s1", "a1", None, "claude-3-5-sonnet", 2_700_000, 0,
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 2_700_000, 0, None,
     )
     .await
     .unwrap();
     assert_eq!(t1, Some(budget::Threshold::Warn80));
     // Then to 96% (3.2M input → $9.60).
     let (_, _, t2) = budget::apply_report(
-        &pool, "s1", "a1", None, "claude-3-5-sonnet", 500_000, 0,
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 500_000, 0, None,
     )
     .await
     .unwrap();
@@ -167,12 +201,12 @@ async fn cross_100_triggers_pause_all() {
     out_bus.insert("a1".to_string(), tx);
 
     // Push toward ~98%.
-    budget::apply_report(&pool, "s1", "a1", None, "claude-3-5-sonnet", 3_300_000, 0)
+    budget::apply_report(&pool, "s1", "a1", None, "claude-3-5-sonnet", 3_300_000, 0, None)
         .await
         .unwrap();
     // Then push past 100%.
     let (spent, _, t) = budget::apply_report(
-        &pool, "s1", "a1", None, "claude-3-5-sonnet", 200_000, 0,
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 200_000, 0, None,
     )
     .await
     .unwrap();
@@ -287,7 +321,7 @@ async fn raising_cap_prevents_re_trip() {
     // Push past 100%, then raise the cap. A subsequent small report should
     // NOT re-trip Pause100 because `newly_crossed` only fires on transitions.
     let (_w, pool, _tmp) = fixture().await;
-    let (_, _, t) = budget::apply_report(&pool, "s1", "a1", None, "claude-3-5-sonnet", 4_000_000, 0)
+    let (_, _, t) = budget::apply_report(&pool, "s1", "a1", None, "claude-3-5-sonnet", 4_000_000, 0, None)
         .await
         .unwrap();
     assert_eq!(t, Some(budget::Threshold::Pause100));
@@ -300,7 +334,7 @@ async fn raising_cap_prevents_re_trip() {
 
     // Small additional report at the new cap shouldn't trip anything (we go
     // from ~$12 / $30 = 40% to ~$12.30 / $30 = 41%).
-    let (_, _, t2) = budget::apply_report(&pool, "s1", "a1", None, "claude-3-5-sonnet", 100_000, 0)
+    let (_, _, t2) = budget::apply_report(&pool, "s1", "a1", None, "claude-3-5-sonnet", 100_000, 0, None)
         .await
         .unwrap();
     assert!(t2.is_none(), "raising the cap should auto-resume; got {:?}", t2);
@@ -316,7 +350,7 @@ async fn threshold_crossings_broadcast_system_events() {
 
     // --- 80% threshold ---
     let (spent80, cap80, t80) = budget::apply_report(
-        &pool, "s1", "a1", None, "claude-3-5-sonnet", 2_700_000, 0,
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 2_700_000, 0, None,
     )
     .await
     .unwrap();
@@ -333,7 +367,7 @@ async fn threshold_crossings_broadcast_system_events() {
 
     // --- 95% threshold (push further from 81% → 96%) ---
     let (spent95, cap95, t95) = budget::apply_report(
-        &pool, "s1", "a1", None, "claude-3-5-sonnet", 500_000, 0,
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 500_000, 0, None,
     )
     .await
     .unwrap();
@@ -349,7 +383,7 @@ async fn threshold_crossings_broadcast_system_events() {
 
     // --- 100% threshold (push past $10 cap; currently ~$9.60) ---
     let (spent100, cap100, t100) = budget::apply_report(
-        &pool, "s1", "a1", None, "claude-3-5-sonnet", 200_000, 0,
+        &pool, "s1", "a1", None, "claude-3-5-sonnet", 200_000, 0, None,
     )
     .await
     .unwrap();

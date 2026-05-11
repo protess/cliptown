@@ -40,7 +40,7 @@ pub async fn dispatch(
     };
     match inbound {
         WorkerInbound::Hello { .. } => json!({"type":"ok","kind":"hello"}),
-        WorkerInbound::ReportBudget { in_tokens, out_tokens, model_id, task_id, .. } => {
+        WorkerInbound::ReportBudget { in_tokens, out_tokens, model_id, task_id, cost_usd, .. } => {
             let startup_id = match world.avatars.get(agent_id) {
                 Some(a) => a.startup_id.clone(),
                 None => return json!({"type":"error","reason":"unknown_agent"}),
@@ -53,6 +53,7 @@ pub async fn dispatch(
                 &model_id,
                 in_tokens,
                 out_tokens,
+                cost_usd,
             )
             .await
             {
