@@ -115,6 +115,11 @@ export const claudeCodeAdapter: BackendAdapter = {
       // it at exit to populate UsageReport, which the worker then forwards
       // to the world as a `report_budget` WS frame (M9.10 budget telemetry).
       args.push("--output-format", "json");
+      // claude 2.1.x ignores the CLAUDE_CODE_SETTINGS env var; only the
+      // explicit --settings flag wires hooks into the per-spawn settings file.
+      // The env var is kept above because the fixture-cli used in contract
+      // tests still reads it (its argparse is strict and rejects --settings).
+      args.push("--settings", join(cfg.cfgDir, "settings.json"));
     }
     const child = nodeSpawn(
       bin,
