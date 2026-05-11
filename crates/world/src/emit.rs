@@ -37,13 +37,34 @@ pub async fn emit_system_event(
     .execute(pool)
     .await?;
 
+    // Parse the payload into a JSON value for the broadcast frame. The SQL
+    // row above stores the raw string regardless — when parsing fails we MUST
+    // log loudly and surface the raw string on the wire too, otherwise the
+    // SQL audit log and the operator console see different data (the prior
+    // `unwrap_or(Value::Null)` silently degraded to `payload: null` while
+    // SQL kept the malformed string). Loud-fail + preserve-the-raw lets
+    // operators notice the producer bug instead of squinting at quiet nulls.
+    let payload_value = match serde_json::from_str::<Value>(payload) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                component = "emit",
+                kind = %kind,
+                error = %e,
+                payload_preview = %payload.chars().take(120).collect::<String>(),
+                "emit_system_event payload is not valid JSON; broadcasting raw string instead",
+            );
+            Value::String(payload.to_string())
+        }
+    };
+
     // `let _` discards the Result — Err means zero subscribers, not a failure.
     let _ = event_tx.send(ConsoleOutbound::SystemEvent {
         v: 1,
         severity: severity.into(),
         kind: kind.into(),
         startup_id: startup_id.map(String::from),
-        payload: serde_json::from_str(payload).unwrap_or(Value::Null),
+        payload: payload_value,
         ts: ts_secs * 1000, // milliseconds on the wire
     });
     Ok(())

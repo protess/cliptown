@@ -7,9 +7,14 @@ from a god-view and can possess any town to drop into the action.
 
 ## Status
 
-**Phase 0** — bring-up complete. 180 rust tests, 65 worker/adapter tests,
-3 adapter packages, frontend skeleton, and the 9 spec invariants pass at the
-rust layer. See `docs/superpowers/ship-gate.md` for the invariant matrix.
+**Phase 0 — sealed (2026-05-11).** All 9 spec invariants pass at the rust
+layer, the real-LLM E2E (§ 11.9) is self-implemented end-to-end against a
+real `claude` CLI, and a 20%-tolerance perf regression gate runs on every
+PR. See [`CHANGELOG.md`](CHANGELOG.md) for the full Phase 0 highlight
+reel; see [`docs/superpowers/ship-gate.md`](docs/superpowers/ship-gate.md)
+for the invariant matrix.
+
+Test counts at seal: 213 rust, 62 worker, 12 adapter, 14 frontend Playwright.
 
 ## Quickstart
 
