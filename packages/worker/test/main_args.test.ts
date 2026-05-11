@@ -102,15 +102,17 @@ describe("substitutePlaceholders", () => {
   });
 });
 
-describe("pickAdapter (M9.10 A2)", () => {
+describe("pickAdapter", () => {
   it("returns claudeCodeAdapter for claude_code", () => {
-    const a = pickAdapter("claude_code");
-    expect(a.id).toBe("claude_code");
+    expect(pickAdapter("claude_code").id).toBe("claude_code");
   });
 
-  it("throws not_yet_supported_in_real_mode for codex/opencode", () => {
-    expect(() => pickAdapter("codex")).toThrow(/not_yet_supported_in_real_mode/);
-    expect(() => pickAdapter("opencode")).toThrow(/not_yet_supported_in_real_mode/);
+  it("returns codexAdapter for codex", () => {
+    expect(pickAdapter("codex").id).toBe("codex");
+  });
+
+  it("returns opencodeAdapter for opencode", () => {
+    expect(pickAdapter("opencode").id).toBe("opencode");
   });
 
   it("throws unknown backend for anything else", () => {

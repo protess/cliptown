@@ -115,9 +115,15 @@ pub async fn handle_request(
             Json(rpc_ok(id, res)).into_response()
         }
         m if m.starts_with("notifications/") => {
-            // Per JSON-RPC: notifications have no id and no response. Some
-            // axum clients are fussy about empty bodies, so return `{}`.
-            Json(json!({})).into_response()
+            // Per MCP streamable-HTTP transport: notifications get HTTP 202
+            // Accepted with an EMPTY body. Returning a JSON-RPC-shaped
+            // payload here (even `{}`) trips strict clients — rmcp 0.6+
+            // (used by `codex exec --json`) errors out with
+            // `Deserialize error: data did not match any variant of
+            // untagged enum JsonRpcMessage` on the `initialized`
+            // notification handshake. claude-code's client was forgiving
+            // about the old `{}` 200; new clients aren't.
+            (StatusCode::ACCEPTED, "").into_response()
         }
         other => Json(rpc_error(
             id,

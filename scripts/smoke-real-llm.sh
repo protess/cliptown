@@ -34,6 +34,13 @@ WORLD_BIND="${WORLD_BIND:-127.0.0.1:8080}"
 OPERATOR_TOKEN="${CLIPTOWN_OPERATOR_TOKEN:-dev-token}"
 AGENT_SECRET="${AGENT_SECRET:-dev-secret}"
 TASK_ID="smoke-haiku"
+# Default to claude_code; override with BACKEND=codex|opencode to exercise
+# the other adapters' --real paths. The expected MCP tool prefix varies
+# per CLI — claude exposes tools as `mcp__cliptown__<name>`, codex/opencode
+# may use a different prefix or none at all. The prompt below is intentionally
+# permissive ("call the tool task_done with arguments...") so the smoke
+# works across CLIs that handle prefixes differently.
+BACKEND="${BACKEND:-claude_code}"
 
 # ── colored status helpers ─────────────────────────────────────────────────
 say()  { printf "\033[1;36m[smoke]\033[0m %s\n" "$*"; }
@@ -45,11 +52,19 @@ fail() { printf "\033[1;31m[smoke FAIL]\033[0m %s\n" "$*" >&2; exit 1; }
 # wrong, the `claude` CLI itself emits a clear auth error during the worker
 # step, which is more informative than our preflight could be (it can speak
 # to whether the key is unset vs invalid vs rate-limited).
-say "pre-flight"
-for tool in claude cargo pnpm sqlite3 jq curl; do
-  command -v "$tool" >/dev/null 2>&1 || fail "missing required tool: $tool"
+say "pre-flight (backend=$BACKEND)"
+for tool in cargo pnpm sqlite3 jq curl "$BACKEND"; do
+  # `$BACKEND` is the CLI binary name (claude_code maps to `claude`).
+  local_bin="$tool"
+  if [[ "$tool" == "claude_code" ]]; then local_bin="claude"; fi
+  command -v "$local_bin" >/dev/null 2>&1 || fail "missing required tool: $local_bin"
 done
-claude --version >/dev/null 2>&1 || fail "\`claude --version\` failed; CLI not usable"
+case "$BACKEND" in
+  claude_code) claude --version >/dev/null 2>&1 || fail "\`claude --version\` failed";;
+  codex)       codex --version  >/dev/null 2>&1 || fail "\`codex --version\` failed";;
+  opencode)    opencode --version >/dev/null 2>&1 || fail "\`opencode --version\` failed";;
+  *) fail "unknown BACKEND=$BACKEND (expected claude_code|codex|opencode)";;
+esac
 
 # ── 2. tmpdir + cleanup trap ───────────────────────────────────────────────
 SMOKE_DIR="$(mktemp -d -t cliptown-smoke.XXXXXX)"
@@ -155,15 +170,15 @@ ARTIFACT_ABS="$SMOKE_DIR/$ARTIFACT_REL"
 PROMPT=$(cat <<EOF
 You are an engineer in a simulated environment. You have ONE task. Follow these steps in order:
 
-1. Use the Write tool to create a file at this EXACT relative path:
+1. Create a file at this EXACT relative path:
      $ARTIFACT_REL
-   The file content must be a three-line haiku about clipboards. The file does not exist yet.
+   The file content must be a three-line haiku about clipboards. The file does not exist yet. Use whatever file-write tool your environment offers (Write, shell heredoc, etc).
 
-2. After the file is written, call the MCP tool named 'mcp__cliptown__task_done' with arguments:
+2. After the file is written, call the MCP tool named 'task_done' (your environment may expose it as 'cliptown.task_done', 'mcp__cliptown__task_done', or a similar prefix — pick whichever matches your tool list) with arguments:
      task_id: "$TASK_ID"
      artifact_path: "$ARTIFACT_REL"
 
-Do not use any other tools. Do not edit or re-read the file. Stop immediately after task_done returns.
+Do not edit or re-read the file. Stop immediately after task_done returns.
 EOF
 )
 
@@ -191,7 +206,7 @@ set +e
     --agent-id "$ENGINEER_ID" \
     --startup-id "$STARTUP_ID" \
     --secret "$AGENT_SECRET" \
-    --backend claude_code \
+    --backend "$BACKEND" \
     --workspace "$SMOKE_DIR" \
     --real \
     --prompt "$PROMPT" \

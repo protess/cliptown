@@ -7,6 +7,8 @@ import { LLMMock, type ToolUse } from "./llm_mock.js";
 import { resolveSandbox } from "./sandbox.js";
 import type { BackendAdapter } from "@cliptown/adapter-core";
 import { claudeCodeAdapter } from "@cliptown/adapter-claude-code";
+import { codexAdapter } from "@cliptown/adapter-codex";
+import { opencodeAdapter } from "@cliptown/adapter-opencode";
 
 export interface ParsedArgs {
   worldUrl: string;
@@ -95,20 +97,19 @@ export function substitutePlaceholders(
 }
 
 /**
- * Pick the BackendAdapter for the requested CLI. M9.10 A2 lands `claude_code`
- * first; codex/opencode are wired through A1' (their `mcp.json` shape already
- * matches) but driving them end-to-end isn't in scope for this milestone, so
- * we throw a discoverable error rather than silently using a half-tested path.
+ * Pick the BackendAdapter for the requested CLI. All three adapters (M9.10
+ * A2 + codex/opencode A2-equivalent) drive a real CLI end-to-end via MCP-HTTP
+ * to the world. Unknown backends fail loud so a typo doesn't silently fall
+ * through.
  */
 export function pickAdapter(backend: string): BackendAdapter {
   switch (backend) {
     case "claude_code":
       return claudeCodeAdapter;
     case "codex":
+      return codexAdapter;
     case "opencode":
-      throw new Error(
-        `backend "${backend}" not_yet_supported_in_real_mode — M9.10 A2 lands claude_code first`,
-      );
+      return opencodeAdapter;
     default:
       throw new Error(`unknown backend: ${backend}`);
   }
@@ -239,17 +240,21 @@ async function main(): Promise<void> {
     // CLIs in contract tests) simply skip this hop.
     if (exit.usage) {
       const u = exit.usage;
+      // cost_usd is optional — claude-code reports it, codex/opencode don't
+      // (the world falls back to its `price_per_mtok` table when missing).
+      const costStr = u.cost_usd !== undefined ? `$${u.cost_usd.toFixed(4)}` : "(table fallback)";
       console.log(
-        `[worker] usage: model=${u.model_id} in=${u.in_tokens} out=${u.out_tokens} cost=$${u.cost_usd.toFixed(4)}`,
+        `[worker] usage: model=${u.model_id} in=${u.in_tokens} out=${u.out_tokens} cost=${costStr}`,
       );
-      handle.send({
+      const reportFrame: Record<string, unknown> = {
         type: "report_budget",
         v: 1,
         in_tokens: u.in_tokens,
         out_tokens: u.out_tokens,
         model_id: u.model_id,
-        cost_usd: u.cost_usd,
-      });
+      };
+      if (u.cost_usd !== undefined) reportFrame.cost_usd = u.cost_usd;
+      handle.send(reportFrame);
       // Tiny grace period so the WS write flushes before we close the
       // socket below. Without it, the world occasionally never sees the
       // frame on a one-shot worker that exits immediately.

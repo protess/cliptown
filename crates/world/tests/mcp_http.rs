@@ -279,3 +279,33 @@ async fn missing_token_returns_401() {
     let (status, _body) = post_mcp(app, None, rpc_request("tools/list", json!({}))).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+/// MCP streamable-HTTP transport: notifications must get HTTP 202 Accepted
+/// with EMPTY body. rmcp 0.6+ clients (used by `codex exec --json`) reject
+/// any JSON-RPC-shaped response — including `{}` — to a notification with
+/// `Deserialize error: data did not match any variant of untagged enum
+/// JsonRpcMessage`. Regression guard for that compatibility fix.
+#[tokio::test]
+async fn notifications_initialized_returns_202_empty_body() {
+    let app = boot().await;
+    let body = Body::from(
+        json!({
+            "jsonrpc": "2.0",
+            // No `id` field — this is a notification, not a request.
+            "method": "notifications/initialized",
+            "params": {},
+        })
+        .to_string(),
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer e1:dev-secret")
+        .body(body)
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    assert_eq!(bytes.len(), 0, "notifications must return empty body");
+}
