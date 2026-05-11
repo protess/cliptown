@@ -1,8 +1,11 @@
 # Real-LLM E2E Runner Design
 
-> Status: **SPEC** (no code yet). Captured 2026-05-09 after exploration session
-> found the gap between "M9.10 workflow shell exists" and "§ 11.9 dual-pin
-> closed" is three sub-tasks deep, not one.
+> Status: **SHIPPED** (2026-05-11) for sub-tasks A1', A2, A3, B. Sub-task C
+> (workflow YAML) was implemented and then reverted — see the
+> "**Open-source revision (2026-05-11)**" note in the C section below.
+> Originally captured 2026-05-09 after exploration found the gap between
+> "M9.10 workflow shell exists" and "§ 11.9 dual-pin closed" was three
+> sub-tasks deep, not one.
 
 ## Goal
 
@@ -321,6 +324,20 @@ TypeScript-native, exits non-zero on any failure, writes structured logs.
 with proper error paths.
 
 ### C — Workflow YAML
+
+> **Open-source revision (2026-05-11):** sub-task C was shipped and then
+> reverted. cliptown is an open-source project and we don't want fork
+> contributors to need a private Anthropic API key in their CI secrets to
+> avoid red workflow runs. The workflow file
+> `.github/workflows/e2e-real-llm.yml` has been removed. Ship-gate § 11.9's
+> proof is now the JSON output of `pnpm -F @cliptown/e2e-real-llm start`
+> (or the bash smoke), run locally by the maintainer and attached to the
+> gate cell. The historical sub-task description below is kept for record.
+>
+> If a future fork wants to wire this back as a private workflow, the
+> minimal recipe is recorded in the historical text below — but it should
+> live in a separate repo or behind a maintainer-only secret guard, not in
+> the open source main branch.
 
 **Edit:** `.github/workflows/e2e-real-llm.yml`.
 
