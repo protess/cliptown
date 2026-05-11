@@ -87,6 +87,12 @@ The longest milestone of Phase 0. Closed in 9 PRs across two arcs:
 - `.github/workflows/bench.yml` runs the gate on every PR. Phase 0 ships
   the gate as `continue-on-error: true` while the CI baselines stabilize
   vs developer hardware; flip to a hard gate after a few CI samples.
+- `pnpm -F @cliptown/frontend bench:fcp` (added 2026-05-11) runs the
+  Playwright FCP bench against a production `vite build`. Ceilings: 300ms
+  for `/console`, 500ms for `/town/:id`. Asserts directly in the test, so
+  failure surfaces as a Playwright test failure (no separate comparator
+  needed for the frontend metrics). Local measurements at seal: /console
+  ≈ 150ms, /town/:id ≈ 320ms — both well under their ceilings.
 
 ### Known limitations carried into Phase 1
 

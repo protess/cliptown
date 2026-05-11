@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "echo no-op",
     "e2e": "playwright test",
-    "e2e:install": "playwright install --with-deps chromium"
+    "e2e:install": "playwright install --with-deps chromium",
+    "bench:fcp": "pnpm build && playwright test --config playwright.bench.config.ts"
   },
   "dependencies": {
     "@cliptown/protocol": "workspace:*",
