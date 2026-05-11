@@ -52,13 +52,18 @@ export interface SpawnOpts {
 /**
  * Token/cost telemetry the adapter scraped from the CLI's final output. Lets
  * the worker forward a `ReportBudget` WS frame to the world so the per-startup
- * `budget_spent_usd` ladder reflects real spend. Optional — fixtures and CLIs
- * that don't surface usage simply leave this undefined.
+ * `budget_spent_usd` ladder reflects real spend. The whole struct is optional
+ * on `SpawnResult.wait()` (fixtures + CLIs without usage data omit it
+ * entirely); within the struct, `cost_usd` is also optional because some
+ * CLIs only emit token counts (the world falls back to its `price_per_mtok`
+ * table when `cost_usd` is missing).
  */
 export interface UsageReport {
   in_tokens: number;
   out_tokens: number;
-  cost_usd: number;
+  /** Authoritative cost when the CLI emits one (e.g. claude-code's
+   *  `total_cost_usd`); undefined when only token counts are available. */
+  cost_usd?: number;
   model_id: string;
 }
 
