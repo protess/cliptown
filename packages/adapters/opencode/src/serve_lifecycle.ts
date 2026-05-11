@@ -2,7 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 
 /**
  * Spawns `opencode serve --port 0 --pure --hostname 127.0.0.1` and waits
- * for its "listening on http://127.0.0.1:<port>" log line on stderr to
+ * for its "listening on http://127.0.0.1:<port>" log line on stdout or stderr to
  * capture the chosen port. Returns a handle the adapter uses to read
  * the URL, await the process exit, and terminate it.
  *

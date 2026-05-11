@@ -1,7 +1,7 @@
 # codex + opencode hook bridge — design
 
 **Date:** 2026-05-11
-**Status:** draft — pending implementation
+**Status:** shipped
 **Driver:** Phase 0 known-limitation cleanup. Today both `codex` and `opencode`
 adapters advertise `hooks: [session_stop, session_error]` but **none of the
 four hook events actually flow**. Each adapter spins up an HTTP `startHookBridge`
