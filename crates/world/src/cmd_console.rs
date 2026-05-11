@@ -66,6 +66,13 @@ pub async fn dispatch(
             json!({"type":"ok","kind":"operator_unpossess"})
         }
         ConsoleInbound::OperatorDirective { to_agent_id, body, .. } => {
+            // Reject overlong bodies before any side effect — symmetric with the
+            // worker-side mcp_dispatch::handle_speak/handle_task_request_changes
+            // guard so the operator can't bypass the limit and starve the
+            // broadcast channel.
+            if body.chars().count() > crate::mcp_dispatch::MAX_BODY_LENGTH {
+                return json!({"type":"error","reason":"body_too_long"});
+            }
             // Prefetch recipient validity + startup_id BEFORE any side effect.
             // Codex M4: returning a clean unknown_recipient error is cheaper than
             // letting an inline-subquery INSERT fail via FK violation.

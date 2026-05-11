@@ -34,6 +34,34 @@ use tokio::sync::mpsc;
 /// M9 hardening should move this to `cliptown.toml [supervisor] max_review_rounds`.
 pub(crate) const MAX_REVIEW_ROUNDS: u32 = 3;
 
+/// Hard cap (in unicode chars) on user-supplied body strings on the chat /
+/// directive / review-feedback paths. Every body that crosses this limit
+/// would get cloned into the broadcast channel (capacity 4096, lag-loss
+/// fatal-closes the WS), the SQL `messages` row, and the frontend's
+/// 500-entry messages array — a worker or operator with unbounded body
+/// could push real events out of the buffer and starve the operator
+/// console. Guarded at the three producer call sites:
+/// `cmd_console::OperatorDirective`, `mcp_dispatch::handle_speak`,
+/// `mcp_dispatch::handle_task_request_changes`.
+pub(crate) const MAX_BODY_LENGTH: usize = 4096;
+
+/// Helper for the MCP-dispatch handlers: reject overlong bodies before any
+/// side effect. Returns `Err(("body_too_long", message))` so the caller's
+/// `HandlerResult` flow already maps to `mcp_error{code:"body_too_long"}`.
+pub(crate) fn check_body_length(field: &str, body: &str) -> Result<(), (String, String)> {
+    let len = body.chars().count();
+    if len > MAX_BODY_LENGTH {
+        return Err((
+            "body_too_long".into(),
+            format!(
+                "{} exceeds {} chars (got {})",
+                field, MAX_BODY_LENGTH, len
+            ),
+        ));
+    }
+    Ok(())
+}
+
 type HandlerResult = Result<Value, (String, String)>;
 
 pub async fn dispatch(
@@ -356,6 +384,7 @@ async fn handle_speak(
     args: Value,
 ) -> HandlerResult {
     let body = require_str(&args, "body")?.to_string();
+    check_body_length("body", &body)?;
     let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("chat");
     let to_agent_id = args
         .get("to_agent_id")
@@ -799,6 +828,7 @@ async fn handle_task_request_changes(
 ) -> HandlerResult {
     let task_id = require_str(&args, "task_id")?.to_string();
     let feedback = require_str(&args, "feedback")?.to_string();
+    check_body_length("feedback", &feedback)?;
     let task = load_task(pool, &task_id).await?;
     if task.startup_id != caller.startup_id {
         return Err(("cross_startup".into(), "task belongs to another startup".into()));

@@ -230,6 +230,37 @@ async fn broadcasts_on_peer_directive() {
     assert_eq!(in_response_to_task, None);
 }
 
+/// Body-length guard on the operator → directive path. Same MAX_BODY_LENGTH
+/// (=4096 chars) limit as the worker-side speak/task_request_changes paths;
+/// an operator with an unbounded `body` could otherwise starve the broadcast
+/// channel just as a chatty agent could. Reject pre-recipient-check so we
+/// don't even canonicalize the SQL row before bailing.
+#[tokio::test]
+async fn no_broadcast_on_body_too_long() {
+    let mut ctx = TestCtx::new().await;
+    seed_agent(&ctx.pool, "founder1", "s1").await;
+    let mut w = cliptown_world::state::WorldView::default();
+
+    let long = "x".repeat(4097);
+    let r = cliptown_world::cmd_console::dispatch(
+        &mut w, &ctx.pool, &ctx.out_bus, &ctx.event_tx,
+        serde_json::json!({
+            "type": "operator_directive", "v": 1,
+            "to_agent_id": "founder1",
+            "body": long,
+        }),
+    ).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "body_too_long");
+
+    // No SQL row written, no fan-out, no broadcast.
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM messages WHERE startup_id = 's1' AND kind = 'directive'"
+    ).fetch_one(&ctx.pool).await.unwrap();
+    assert_eq!(count.0, 0);
+    ctx.expect_no_broadcasts();
+}
+
 #[tokio::test]
 async fn no_broadcast_on_unknown_recipient() {
     let mut ctx = TestCtx::new().await;
