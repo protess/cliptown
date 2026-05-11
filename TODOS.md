@@ -14,12 +14,11 @@ Combined with the broadcast-channel lag-loss path (capacity 4096, Lagged-fatal-c
 
 Fix: add `MAX_BODY_LENGTH` constant (suggest 4096 chars), validate at the top of `cmd_console::OperatorDirective`, `mcp_dispatch::handle_speak`, and `mcp_dispatch::handle_task_request_changes`. Return `bad_args` / `error{reason:"body_too_long"}` if exceeded.
 
-#### `emit_system_event` silent JSON fallback on malformed payload
-**Priority:** P3
+## Completed
+
+### `emit_system_event` silent JSON fallback on malformed payload (P3) — 2026-05-11
 **Source:** Codex adversarial review on M5 ship
 
-`emit_system_event` writes the raw payload string to SQL but uses `serde_json::from_str(payload).unwrap_or(Value::Null)` for the broadcast frame. Malformed JSON → SQL row has the raw string, broadcast frame has `Value::Null`. Operators see null, audit log has different data.
+Was: `emit_system_event` wrote the raw payload string to SQL but used `serde_json::from_str(payload).unwrap_or(Value::Null)` for the broadcast frame. SQL row had the raw string, broadcast frame had `Value::Null` — operator console and audit log diverged on malformed input.
 
-Fix: switch to `match serde_json::from_str(payload)` — log `tracing::error!` if parse fails, then either skip the broadcast OR send with the raw string as a string Value. Either way, fail loud (don't silently degrade).
-
-## Completed
+Fixed in `crates/world/src/emit.rs`: parse via `match` and log `tracing::error!` on failure, then send the raw string as `Value::String(raw)` on the wire so SQL and broadcast carry identical data. Loud-fail surfaces the producer bug to operators instead of silent null-degradation. Regression guard: `console_emit::emit_system_event_malformed_payload_preserves_raw_on_broadcast`.

@@ -8,6 +8,47 @@ use cliptown_world::{emit, protocol::ConsoleOutbound};
 use common::TestCtx;
 use serde_json::json;
 
+/// TODOS P3 regression guard: when the payload string isn't valid JSON, the
+/// SQL row stores the raw string and the broadcast frame used to silently
+/// degrade to `Value::Null` — operator console and audit log diverged.
+/// After the fix, both surfaces see the same data (raw string on the wire,
+/// raw string in SQL) and a `tracing::error!` flags the producer bug.
+#[tokio::test]
+async fn emit_system_event_malformed_payload_preserves_raw_on_broadcast() {
+    let mut ctx = TestCtx::new().await;
+    let raw = "this is not { valid json";
+    emit::emit_system_event(
+        &ctx.pool,
+        &ctx.event_tx,
+        Some("s1"),
+        "test_kind_malformed",
+        raw,
+        "warn",
+    )
+    .await
+    .expect("emit_system_event should succeed even with malformed payload");
+
+    let frame = ctx.expect_one_broadcast();
+    let ConsoleOutbound::SystemEvent { payload, .. } = frame else {
+        panic!("expected SystemEvent");
+    };
+    // Broadcast: the raw string lands as a JSON string value — NOT null.
+    assert_eq!(
+        payload,
+        serde_json::Value::String(raw.into()),
+        "broadcast payload must equal the raw string when parse fails",
+    );
+
+    // SQL: the same raw string is persisted (unchanged behavior).
+    let row: (String,) = sqlx::query_as(
+        "SELECT payload FROM system_events WHERE kind = 'test_kind_malformed'",
+    )
+    .fetch_one(&ctx.pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0, raw, "SQL must store the raw string");
+}
+
 #[tokio::test]
 async fn emit_system_event_owns_id_and_ts() {
     let mut ctx = TestCtx::new().await;
