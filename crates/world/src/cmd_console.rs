@@ -1,6 +1,7 @@
 //! Operator-side command dispatcher. Called from loop_::spawn's HandleConsoleMsg arm.
 //! Parses ConsoleInbound, applies the world mutation + SQLite write, returns a JSON reply.
 
+use crate::health::Health;
 use crate::persist;
 use crate::protocol::ConsoleInbound;
 use crate::state::{AvatarView, WorldView};
@@ -57,6 +58,8 @@ pub async fn dispatch(
                 target_pos: None,
                 room_id: "lobby".to_string(),
                 status: "idle".to_string(),
+                last_seen_at: None,
+                health: Health::Online,
             };
             world.avatars.insert(OPERATOR_AVATAR_ID.to_string(), avatar);
             json!({"type":"ok","kind":"operator_possess","startup_id":startup_id})

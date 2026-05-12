@@ -1,5 +1,30 @@
 # Changelog
 
+## M12 — P2.1 daemon health buckets (2026-05-12)
+
+Replaces cliptown's binary worker-liveness signal (WS connected vs
+closed) with a 4-state Health enum so the operator console doesn't
+confuse a 5-minute network blip with a hard crash.
+
+- **`crates/world/src/health.rs`** (new pure module) — `Health` enum
+  + `derive(now_ts, last_seen, connected, is_operator) -> Health`.
+  Thresholds: `RecentlyLost` ≤ 5 min, `Offline` ≤ 6 d,
+  `AboutToGc` ≤ 7 d (last 24 h before GC), beyond 7 d back to
+  `Offline`. Operator avatars and clock skew both forced Online.
+- **`AvatarView`** carries `last_seen_at: Option<i64>` (updated on
+  `RegisterWorker` / `HandleWorkerMsg`, preserved through
+  `UnregisterWorker`) and `health: Health` (refreshed every
+  `Cmd::Tick` before the view broadcast). `RegisterWorker` /
+  `UnregisterWorker` also derive health + broadcast immediately so
+  the operator console reflects state changes without waiting for
+  the next tick.
+- **Frontend `AvatarVM`** mirrors the shape; `PixiStage.tsx` sets
+  `sprite.alpha` from `ALPHA_BY_HEALTH` (`online: 1.0`,
+  `recently_lost: 0.7`, `offline: 0.4`, `about_to_gc: 0.3`).
+- **Tests:** 8 inline unit tests for `health::derive` + 3 integration
+  tests booting `loop_::spawn` (register sets last_seen + Online;
+  HandleWorkerMsg refreshes; Unregister preserves + RecentlyLost).
+
 ## M11 — real bench harness (2026-05-12)
 
 Replaces the two placeholder benches in `crates/world/benches/world_bench.rs`

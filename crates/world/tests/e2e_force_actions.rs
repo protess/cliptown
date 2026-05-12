@@ -56,6 +56,8 @@ fn fresh_world() -> WorldView {
             target_pos: None,
             room_id: "suite_1".into(),
             status: "idle".into(),
+            last_seen_at: None,
+            health: cliptown_world::health::Health::Offline,
         },
     );
     w

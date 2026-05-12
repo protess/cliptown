@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M12 P2.1 daemon health buckets — 2026-05-12
+**Source:** Phase 2 backlog first item (from `docs/superpowers/specs/2026-05-09-real-llm-e2e-design.md` § P2.1). PR `<TBD — fill in at PR creation>`.
+
+Was: cliptown's operator console treated worker liveness as binary (WS connected vs closed). A 5-minute network blip looked identical to a hard crash, generating noise.
+
+Fixed: `AvatarView` now carries `last_seen_at: Option<i64>` (updated on RegisterWorker / HandleWorkerMsg) and `health: Health` (derived per tick from connection state + age of last_seen). 4 states — `online` / `recently_lost` / `offline` / `about_to_gc` — replace the binary signal. New `crates/world/src/health.rs` pure module owns derivation + thresholds. Frontend `AvatarVM` mirrors the shape; Pixi alpha dims non-online avatars. 11 new tests (8 unit + 3 integration).
+
 ### M11 real bench harness — 2026-05-12
 **Source:** Phase 1 known-limitation cleanup. PR `#37`.
 

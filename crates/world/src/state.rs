@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::health::Health;
+
 #[derive(Debug, Default, Clone, Serialize, TS)]
 #[ts(export, export_to = "../../packages/protocol/dist/")]
 pub struct WorldView {
@@ -21,4 +23,6 @@ pub struct AvatarView {
     pub target_pos: Option<(i32, i32)>,
     pub room_id: String,
     pub status: String,
+    pub last_seen_at: Option<i64>,
+    pub health: Health,
 }

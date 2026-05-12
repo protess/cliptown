@@ -160,6 +160,8 @@ async fn fixture() -> Fx {
                 target_pos: None,
                 room_id: room.into(),
                 status: "idle".into(),
+                last_seen_at: None,
+                health: cliptown_world::health::Health::Offline,
             },
         );
     }

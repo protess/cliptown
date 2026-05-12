@@ -58,6 +58,8 @@ async fn fixture() -> (
             target_pos: None,
             room_id: "suite_1".to_string(),
             status: "idle".to_string(),
+            last_seen_at: None,
+            health: cliptown_world::health::Health::Offline,
         },
     );
     let paths: PathStore = HashMap::new();
