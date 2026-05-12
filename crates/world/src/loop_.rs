@@ -158,11 +158,23 @@ pub fn spawn_with_layout(
                 Cmd::RegisterWorker { agent_id, tx: out_tx } => {
                     out_bus.insert(agent_id.clone(), out_tx);
                     if let Some(av) = w.avatars.get_mut(&agent_id) {
-                        av.last_seen_at = Some(unix_now());
+                        // Derive health immediately so the view reflects Online
+                        // before the next scheduled Tick fires.
+                        let now = unix_now();
+                        av.last_seen_at = Some(now);
+                        av.health = health::derive(now, av.last_seen_at, true, av.role == "operator");
                     }
+                    let _ = view_tx.send(w.clone());
                 }
                 Cmd::UnregisterWorker { agent_id } => {
                     out_bus.remove(&agent_id);
+                    // Derive health immediately so the view reflects RecentlyLost
+                    // before the next scheduled Tick fires.
+                    if let Some(av) = w.avatars.get_mut(&agent_id) {
+                        let now = unix_now();
+                        av.health = health::derive(now, av.last_seen_at, false, av.role == "operator");
+                    }
+                    let _ = view_tx.send(w.clone());
                 }
                 Cmd::BackendCatalogUpdated(c) => {
                     w.backend_catalog = c;
