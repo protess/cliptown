@@ -1,3 +1,4 @@
+use crate::health;
 use crate::move_sys::{self, MoveEvent, PathStore};
 use crate::path::RoomGraph;
 use crate::seed::TownLayout;
@@ -5,6 +6,14 @@ use crate::state::{AvatarView, WorldView};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot, watch};
+
+fn unix_now() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 #[derive(Debug)]
 pub enum Cmd {
@@ -120,6 +129,13 @@ pub fn spawn_with_layout(
                     )
                     .await;
                     crate::proximity::compute_and_emit(&w, &out_bus);
+                    // P2.1: derive health bucket per avatar before broadcasting.
+                    let now = unix_now();
+                    for (agent_id, av) in w.avatars.iter_mut() {
+                        let connected = out_bus.contains_key(agent_id);
+                        let is_operator = av.role == "operator";
+                        av.health = health::derive(now, av.last_seen_at, connected, is_operator);
+                    }
                     let _ = view_tx.send(w.clone());
                 }
                 Cmd::HandleConsoleMsg { msg, reply } => {
@@ -128,6 +144,9 @@ pub fn spawn_with_layout(
                     let _ = reply.send(result);
                 }
                 Cmd::HandleWorkerMsg { agent_id, msg, reply } => {
+                    if let Some(av) = w.avatars.get_mut(&agent_id) {
+                        av.last_seen_at = Some(unix_now());
+                    }
                     let result = crate::cmd_worker::dispatch(
                         &mut w, &mut paths, &layout, &graph, &out_bus, &pool,
                         &event_tx_owned, &agent_id, msg,
@@ -137,7 +156,10 @@ pub fn spawn_with_layout(
                     let _ = reply.send(result);
                 }
                 Cmd::RegisterWorker { agent_id, tx: out_tx } => {
-                    out_bus.insert(agent_id, out_tx);
+                    out_bus.insert(agent_id.clone(), out_tx);
+                    if let Some(av) = w.avatars.get_mut(&agent_id) {
+                        av.last_seen_at = Some(unix_now());
+                    }
                 }
                 Cmd::UnregisterWorker { agent_id } => {
                     out_bus.remove(&agent_id);
