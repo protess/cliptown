@@ -82,12 +82,11 @@ describe("M3.3 adapter contract — claudeCodeAdapter end-to-end via fixture CLI
 /**
  * M8.3 cross-adapter contract — extends M3.3 across all 3 backend adapters.
  *
- * Phase 0 simplification: the fixture-cli at packages/worker/bin/fixture-cli
- * only knows Claude Code's settings.json hook shape. codex/opencode use
- * different hook protocols (TODO M9+), so for those adapters this test asserts
- * the BackendAdapter contract surface (id, capabilities, spawn) rather than
- * driving an end-to-end hook cycle. The claude-code end-to-end coverage above
- * already exercises the shared bridge that all three adapters use.
+ * The fixture CLI speaks claude-code's settings.json hook protocol. codex and
+ * opencode adapters detect the fixture (via CLIPTOWN_FIXTURE_CLI or opts.bin)
+ * and synthesize an equivalent [pre_tool, post_tool, session_stop] sequence
+ * directly into opts.onHook so all three backends can be exercised end-to-end
+ * with the same fixture binary.
  */
 describe("M8.3 cross-adapter shape", () => {
   const cases: Array<{ label: BackendAdapter["id"]; adapter: BackendAdapter }> = [
@@ -109,5 +108,45 @@ describe("M8.3 cross-adapter shape", () => {
   it("all three adapter ids are unique and cover the agents.backend enum", () => {
     const ids = cases.map((c) => c.adapter.id).sort();
     expect(ids).toEqual(["claude_code", "codex", "opencode"]);
+  });
+
+  it("codex synthesizes pre_tool → post_tool → session_stop via fixture branch", async () => {
+    const events: HookEvent[] = [];
+    const spawned = await codexAdapter.spawn({
+      prompt: "fixture run",
+      cwd: tmpdir(),
+      mcp_world_url: "http://127.0.0.1:0",
+      mcp_token: "e1:dev-secret",
+      bin: FIXTURE_BIN,
+      onHook: (e) => events.push(e),
+    });
+    const exit = await spawned.wait();
+    expect(exit.exit_code).toBe(0);
+    expect(events.map((e) => e.kind)).toEqual(["pre_tool", "post_tool", "session_stop"]);
+    expect(events[0].tool).toBe("shell");
+    expect(events[1].tool).toBe("shell");
+    expect(events[2].tool).toBe("");
+    const seqs = events.map((e) => e.seq);
+    expect(seqs).toEqual([1, 2, 3]);
+  });
+
+  it("opencode synthesizes pre_tool → post_tool → session_stop via fixture branch", async () => {
+    const events: HookEvent[] = [];
+    const spawned = await opencodeAdapter.spawn({
+      prompt: "fixture run",
+      cwd: tmpdir(),
+      mcp_world_url: "http://127.0.0.1:0",
+      mcp_token: "e1:dev-secret",
+      bin: FIXTURE_BIN,
+      onHook: (e) => events.push(e),
+    });
+    const exit = await spawned.wait();
+    expect(exit.exit_code).toBe(0);
+    expect(events.map((e) => e.kind)).toEqual(["pre_tool", "post_tool", "session_stop"]);
+    expect(events[0].tool).toBe("bash");
+    expect(events[1].tool).toBe("bash");
+    expect(events[2].tool).toBe("");
+    const seqs = events.map((e) => e.seq);
+    expect(seqs).toEqual([1, 2, 3]);
   });
 });

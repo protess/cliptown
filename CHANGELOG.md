@@ -1,5 +1,46 @@
 # Changelog
 
+## M11 — hook bridge parity (2026-05-12)
+
+`codex` and `opencode` adapters now actually flow hook events. Both
+previously advertised `[session_stop, session_error]` but never POSTed
+anything to the HTTP hook bridge they stood up — dead code.
+
+- **codex**: in-adapter streaming JSONL parser
+  (`packages/adapters/codex/src/event_parser.ts`) converts
+  `item.started` / `item.completed` for `command_execution` (tool name
+  normalized to `"shell"`) and `mcp_tool_call` (tool name from
+  `item.tool`) into pre_tool/post_tool HookEvents. Process exit emits
+  session_stop on 0 or session_error with stderr_tail on non-zero.
+
+- **opencode**: rebuilt around `opencode serve --port 0 --pure` +
+  REST/SSE. The adapter spawns a headless opencode server, subscribes to
+  `/event` SSE, and maps `message.part.updated` frames to HookEvents
+  via `event_mapper.ts` — with proper per-callID dedup so pre_tool fires
+  once (first `running` transition) and post_tool fires once (first
+  terminal status). `session.idle` is the terminal signal. `opencode run
+  --format json` is abandoned because it only emits already-completed
+  tool frames.
+
+- **HTTP hook bridge** is removed from codex/opencode (was dead). Still
+  used by claude-code where the CLI's `settings.json` hook script
+  contract genuinely needs it.
+
+- **claude-code**: a smoke-driven fix — claude CLI 2.1.x ignores the
+  `CLAUDE_CODE_SETTINGS` env var; the adapter now also passes
+  `--settings <path>` so PreToolUse/PostToolUse/Stop hooks fire. The
+  shared bridge also learned to read `tool_name` from claude payloads
+  (it only checked `tool` before, so HookEvent.tool came out empty).
+
+- Capability advertising now matches reality:
+  `claude_code`/`codex`/`opencode` all carry
+  `[pre_tool, post_tool, session_stop, session_error]`.
+
+§ 11.9 smoke verified across all three backends — worker.log shows
+named tools (`Write`, `ToolSearch`, `mcp__cliptown__task_done` for
+claude; `shell`, `task_done` for codex; `apply_patch`,
+`cliptown_task_done` for opencode) and a closing `session_stop`.
+
 ## Phase 0 — bring-up complete (2026-05-11)
 
 Phase 0 closes with all 9 spec invariants proven at the Rust layer and the
@@ -96,14 +137,8 @@ The longest milestone of Phase 0. Closed in 9 PRs across two arcs:
 
 ### Known limitations carried into Phase 1
 
-- All three adapters complete a task end-to-end (#31). `codex` reports
-  token counts but no dollar cost, and its placeholder `model_id`
-  (`codex-default`) misses the world's hardcoded `price_per_mtok`
-  table — budget accrues $0 for codex runs until either codex starts
-  emitting a cost field or we pass `--model` explicitly and add the
-  resolved key. `opencode` reports cost directly; for this user's
-  `openai/gpt-5.4-mini` plan that value happens to be $0. `claude_code`
-  is the only backend currently producing a non-zero authoritative cost.
+- (No major known limitations carry forward from Phase 0; all adapter
+  budget tracking + hook flow now closed under M11.)
 - Two criterion benches are still placeholders (sum 0..1000 for "tick
   latency", in-process 1k-msg mpsc for "throughput"). Phase 1 swaps in
   real `loop_::spawn`-driven harnesses.

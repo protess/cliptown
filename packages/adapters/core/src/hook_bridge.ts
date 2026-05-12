@@ -46,7 +46,7 @@ export async function startHookBridge(
       let payload: unknown = null;
       try { payload = body ? JSON.parse(body) : null; } catch { /* fall through with raw */ }
       seq += 1;
-      const tool = isObj(payload) && typeof payload.tool === "string" ? payload.tool : "";
+      const tool = extractToolName(payload);
       const event: HookEvent = {
         kind,
         tool,
@@ -73,6 +73,13 @@ export async function startHookBridge(
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function extractToolName(payload: unknown): string {
+  if (!isObj(payload)) return "";
+  if (typeof payload.tool_name === "string") return payload.tool_name;
+  if (typeof payload.tool === "string") return payload.tool;
+  return "";
 }
 
 export const _internal = { HOOK_KINDS };
