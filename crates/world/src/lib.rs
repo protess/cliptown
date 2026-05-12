@@ -8,6 +8,7 @@ pub mod cmd_worker;
 pub mod config;
 pub mod det;
 pub mod emit;
+pub mod health;
 pub mod http;
 pub mod loop_;
 pub mod mcp_dispatch;
