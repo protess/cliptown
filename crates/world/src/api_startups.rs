@@ -17,6 +17,7 @@
 //! below — founder first so its id can be referenced by the others.
 
 use crate::agent_supervisor::SpawnConfig;
+use crate::health::Health;
 use crate::http::AppState;
 use crate::loop_::Cmd;
 use crate::state::AvatarView;
@@ -292,6 +293,8 @@ pub async fn create_startup(
                 target_pos: None,
                 room_id: suite_id.clone(),
                 status: "idle".to_string(),
+                last_seen_at: None,
+                health: Health::Offline,
             }
         })
         .collect();

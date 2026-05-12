@@ -496,6 +496,8 @@ async fn post_inserts_avatars_and_claims_suite_in_world_view() {
         target_pos: None,
         room_id: "lobby".to_string(),
         status: "idle".to_string(),
+        last_seen_at: None,
+        health: cliptown_world::health::Health::Offline,
     };
     let _ = state
         .handle
@@ -626,6 +628,8 @@ async fn delete_releases_suite_in_world_view() {
         target_pos: None,
         room_id: "lobby".to_string(),
         status: "idle".to_string(),
+        last_seen_at: None,
+        health: cliptown_world::health::Health::Offline,
     };
     let _ = state
         .handle

@@ -156,6 +156,7 @@ async fn broadcasts_on_peer_chat() {
         agent_id: "a1".into(), startup_id: "s1".into(), role: "engineer".into(),
         backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
         room_id: "cafe".into(), status: "idle".into(),
+        last_seen_at: None, health: cliptown_world::health::Health::Offline,
     });
 
     let layout = TownLayout::default_town();
@@ -204,6 +205,7 @@ async fn broadcasts_on_peer_directive() {
         agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
         backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
         room_id: "suite_1".into(), status: "idle".into(),
+        last_seen_at: None, health: cliptown_world::health::Health::Offline,
     });
 
     let layout = TownLayout::default_town();
@@ -301,6 +303,7 @@ async fn broadcasts_on_review_request_changes() {
         agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
         backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
         room_id: "suite_1".into(), status: "idle".into(),
+        last_seen_at: None, health: cliptown_world::health::Health::Offline,
     });
     let layout = TownLayout::default_town();
     let graph: RoomGraph = move_sys::graph_from_layout(&layout);
@@ -353,6 +356,7 @@ async fn no_broadcast_on_request_changes_null_assignee() {
         agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
         backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
         room_id: "suite_1".into(), status: "idle".into(),
+        last_seen_at: None, health: cliptown_world::health::Health::Offline,
     });
     let layout = TownLayout::default_town();
     let graph: RoomGraph = move_sys::graph_from_layout(&layout);
@@ -388,6 +392,7 @@ async fn escalation_emits_system_event_only() {
         agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
         backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
         room_id: "suite_1".into(), status: "idle".into(),
+        last_seen_at: None, health: cliptown_world::health::Health::Offline,
     });
     let layout = TownLayout::default_town();
     let graph: RoomGraph = move_sys::graph_from_layout(&layout);
@@ -465,6 +470,7 @@ async fn transactional_integrity_request_changes() {
         agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
         backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
         room_id: "suite_1".into(), status: "idle".into(),
+        last_seen_at: None, health: cliptown_world::health::Health::Offline,
     });
     let layout = TownLayout::default_town();
     let graph: RoomGraph = move_sys::graph_from_layout(&layout);
@@ -515,6 +521,7 @@ async fn no_broadcast_on_subtask_with_null_assignee() {
         agent_id: "mgr".into(), startup_id: "s1".into(), role: "founder".into(),
         backend: "claude_code".into(), current_pos: (0,0), target_pos: None,
         room_id: "suite_1".into(), status: "idle".into(),
+        last_seen_at: None, health: cliptown_world::health::Health::Offline,
     });
     let layout = TownLayout::default_town();
     let graph: RoomGraph = move_sys::graph_from_layout(&layout);
