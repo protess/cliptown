@@ -4,13 +4,13 @@
   "tolerance_pct": 20,
   "metrics": {
     "world.tick_latency_us": {
-      "baseline": 0,
+      "baseline": null,
       "unit": "us",
       "criterion_bench": "tick_latency_real_loop",
       "extract": "median_ns_to_us"
     },
     "world.console_dispatch_throughput_msgs_per_sec": {
-      "baseline": 0,
+      "baseline": null,
       "unit": "msgs/s",
       "criterion_bench": "console_dispatch_throughput_100_msgs",
       "extract": "100_div_median_us"
