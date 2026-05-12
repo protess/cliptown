@@ -31,6 +31,8 @@ export interface AvatarVM {
   target_pos: [number, number] | null;
   room_id: string;
   status: string;
+  last_seen_at: number | null;
+  health: "online" | "recently_lost" | "offline" | "about_to_gc";
 }
 
 export interface StartupVM {
@@ -181,6 +183,13 @@ function indexAvatars(raw: unknown): Record<string, AvatarVM> {
 function coerceAvatar(a: Record<string, unknown>, agent_id: string): AvatarVM {
   const cp = a.current_pos;
   const tp = a.target_pos;
+  const healthRaw = typeof a.health === "string" ? a.health : "offline";
+  const VALID: ReadonlyArray<AvatarVM["health"]> = [
+    "online", "recently_lost", "offline", "about_to_gc",
+  ];
+  const health: AvatarVM["health"] = (VALID as ReadonlyArray<string>).includes(healthRaw)
+    ? (healthRaw as AvatarVM["health"])
+    : "offline";
   return {
     agent_id: asString(a.agent_id, agent_id),
     startup_id: asString(a.startup_id),
@@ -194,6 +203,8 @@ function coerceAvatar(a: Record<string, unknown>, agent_id: string): AvatarVM {
       : null,
     room_id: asString(a.room_id),
     status: asString(a.status),
+    last_seen_at: typeof a.last_seen_at === "number" ? a.last_seen_at : null,
+    health,
   };
 }
 

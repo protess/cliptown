@@ -14,6 +14,7 @@
 import { useEffect, useRef } from "react";
 import { Application, Graphics, Container } from "pixi.js";
 import { useWorld } from "../hooks/useWorld.js";
+import type { AvatarVM } from "../store.js";
 import {
   ROOMS, DOORS, ROOM_COLORS, FLOOR_BORDER,
   TILE, TOWN_W, TOWN_H, roomRect,
@@ -29,6 +30,13 @@ import {
 } from "./possess.js";
 
 const OPERATOR_AVATAR_ID = "__operator__";
+
+const ALPHA_BY_HEALTH: Record<AvatarVM["health"], number> = {
+  online: 1.0,
+  recently_lost: 0.7,
+  offline: 0.4,
+  about_to_gc: 0.3,
+};
 
 interface PixiStageProps {
   startupId: string;
@@ -190,6 +198,16 @@ export function PixiStage({ startupId, onAvatarClick }: PixiStageProps) {
         }
         spritesRef.current.set(a.agent_id, sprite);
         layer.addChild(sprite.container);
+      }
+
+      // P2.1: health-driven alpha for non-operator avatars. Operator alpha
+      // is driven separately by the possess transition (see operatorAlpha
+      // call above) and must not be clobbered here.
+      if (raw.agent_id !== OPERATOR_AVATAR_ID) {
+        const sprite = spritesRef.current.get(raw.agent_id);
+        if (sprite) {
+          sprite.container.alpha = ALPHA_BY_HEALTH[raw.health];
+        }
       }
     }
 
