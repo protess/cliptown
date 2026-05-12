@@ -7,7 +7,7 @@ _(empty)_
 ## Completed
 
 ### M12 P2.1 daemon health buckets — 2026-05-12
-**Source:** Phase 2 backlog first item (from `docs/superpowers/specs/2026-05-09-real-llm-e2e-design.md` § P2.1). PR `<TBD — fill in at PR creation>`.
+**Source:** Phase 2 backlog first item (from `docs/superpowers/specs/2026-05-09-real-llm-e2e-design.md` § P2.1). PR `#39`.
 
 Was: cliptown's operator console treated worker liveness as binary (WS connected vs closed). A 5-minute network blip looked identical to a hard crash, generating noise.
 
