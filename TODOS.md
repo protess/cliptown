@@ -7,7 +7,7 @@ _(empty)_
 ## Completed
 
 ### M11 real bench harness — 2026-05-12
-**Source:** Phase 1 known-limitation cleanup. PR `<TBD — fill in at PR creation>`.
+**Source:** Phase 1 known-limitation cleanup. PR `#37`.
 
 Was: `crates/world/benches/world_bench.rs` shipped Phase 0 with two placeholder benches — `tick_latency_per_loop_iter` ran `sum 0..1000` inside a tokio runtime; `mpsc_throughput_1k_msgs` measured a generic in-process mpsc channel. Neither touched real world code.
 
