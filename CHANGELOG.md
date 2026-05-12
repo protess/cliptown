@@ -1,5 +1,27 @@
 # Changelog
 
+## M11 — real bench harness (2026-05-12)
+
+Replaces the two placeholder benches in `crates/world/benches/world_bench.rs`
+with measurements that drive a real `loop_::spawn` world handle:
+
+- **`tick_latency_real_loop`** times one `Cmd::Tick` round-trip
+  (`move_sys::step_all` + `scheduler::tick` +
+  `proximity::compute_and_emit` + `view_tx.send`). The watch receiver
+  is cloned per iter so `.changed()` actually waits for the next tick.
+- **`console_dispatch_throughput_100_msgs`** fires 100
+  `Cmd::HandleConsoleMsg` with oneshot replies. The dispatcher's
+  `serde_json::from_value` parse-error early return gives a fast
+  reply without DB writes or broadcast — measures the
+  mpsc → parse → oneshot round-trip.
+
+`bench/check.mjs` swaps the `1000_div_median_us` extract recipe for
+`100_div_median_us`. `bench/baselines.json` carries fresh
+dev-box-captured numbers and renames the throughput key to
+`world.console_dispatch_throughput_msgs_per_sec`. CI gate stays
+`continue-on-error: true` until more ubuntu-latest samples land —
+that flip is a separate follow-up.
+
 ## M11 — hook bridge parity (2026-05-12)
 
 `codex` and `opencode` adapters now actually flow hook events. Both
@@ -137,14 +159,14 @@ The longest milestone of Phase 0. Closed in 9 PRs across two arcs:
 
 ### Known limitations carried into Phase 1
 
-- (No major known limitations carry forward from Phase 0; all adapter
-  budget tracking + hook flow now closed under M11.)
-- Two criterion benches are still placeholders (sum 0..1000 for "tick
-  latency", in-process 1k-msg mpsc for "throughput"). Phase 1 swaps in
-  real `loop_::spawn`-driven harnesses.
-- Frontend FCP bench (`packages/frontend/bench/fcp.spec.ts`) is
-  `test.describe.skip`; CI gate covers it via the ceiling-only check
-  once the Playwright run includes it.
+- Adapter budget tracking + hook flow: closed under M11 (PR #36).
+- Frontend FCP bench: closed under M10.1 follow-up (PR #35) —
+  `pnpm -F @cliptown/frontend bench:fcp` runs against a production
+  `vite preview` build, no longer `.skip`'d.
+- Criterion benches: closed under M11 real bench harness (this section).
+- `bench.yml` CI gate runs as `continue-on-error: true` while baselines
+  stabilize vs developer hardware. Flip to a hard gate after a handful
+  of CI samples.
 
 ### Phase 2 backlog (from M9.10 spec)
 
