@@ -23,9 +23,10 @@ function applyExtract(extract, medianNs) {
   switch (extract) {
     case "median_ns_to_us":
       return medianNs / 1_000;
-    case "1000_div_median_us":
-      // mpsc bench measures 1000 msgs at a time; throughput = 1000 / sec.
-      return 1_000 / (medianNs / 1_000 / 1_000_000);
+    case "100_div_median_us":
+      // console_dispatch_throughput bench fires 100 msgs per iter;
+      // throughput = 100 msgs / (median_ns → sec).
+      return 100 / (medianNs / 1_000 / 1_000_000);
     default:
       throw new Error(`unknown extract recipe: ${extract}`);
   }

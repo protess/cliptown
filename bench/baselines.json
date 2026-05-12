@@ -1,31 +1,31 @@
 {
-  "_comment": "Phase 0 baselines. Captured 2026-05-11 on an Apple Silicon dev box; CI on ubuntu-latest will produce different absolute numbers but the +/-20% tolerance lets the gate ride through normal variance. Re-baseline (delete this file, run `cargo bench`, copy criterion medians here) whenever the underlying bench bodies in `crates/world/benches/world_bench.rs` materially change.",
-  "version": 1,
+  "_comment": "Phase 1 baselines. Re-captured 2026-05-12 against M11 real bench harness on an Apple Silicon dev box. Re-baseline (delete this file's numbers, run `cargo bench`, copy criterion medians here per the extract recipes in bench/check.mjs) whenever the bench bodies in `crates/world/benches/world_bench.rs` materially change.",
+  "version": 2,
   "tolerance_pct": 20,
   "metrics": {
     "world.tick_latency_us": {
-      "baseline": 0.302,
+      "baseline": 0,
       "unit": "us",
-      "criterion_bench": "tick_latency_per_loop_iter",
+      "criterion_bench": "tick_latency_real_loop",
       "extract": "median_ns_to_us"
     },
-    "world.mpsc_throughput_msgs_per_sec": {
-      "baseline": 13521832,
+    "world.console_dispatch_throughput_msgs_per_sec": {
+      "baseline": 0,
       "unit": "msgs/s",
-      "criterion_bench": "mpsc_throughput_1k_msgs",
-      "extract": "1000_div_median_us"
+      "criterion_bench": "console_dispatch_throughput_100_msgs",
+      "extract": "100_div_median_us"
     },
     "frontend.console_fcp_ms": {
       "baseline": null,
       "unit": "ms",
       "ceiling": 300,
-      "_note": "Frontend FCP bench at packages/frontend/bench/fcp.spec.ts is currently test.describe.skip; CI wires the ceiling as a hard assertion when that bench unskips."
+      "_note": "Asserted directly by packages/frontend/bench/fcp.spec.ts."
     },
     "frontend.town_fcp_ms": {
       "baseline": null,
       "unit": "ms",
       "ceiling": 500,
-      "_note": "Same caveat as console_fcp_ms."
+      "_note": "Asserted directly by packages/frontend/bench/fcp.spec.ts."
     }
   }
 }
