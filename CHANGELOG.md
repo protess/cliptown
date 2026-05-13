@@ -1,5 +1,28 @@
 # Changelog
 
+## M13 — chore: bench gate flipped to hard fail + recalibrated for CI (2026-05-13)
+
+Carry-forward housekeeping #1 from the Phase 3 roadmap. The bench
+workflow was running `continue-on-error: true` since M10.1 because
+the dev-box baselines (22.966 µs / 970,556 msgs/s on Apple Silicon)
+were ~3x off the ubuntu-latest CI numbers, so flipping the gate
+would have flagged every PR.
+
+- Captured 3 successful CI medians from recent post-Phase-3 runs
+  (`tick_latency_real_loop`: 72.283 / 70.933 / 71.550 µs;
+  `console_dispatch_throughput`: 360,983 / 364,830 / 360,632 msgs/s).
+- `bench/baselines.json` bumped to v3 with CI-grade values
+  (baseline=72 µs tick, 361,000 msgs/s throughput). Original CI
+  samples preserved in `_ci_samples_*` fields so the next re-baseline
+  has a reference point.
+- `.github/workflows/bench.yml`: dropped `continue-on-error: true` on
+  the regression-check step. Bench failures now fail the PR.
+- `crates/world/benches/world_bench.rs`: fix compile error introduced
+  by Phase 3 Theme B (#52) — `Cmd::HandleConsoleMsg` now requires an
+  `identity` field. Bench passes `OperatorIdentity::admin_for_tests()`
+  to match the new contract. This is why every bench job since #52
+  reported "build failed" — the gate was already broken, just silent.
+
 ## M13 — docs: local-first deploy + local LLM routing (2026-05-13)
 
 Docs-only follow-up to Theme A. The original deploy guide led with

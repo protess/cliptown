@@ -1,19 +1,21 @@
 {
-  "_comment": "Phase 1 baselines. Re-captured 2026-05-12 against M11 real bench harness on an Apple Silicon dev box. Re-baseline (delete this file's numbers, run `cargo bench`, copy criterion medians here per the extract recipes in bench/check.mjs) whenever the bench bodies in `crates/world/benches/world_bench.rs` materially change.",
-  "version": 2,
+  "_comment": "CI-calibrated baselines for the GitHub Actions ubuntu-latest runner. Captured 2026-05-13 across 3 post-Phase-3 bench runs (PRs #50/#51 + tip). Numbers were ~3x the Apple Silicon dev-box numbers we previously used (22 µs tick, 970k msgs/s), so the gate was either flapping or kept informational via continue-on-error. Re-baseline by averaging at least 3 successful CI bench medians whenever the bench bodies in `crates/world/benches/world_bench.rs` materially change.",
+  "version": 3,
   "tolerance_pct": 20,
   "metrics": {
     "world.tick_latency_us": {
-      "baseline": 22.966,
+      "baseline": 72.0,
       "unit": "us",
       "criterion_bench": "tick_latency_real_loop",
-      "extract": "median_ns_to_us"
+      "extract": "median_ns_to_us",
+      "_ci_samples_us": [72.283, 70.933, 71.550]
     },
     "world.console_dispatch_throughput_msgs_per_sec": {
-      "baseline": 970556,
+      "baseline": 361000,
       "unit": "msgs/s",
       "criterion_bench": "console_dispatch_throughput_100_msgs",
-      "extract": "100_div_median_us"
+      "extract": "100_div_median_us",
+      "_ci_samples_msgs_per_sec": [360983, 364830, 360632]
     },
     "frontend.console_fcp_ms": {
       "baseline": null,
