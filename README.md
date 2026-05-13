@@ -12,7 +12,8 @@ the action.
 the rust layer. Real-LLM § 11.9 ship-gate verified against
 claude-code, codex, and opencode. Phase 2 shipped multica patterns
 (daemon health buckets, per-task execenv directories, skills MVP +
-operator UI). Phase 3 Theme A added Docker + Fly.io deploy story.
+operator UI). Phase 3 added local-first deploy (with local-LLM
+routing) plus cloud (Fly.io) for shared instances.
 
 Test counts on main (as of M13 Theme A):
 
@@ -76,13 +77,22 @@ the task to `awaiting_review`.
 
 ## Deploy
 
-For Docker / Fly.io / cloud deployment, see [`docs/DEPLOY.md`](docs/DEPLOY.md).
+cliptown defaults to running **locally** — the most interesting LLM
+backends are local (ollama, llama.cpp, vLLM), and a cloud VM can't
+reach your GPU. Cloud (Fly.io) is for sharing a hosted instance with
+collaborators against a hosted provider API.
 
 ```bash
-# Local-prod equivalent.
+# Native (fastest dev loop):
+pnpm dev
+
+# Or same-as-prod image on your laptop:
 docker compose up -d
 curl http://localhost:8080/health
 ```
+
+Local LLM via ollama, Fly.io, and other targets — see
+[`docs/DEPLOY.md`](docs/DEPLOY.md).
 
 ## Where things live
 
@@ -93,8 +103,8 @@ curl http://localhost:8080/health
 - [`docs/AGENT.md`](docs/AGENT.md) — what cliptown looks like from an
   adapter-spawned CLI's POV: workdir layout, skills, MCP surface,
   CLAUDE.md contract.
-- [`docs/DEPLOY.md`](docs/DEPLOY.md) — Docker, docker-compose, Fly.io,
-  secrets pattern.
+- [`docs/DEPLOY.md`](docs/DEPLOY.md) — local-first deploy, local LLM
+  via ollama, docker-compose, Fly.io, secrets pattern.
 - [`docs/superpowers/specs/`](docs/superpowers/specs/) — per-milestone
   design specs (chronological).
 - [`docs/superpowers/plans/`](docs/superpowers/plans/) — per-milestone
