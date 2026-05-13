@@ -5,6 +5,7 @@ import { connect, type WorkerHandle } from "./ws.js";
 import { createMcpProxy, type McpProxy, MCP_TOOL_NAMES } from "./mcp.js";
 import { LLMMock, type ToolUse } from "./llm_mock.js";
 import { resolveSandbox } from "./sandbox.js";
+import { prepareWorkdir } from "./execenv.js";
 import type { BackendAdapter } from "@cliptown/adapter-core";
 import { claudeCodeAdapter } from "@cliptown/adapter-claude-code";
 import { codexAdapter } from "@cliptown/adapter-codex";
@@ -14,6 +15,7 @@ export interface ParsedArgs {
   worldUrl: string;
   agentId: string;
   startupId: string;
+  taskId: string;
   secret: string;
   backend: string;
   workspace: string;
@@ -36,6 +38,7 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
       "world-url":  { type: "string" },
       "agent-id":   { type: "string" },
       "startup-id": { type: "string" },
+      "task-id":    { type: "string" },
       "secret":     { type: "string" },
       "backend":    { type: "string", default: "claude_code" },
       "workspace":  { type: "string" },
@@ -59,6 +62,7 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
     worldUrl:  required("world-url",  values["world-url"]),
     agentId:   required("agent-id",   values["agent-id"]),
     startupId: required("startup-id", values["startup-id"]),
+    taskId:    required("task-id",    values["task-id"]),
     secret:    required("secret",     values["secret"]),
     backend:   String(values["backend"]),
     workspace: required("workspace",  values["workspace"]),
@@ -215,12 +219,23 @@ async function main(): Promise<void> {
     // `<agent_id>:<secret>` so the world can resolve which agent is calling
     // without a separate header.
     const mcpToken = `${args.agentId}:${args.secret}`;
+    // P2.3: per-task execenv. Creates <wsRoot>/workspaces/<sid>/<tid>/workdir/
+    // with an absolute symlink workdir/workspaces → <wsRoot>/workspaces and an
+    // injected CLAUDE.md. The agent's existing relative artifact path
+    // (workspaces/<sid>/artifacts/<tid>.md) resolves through the symlink to
+    // the canonical location without prompt or world changes.
+    const workdir = await prepareWorkdir({
+      workspacesRoot: workspaceRoot,
+      startupId: args.startupId,
+      taskId: args.taskId,
+      agentId: args.agentId,
+    });
     console.log(
-      `[worker] real mode: spawning ${args.backend} → MCP @ ${mcpWorldUrl}/mcp`,
+      `[worker] real mode: spawning ${args.backend} → MCP @ ${mcpWorldUrl}/mcp (cwd=${workdir})`,
     );
     const spawned = await adapter.spawn({
       prompt: args.prompt,
-      cwd: workspaceRoot,
+      cwd: workdir,
       mcp_world_url: mcpWorldUrl,
       mcp_token: mcpToken,
       onHook: (e) => console.log(`[worker] hook: ${e.kind} tool=${e.tool}`),
