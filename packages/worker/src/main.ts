@@ -5,6 +5,7 @@ import { connect, type WorkerHandle } from "./ws.js";
 import { createMcpProxy, type McpProxy, MCP_TOOL_NAMES } from "./mcp.js";
 import { LLMMock, type ToolUse } from "./llm_mock.js";
 import { resolveSandbox } from "./sandbox.js";
+import { prepareWorkdir } from "./execenv.js";
 import type { BackendAdapter } from "@cliptown/adapter-core";
 import { claudeCodeAdapter } from "@cliptown/adapter-claude-code";
 import { codexAdapter } from "@cliptown/adapter-codex";
@@ -218,12 +219,23 @@ async function main(): Promise<void> {
     // `<agent_id>:<secret>` so the world can resolve which agent is calling
     // without a separate header.
     const mcpToken = `${args.agentId}:${args.secret}`;
+    // P2.3: per-task execenv. Creates <wsRoot>/workspaces/<sid>/<tid>/workdir/
+    // with an absolute symlink workdir/workspaces → <wsRoot>/workspaces and an
+    // injected CLAUDE.md. The agent's existing relative artifact path
+    // (workspaces/<sid>/artifacts/<tid>.md) resolves through the symlink to
+    // the canonical location without prompt or world changes.
+    const workdir = await prepareWorkdir({
+      workspacesRoot: workspaceRoot,
+      startupId: args.startupId,
+      taskId: args.taskId,
+      agentId: args.agentId,
+    });
     console.log(
-      `[worker] real mode: spawning ${args.backend} → MCP @ ${mcpWorldUrl}/mcp`,
+      `[worker] real mode: spawning ${args.backend} → MCP @ ${mcpWorldUrl}/mcp (cwd=${workdir})`,
     );
     const spawned = await adapter.spawn({
       prompt: args.prompt,
-      cwd: workspaceRoot,
+      cwd: workdir,
       mcp_world_url: mcpWorldUrl,
       mcp_token: mcpToken,
       onHook: (e) => console.log(`[worker] hook: ${e.kind} tool=${e.tool}`),
