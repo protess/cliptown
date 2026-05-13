@@ -157,6 +157,28 @@ FROM tasks WHERE status NOT IN ('done', 'failed')
 ORDER BY updated_at;
 ```
 
+### Garbage-collect old execenv workdirs
+
+Per-task workdirs at `workspaces/<sid>/<tid>/workdir` accumulate over
+time. `scripts/gc-execenv.sh` removes workdirs whose task is in a
+terminal state (`done` / `failed` / `escalated`) AND was last updated
+more than `--days N` (default 7) ago. Artifacts (`workspaces/<sid>/artifacts/`)
+are preserved.
+
+```bash
+# Dry run first to see what would go.
+scripts/gc-execenv.sh --dry-run
+
+# Default — terminal & >7d.
+scripts/gc-execenv.sh
+
+# Aggressive — terminal & >1d, against a custom layout.
+scripts/gc-execenv.sh --days 1 --db /data/cliptown.db --workspaces /workspaces
+```
+
+Safe to run while the world is up; the script opens SQLite read-only
+and never touches active-state tasks.
+
 ## Where things live
 
 - [`AGENT.md`](AGENT.md) — what cliptown looks like from inside an

@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 chore — execenv GC script — 2026-05-13
+**Source:** Phase 3 roadmap carry-forward #2 (Execenv GC daemon). PR `<TBD>`.
+
+Was: per-task execenv workdirs at `workspaces/<sid>/<tid>/workdir` accumulated forever — operators had no GC recipe shorter than `rm -rf`. Disk slowly filled on long-running deployments.
+
+Fixed: `scripts/gc-execenv.sh` (bash + sqlite3). Selects tasks in terminal states (`done` / `failed` / `escalated`) AND `updated_at` older than `--days N` (default 7), removes their workdir. Artifacts dir preserved so audit replays still work. Read-only SQL access — safe to run while world is up. `--dry-run` + `--db` / `--workspaces` overrides for docker / Fly.io layouts. Smoke-tested locally against a 4-row fixture covering all four cases (terminal+old reaped, in_progress+old kept, terminal+recent kept, terminal+old-but-missing counted). Operator recipe added to `docs/OPERATOR.md`. World-side periodic auto-GC deferred — explicit operator-run is safer; promote to a scheduler task if it gets tedious.
+
 ### M13 chore — bench gate flipped + CI baselines recalibrated — 2026-05-13
 **Source:** Phase 3 roadmap carry-forward #1 (bench.yml hard-gate flip). PR `<TBD>`.
 
