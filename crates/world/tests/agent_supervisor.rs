@@ -2,8 +2,17 @@ use cliptown_world::agent_supervisor::{
     per_task_workers_enabled, AgentSupervisor, SpawnConfig, SupervisorConfig, TaskSpawn,
 };
 use cliptown_world::storage;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+
+/// Serialize tests that mutate process env so they don't race under `cargo
+/// test`'s default thread pool. Three tests in this file touch
+/// `CLIPTOWN_TEST_ARGS_FILE` / `CLIPTOWN_PER_TASK_WORKERS`; without this
+/// guard they corrupt each other's expectations when run in parallel.
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: OnceLock<Mutex<()>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|p| p.into_inner())
+}
 
 fn make_event_tx() -> tokio::sync::broadcast::Sender<cliptown_world::protocol::ConsoleOutbound> {
     tokio::sync::broadcast::channel(64).0
@@ -68,6 +77,7 @@ fn spawn_cfg(agent_id: &str, startup_id: &str) -> SpawnConfig {
 /// threaded runtime, and clears the var afterwards.
 #[tokio::test]
 async fn per_task_workers_enabled_reads_env_var() {
+    let _g = env_lock();
     std::env::remove_var("CLIPTOWN_PER_TASK_WORKERS");
     assert!(!per_task_workers_enabled());
     std::env::set_var("CLIPTOWN_PER_TASK_WORKERS", "1");
@@ -82,6 +92,7 @@ async fn per_task_workers_enabled_reads_env_var() {
 /// fixture script that dumps its argv to a file.
 #[tokio::test]
 async fn spawn_with_task_passes_real_and_preferred_flags() {
+    let _g = env_lock();
     let (pool, dir) = fixture().await;
     let args_file = dir.path().join("argv.txt");
     std::env::set_var("CLIPTOWN_TEST_ARGS_FILE", &args_file);
@@ -119,6 +130,7 @@ async fn spawn_with_task_passes_real_and_preferred_flags() {
 /// flags are absent. Same fixture, different cfg shape.
 #[tokio::test]
 async fn spawn_without_task_omits_real_and_preferred_flags() {
+    let _g = env_lock();
     let (pool, dir) = fixture().await;
     let args_file = dir.path().join("argv.txt");
     std::env::set_var("CLIPTOWN_TEST_ARGS_FILE", &args_file);
