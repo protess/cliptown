@@ -92,6 +92,21 @@ export async function startServe(opts: StartServeOpts): Promise<ServeHandle> {
     });
   });
 
+  // Health probe: opencode's listening-URL log can race the HTTP listener
+  // becoming ready (the message is logged just before bind completes on
+  // some Bun versions). Poll /global/health for up to 2s so subsequent
+  // POST /session calls don't hit ECONNREFUSED.
+  const healthDeadline = Date.now() + 2_000;
+  while (Date.now() < healthDeadline) {
+    try {
+      const res = await fetch(`${url}/global/health`);
+      if (res.ok) break;
+    } catch {
+      // not ready yet
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
   return {
     url,
     exit,

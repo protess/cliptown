@@ -17,9 +17,10 @@ import { emptyState, parseChunk, finalize, toUsageReport, type CodexParserState 
  * Integration choices (M9.10 follow-up — hook bridge):
  *   - MCP via `-c mcp_servers.cliptown.{url,bearer_token_env_var}` overrides;
  *     bearer token read from CLIPTOWN_MCP_TOKEN env (per-spawn).
- *   - `--full-auto` + `--dangerously-bypass-approvals-and-sandbox` for the
- *     hermetic non-interactive run (SMOKE_DIR + per-spawn token gate the
- *     enforcement boundary).
+ *   - `--dangerously-bypass-approvals-and-sandbox` for the hermetic non-
+ *     interactive run (SMOKE_DIR + per-spawn token gate the enforcement
+ *     boundary). `--full-auto` was tried earlier but blocks MCP tool calls
+ *     under non-interactive ChatGPT-account auth.
  *   - `--json` makes stdout JSONL: thread.started, turn.started,
  *     item.started/completed (command_execution | mcp_tool_call |
  *     agent_message), turn.completed. event_parser.ts converts these
