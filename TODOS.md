@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 Phase 3 Theme A — production deploy story — 2026-05-13
+**Source:** Phase 3 roadmap Theme A (from `docs/superpowers/specs/2026-05-13-phase-3-roadmap.md`). PR `<TBD>`.
+
+Was: cliptown was single-machine dev-friendly only. No Docker, no cloud deploy story, no secrets pattern. Operators couldn't run it for real workloads.
+
+Fixed: `Dockerfile` (multi-stage rust + node bundle) + `docker-compose.yml` (local-prod equivalent with persistent volumes) + `fly.toml` + `docs/DEPLOY.md` covering quickstart, Fly.io walkthrough, secrets pattern, rotation, rollback, and sketches for AWS/GCP/K8s/VPS. `README.md` gains a Deploy section. Verified locally: image builds, container boots, `/health` returns `{"ok":true}`. Smoke parameterization for remote targets deferred (manual verification path documented).
+
 ### M12 P2.2 skills broadcasts + UI — 2026-05-13
 **Source:** P2.2 known-limitation cleanup. PR `#46` (follow-up to #43).
 

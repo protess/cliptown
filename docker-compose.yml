@@ -1,0 +1,42 @@
+# cliptown local-prod-equivalent. Single world process + persistent volumes.
+#
+# Usage:
+#   docker compose up -d              # boot
+#   docker compose logs -f world      # tail logs
+#   docker compose exec world sh      # shell in
+#   docker compose down               # stop (data persists in volumes)
+#   docker compose down -v            # stop + wipe volumes
+#
+# Override secrets / model auth via .env (gitignored). See DEPLOY.md.
+
+services:
+  world:
+    build: .
+    image: cliptown:latest
+    container_name: cliptown-world
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Required override in any non-dev deploy.
+      CLIPTOWN_OPERATOR_TOKEN: ${CLIPTOWN_OPERATOR_TOKEN:-dev-token}
+      # Agent secrets — one var per agent_id. Used by validate_agent_secret.
+      # Add CLIPTOWN_AGENT_SECRET_<agent_id> for each agent that connects.
+      # Falls back to "dev-secret" when unset.
+      RUST_LOG: ${RUST_LOG:-info}
+      # Forward LLM provider keys from the host so the adapter children can
+      # authenticate. Pick whichever ones your operators actually use.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - cliptown-data:/data
+      - cliptown-workspaces:/workspaces
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  cliptown-data:
+  cliptown-workspaces:

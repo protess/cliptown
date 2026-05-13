@@ -1,0 +1,50 @@
+# Fly.io app config for cliptown world.
+#
+# Phase 3 Theme A — single-region single-VM deploy with a persistent volume
+# for SQLite + workspaces. Scale-out is intentionally not supported (cliptown
+# is single-process today). Scale up with `fly scale vm shared-cpu-2x` etc.
+#
+# First deploy:
+#   fly launch --copy-config --no-deploy --name cliptown-<yours>
+#   fly volumes create cliptown_data --size 5 --region <region>
+#   fly secrets set CLIPTOWN_OPERATOR_TOKEN=<rand> ANTHROPIC_API_KEY=<key>
+#   fly deploy
+
+app = "cliptown"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  CLIPTOWN_ADDR = "0.0.0.0:8080"
+  CLIPTOWN_DB = "/data/cliptown.db"
+  RUST_LOG = "info"
+
+[[mounts]]
+  source = "cliptown_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 150
+
+[[http_service.checks]]
+  interval = "10s"
+  timeout = "3s"
+  method = "get"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  cpus = 1
