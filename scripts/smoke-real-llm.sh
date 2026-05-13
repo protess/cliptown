@@ -205,6 +205,7 @@ set +e
     --world-url "ws://$WORLD_BIND/ws/worker" \
     --agent-id "$ENGINEER_ID" \
     --startup-id "$STARTUP_ID" \
+    --task-id "$TASK_ID" \
     --secret "$AGENT_SECRET" \
     --backend "$BACKEND" \
     --workspace "$SMOKE_DIR" \
@@ -232,6 +233,20 @@ say "task status=$TASK_STATUS artifact_path=$TASK_PATH"
   || fail "expected task status=awaiting_review, got '$TASK_STATUS'"
 [[ "$TASK_PATH" == "$ARTIFACT_REL" ]] \
   || fail "expected artifact_path=$ARTIFACT_REL, got '$TASK_PATH'"
+
+# ── 7.5. verify: per-task execenv (P2.3) ───────────────────────────────────
+say "verify: per-task execenv at workspaces/$STARTUP_ID/$TASK_ID/workdir/"
+EXECENV_WORKDIR="$SMOKE_DIR/workspaces/$STARTUP_ID/$TASK_ID/workdir"
+[[ -d "$EXECENV_WORKDIR" ]] || fail "workdir not found: $EXECENV_WORKDIR"
+[[ -L "$EXECENV_WORKDIR/workspaces" ]] || fail "workspaces symlink missing inside workdir"
+LINK_TARGET="$(readlink "$EXECENV_WORKDIR/workspaces")"
+EXPECTED_TARGET="$SMOKE_DIR/workspaces"
+[[ "$LINK_TARGET" == "$EXPECTED_TARGET" ]] || fail "symlink target mismatch: got $LINK_TARGET, expected $EXPECTED_TARGET"
+CLAUDE_MD="$EXECENV_WORKDIR/CLAUDE.md"
+[[ -f "$CLAUDE_MD" ]] || fail "CLAUDE.md missing at $CLAUDE_MD"
+grep -q "workspaces/$STARTUP_ID/artifacts/$TASK_ID.md" "$CLAUDE_MD" \
+  || fail "CLAUDE.md does not reference canonical artifact path"
+say "execenv check passed: workdir + symlink + CLAUDE.md all present"
 
 say "verify: budget under cap"
 SPENT="$(sqlite3 "$SMOKE_DIR/cliptown.db" \
