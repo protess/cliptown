@@ -7,35 +7,35 @@ _(empty)_
 ## Completed
 
 ### M13 Phase 3 Theme C — per-task routing preferences — 2026-05-13
-**Source:** Phase 3 roadmap Theme C. PR `<TBD>`.
+**Source:** Phase 3 roadmap Theme C. PR `#53`.
 
 Was: tasks were routed implicitly to whatever backend/model was provisioned on the agent at startup. No way to opt a single subtask into a cheaper model (haiku for trivial work, opus for the heavy reasoning step) without re-provisioning the agent.
 
 Fixed: migration 0004 adds nullable `preferred_backend` + `preferred_model` to `tasks`. `WorkerOutbound::TaskAssigned` (ts-rs auto-export) carries both. Scheduler reads the row and forwards them on dispatch. New 22nd MCP tool `task_set_preference` (manager-or-assignee gated, cross-startup blocked, audit row + `task_routing_changed` system_event). 4 new MCP handler tests + 1 scheduler propagation test. Worker-side adapter honoring documented in CHANGELOG carry-forward — the field arrives on `task_assigned`; the adapter spawn path will start preferring it once the budget-routing UX lands. Cost variance telemetry (estimate-vs-actual emit) deferred — needs estimate inputs.
 
 ### M13 Phase 3 Theme B — operator RBAC — 2026-05-13
-**Source:** Phase 3 roadmap Theme B. PR `<TBD>`.
+**Source:** Phase 3 roadmap Theme B. PR `#52`.
 
 Was: console access went through a single shared `CLIPTOWN_OPERATOR_TOKEN` env var. No notion of operator identity, no role separation — anyone with the token could force-accept tasks and attach skills. Audit log recorded "operator" as a faceless actor.
 
 Fixed: new `operators` table (migration 0003) maps bearer tokens to `(id, name, role)` with role ∈ {viewer, manager, admin}. `auth.rs::validate_operator_token` returns typed `OperatorIdentity` (table-first with env-var fallback for backward compat — env-var path synthesizes an admin identity so dev workflows survive). Identity propagates from WS-hello through `Cmd::HandleConsoleMsg` into `cmd_console::dispatch`, which gates each `ConsoleInbound` arm: viewer-level for read-ish ops (possess/unpossess/move/recheck-backends/hello), manager-level for everything that writes to SQL or fans broadcasts (directive, accept/reject proposal, force-accept/fail, skill attach/detach). Forbidden returns `{"type":"error","reason":"forbidden"}` before any side effect. 3 new integration tests cover the gating + 4 unit tests on the validator. Admin-only operator-management commands (provision/revoke/role-change) deferred — schema is in place; the inbound surface arrives with multi-operator deployments.
 
 ### M13 Phase 3 Theme D — observability (/metrics) — 2026-05-13
-**Source:** Phase 3 roadmap Theme D. PR `<TBD>`.
+**Source:** Phase 3 roadmap Theme D. PR `#51`.
 
 Was: only structured signal was `system_events` in SQL. No metrics endpoint for external scrapers; no easy liveness/load visibility.
 
 Fixed: new `crates/world/src/metrics.rs` hand-rolled Prometheus text exposition + `/metrics` HTTP route. Atomic global counters increment from `mcp_dispatch` per call + per error. Per-scrape gauges from SQL + WorldView: active startups, per-startup budget, tasks-by-status (8 labels), agents-by-health-bucket (4 labels), `tick_seq` for loop liveness. 2 new unit tests (rust 248). Structured tracing spans deferred — add piecemeal as hotspots emerge.
 
 ### M13 Phase 3 Theme F — documentation pass — 2026-05-13
-**Source:** Phase 3 roadmap Theme F. PR `<TBD>`.
+**Source:** Phase 3 roadmap Theme F. PR `#50`.
 
 Was: contributor + operator docs were sparse. README focused on stale Phase 0 details; no ARCHITECTURE, no OPERATOR, no AGENT guide. Onboarding required code-reading.
 
 Fixed: README rewrite reflecting Phase 0-2 sealed + Phase 3 underway with updated test counts and new "Real-LLM smoke" + "Where things live" sections. New ARCHITECTURE.md with topology diagram + component walkthrough + 21-tool MCP catalog summary + invariants. New docs/OPERATOR.md covering console UX (possess / kanban / skills / directives / budget / system events / SQL recipes). New docs/AGENT.md covering the adapter-CLI POV (workdir layout, CLAUDE.md contract, all 21 MCP tools categorized, hooks, budget, sandbox, common patterns).
 
 ### M13 Phase 3 Theme A — production deploy story — 2026-05-13
-**Source:** Phase 3 roadmap Theme A (from `docs/superpowers/specs/2026-05-13-phase-3-roadmap.md`). PR `<TBD>`.
+**Source:** Phase 3 roadmap Theme A (from `docs/superpowers/specs/2026-05-13-phase-3-roadmap.md`). PR `#49`.
 
 Was: cliptown was single-machine dev-friendly only. No Docker, no cloud deploy story, no secrets pattern. Operators couldn't run it for real workloads.
 
