@@ -7,7 +7,7 @@ _(empty)_
 ## Completed
 
 ### M12 P2.2 skills system — 2026-05-13
-**Source:** Phase 2 backlog last item (from `docs/superpowers/specs/2026-05-09-real-llm-e2e-design.md` § P2.2). PR `<TBD — fill in at PR creation>`.
+**Source:** Phase 2 backlog last item (from `docs/superpowers/specs/2026-05-09-real-llm-e2e-design.md` § P2.2). PR `#43`.
 
 Was: cliptown agents saw only `task.title` + `task.description`. No way to compound reusable capability — every new agent session reinvented the wheel.
 
