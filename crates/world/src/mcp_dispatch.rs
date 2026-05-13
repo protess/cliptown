@@ -115,6 +115,11 @@ pub async fn dispatch(
         "ask_peer" => handle_ask_peer(args).await,
         "observe_world" => handle_observe_world(world, pool, &caller, args).await,
         "read_artifact" => handle_read_artifact(&caller, args).await,
+        "skill_upsert" => handle_skill_upsert(pool, &caller, args).await,
+        "skill_list" => handle_skill_list(pool, &caller, args).await,
+        "skill_attach" => handle_skill_attach(pool, &caller, args).await,
+        "skill_detach" => handle_skill_detach(pool, &caller, args).await,
+        "skill_delete" => handle_skill_delete(pool, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
             format!("no handler for tool: {}", tool),
@@ -1192,4 +1197,118 @@ async fn handle_read_artifact(caller: &AvatarView, args: Value) -> HandlerResult
         .await
         .map_err(|e| ("read_failed".to_string(), e.to_string()))?;
     Ok(json!({"path": path, "content": content}))
+}
+
+async fn handle_skill_upsert(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let name = require_str(&args, "name")?.to_string();
+    let content_md = require_str(&args, "content_md")?.to_string();
+    match crate::skills::upsert(pool, &caller.startup_id, &name, &content_md).await {
+        Ok((id, created)) => Ok(json!({"id": id, "created": created})),
+        Err(crate::skills::SkillError::BadName) => Err((
+            "bad_skill_name".into(),
+            format!("name must match [A-Za-z0-9_-]{{1,64}}; got {name:?}"),
+        )),
+        Err(crate::skills::SkillError::OversizeContent) => Err((
+            "skill_content_too_long".into(),
+            format!("content_md exceeds {} bytes", crate::skills::MAX_CONTENT_LEN),
+        )),
+        Err(crate::skills::SkillError::NotFound) => {
+            Err(("not_found".into(), "skill row vanished mid-upsert".into()))
+        }
+        Err(crate::skills::SkillError::CrossStartup) => {
+            Err(("cross_startup".into(), "caller can't author skill in another startup".into()))
+        }
+        Err(crate::skills::SkillError::Sql(e)) => Err(("sql".into(), e)),
+    }
+}
+
+async fn handle_skill_list(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    _args: Value,
+) -> HandlerResult {
+    let items = crate::skills::list(pool, &caller.startup_id)
+        .await
+        .map_err(|e| match e {
+            crate::skills::SkillError::Sql(s) => ("sql".to_string(), s),
+            _ => ("sql".to_string(), "unexpected error".to_string()),
+        })?;
+    let arr: Vec<Value> = items
+        .into_iter()
+        .map(|s| {
+            json!({
+                "id": s.id,
+                "name": s.name,
+                "updated_at": s.updated_at,
+                "len": s.len,
+            })
+        })
+        .collect();
+    Ok(json!({"skills": arr}))
+}
+
+async fn handle_skill_attach(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let agent_id = require_str(&args, "agent_id")?.to_string();
+    let skill_id = require_str(&args, "skill_id")?.to_string();
+    match crate::skills::attach(pool, &caller.startup_id, &agent_id, &skill_id).await {
+        Ok(()) => Ok(json!({"ok": true})),
+        Err(crate::skills::SkillError::NotFound) => {
+            Err(("not_found".into(), "agent or skill not found".into()))
+        }
+        Err(crate::skills::SkillError::CrossStartup) => Err((
+            "cross_startup".into(),
+            "agent or skill belongs to another startup".into(),
+        )),
+        Err(crate::skills::SkillError::Sql(e)) => Err(("sql".into(), e)),
+        Err(_) => Err(("sql".into(), "unexpected error".into())),
+    }
+}
+
+async fn handle_skill_detach(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let agent_id = require_str(&args, "agent_id")?.to_string();
+    let skill_id = require_str(&args, "skill_id")?.to_string();
+    match crate::skills::detach(pool, &caller.startup_id, &agent_id, &skill_id).await {
+        Ok(()) => Ok(json!({"ok": true})),
+        Err(crate::skills::SkillError::NotFound) => {
+            Err(("not_found".into(), "agent or skill not found".into()))
+        }
+        Err(crate::skills::SkillError::CrossStartup) => Err((
+            "cross_startup".into(),
+            "agent or skill belongs to another startup".into(),
+        )),
+        Err(crate::skills::SkillError::Sql(e)) => Err(("sql".into(), e)),
+        Err(_) => Err(("sql".into(), "unexpected error".into())),
+    }
+}
+
+async fn handle_skill_delete(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let skill_id = require_str(&args, "skill_id")?.to_string();
+    match crate::skills::delete(pool, &caller.startup_id, &skill_id).await {
+        Ok(()) => Ok(json!({"ok": true})),
+        Err(crate::skills::SkillError::NotFound) => {
+            Err(("not_found".into(), format!("no skill: {skill_id}")))
+        }
+        Err(crate::skills::SkillError::CrossStartup) => Err((
+            "cross_startup".into(),
+            "skill belongs to another startup".into(),
+        )),
+        Err(crate::skills::SkillError::Sql(e)) => Err(("sql".into(), e)),
+        Err(_) => Err(("sql".into(), "unexpected error".into())),
+    }
 }
