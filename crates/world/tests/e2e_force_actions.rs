@@ -83,8 +83,7 @@ async fn force_accept_awaiting_review_to_done() {
         &mut w,
         &pool,
         &out_bus,
-        &event_tx,
-        json!({ "type": "operator_force_accept", "v": 1, "task_id": "T1" }),
+        &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({ "type": "operator_force_accept", "v": 1, "task_id": "T1" }),
     )
     .await;
     assert_eq!(r["type"], "ok", "force_accept: {:?}", r);
@@ -118,8 +117,7 @@ async fn force_accept_from_in_progress_rejected() {
         &mut w,
         &pool,
         &out_bus,
-        &event_tx,
-        json!({ "type": "operator_force_accept", "v": 1, "task_id": "T1" }),
+        &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({ "type": "operator_force_accept", "v": 1, "task_id": "T1" }),
     )
     .await;
     assert_eq!(r["type"], "error");
@@ -149,8 +147,7 @@ async fn force_fail_from_queued_to_failed_with_note() {
         &mut w,
         &pool,
         &out_bus,
-        &event_tx,
-        json!({
+        &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
             "type": "operator_force_fail", "v": 1,
             "task_id": "T1",
             "note": "abandoned by operator"
@@ -188,8 +185,7 @@ async fn force_fail_from_in_progress() {
         &mut w,
         &pool,
         &out_bus,
-        &event_tx,
-        json!({ "type": "operator_force_fail", "v": 1, "task_id": "T1", "note": "x" }),
+        &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({ "type": "operator_force_fail", "v": 1, "task_id": "T1", "note": "x" }),
     )
     .await;
     assert_eq!(r["type"], "ok");
@@ -217,8 +213,7 @@ async fn force_fail_already_done_rejected() {
         &mut w,
         &pool,
         &out_bus,
-        &event_tx,
-        json!({ "type": "operator_force_fail", "v": 1, "task_id": "T1", "note": "too late" }),
+        &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({ "type": "operator_force_fail", "v": 1, "task_id": "T1", "note": "too late" }),
     )
     .await;
     assert_eq!(r["type"], "error");

@@ -46,6 +46,7 @@ async fn snapshot(handle: &loop_::Handle) -> WorldView {
         .tx
         .send(Cmd::HandleConsoleMsg {
             msg: serde_json::json!({"type": "ping"}),
+            identity: cliptown_world::auth::OperatorIdentity::admin_for_tests(),
             reply: reply_tx,
         })
         .await

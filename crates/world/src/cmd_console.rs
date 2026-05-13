@@ -1,6 +1,14 @@
 //! Operator-side command dispatcher. Called from loop_::spawn's HandleConsoleMsg arm.
 //! Parses ConsoleInbound, applies the world mutation + SQLite write, returns a JSON reply.
+//!
+//! P3 Theme B: `identity` carries the authenticated operator's role.
+//! Mutating arms (Directive / Force* / Skill* / proposal accept-reject) require
+//! `Manager` or higher; read-ish arms (Possess/Unpossess/Move/Hello) are
+//! viewer-OK. Viewer attempts on a manager-gated arm return
+//! `{"type":"error","reason":"forbidden"}` and do not touch SQL or the
+//! broadcast bus.
 
+use crate::auth::{OperatorIdentity, OperatorRole};
 use crate::health::Health;
 use crate::persist;
 use crate::protocol::ConsoleInbound;
@@ -13,6 +21,10 @@ use tokio::sync::mpsc;
 
 const OPERATOR_AVATAR_ID: &str = "__operator__";
 
+fn forbidden() -> serde_json::Value {
+    json!({"type":"error","reason":"forbidden"})
+}
+
 /// Dispatch a single console message. Mutates `world` and writes to `pool`.
 /// Returns a JSON value that becomes the WS reply.
 ///
@@ -24,12 +36,15 @@ pub async fn dispatch(
     pool: &SqlitePool,
     out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
     event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    identity: &OperatorIdentity,
     msg: serde_json::Value,
 ) -> serde_json::Value {
     let inbound: ConsoleInbound = match serde_json::from_value(msg.clone()) {
         Ok(v) => v,
         Err(e) => return json!({"type":"error","reason":"parse","detail":e.to_string()}),
     };
+
+    let is_manager = identity.role.at_least(OperatorRole::Manager);
 
     match inbound {
         ConsoleInbound::Hello { .. } => {
@@ -69,6 +84,7 @@ pub async fn dispatch(
             json!({"type":"ok","kind":"operator_unpossess"})
         }
         ConsoleInbound::OperatorDirective { to_agent_id, body, .. } => {
+            if !is_manager { return forbidden(); }
             // Reject overlong bodies before any side effect — symmetric with the
             // worker-side mcp_dispatch::handle_speak/handle_task_request_changes
             // guard so the operator can't bypass the limit and starve the
@@ -136,6 +152,7 @@ pub async fn dispatch(
             }
         }
         ConsoleInbound::OperatorAcceptProposal { task_id, assignee_agent_id, required_room, .. } => {
+            if !is_manager { return forbidden(); }
             // Inlined (deviation from plan): the generic `apply_task_transition` closure
             // approach has tricky sqlx::Query lifetime constraints; inlining the
             // accept_proposal flow is simpler and keeps the audit + state-machine call
@@ -199,6 +216,7 @@ pub async fn dispatch(
             }
         }
         ConsoleInbound::OperatorRejectProposal { task_id, reason, .. } => {
+            if !is_manager { return forbidden(); }
             let result = apply_status_only_transition(
                 pool,
                 &task_id,
@@ -221,6 +239,7 @@ pub async fn dispatch(
             result
         }
         ConsoleInbound::OperatorForceAccept { task_id, .. } => {
+            if !is_manager { return forbidden(); }
             let result = apply_status_only_transition(
                 pool,
                 &task_id,
@@ -240,6 +259,7 @@ pub async fn dispatch(
             result
         }
         ConsoleInbound::OperatorForceFail { task_id, note, .. } => {
+            if !is_manager { return forbidden(); }
             let result = apply_status_only_transition(
                 pool,
                 &task_id,
@@ -265,6 +285,7 @@ pub async fn dispatch(
             json!({"type":"ok","kind":"operator_recheck_backends","note":"use POST /api/backend-catalog/recheck"})
         }
         ConsoleInbound::SkillAttach { startup_id, agent_id, skill_id, .. } => {
+            if !is_manager { return forbidden(); }
             match crate::skills::attach(pool, &startup_id, &agent_id, &skill_id).await {
                 Ok(()) => {
                     let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
@@ -287,6 +308,7 @@ pub async fn dispatch(
             }
         }
         ConsoleInbound::SkillDetach { startup_id, agent_id, skill_id, .. } => {
+            if !is_manager { return forbidden(); }
             match crate::skills::detach(pool, &startup_id, &agent_id, &skill_id).await {
                 Ok(()) => {
                     let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {

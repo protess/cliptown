@@ -1,5 +1,46 @@
 # Changelog
 
+## M13 — Phase 3 Theme B: operator RBAC (2026-05-13)
+
+Fourth Phase 3 theme. Console access is no longer a single shared
+`CLIPTOWN_OPERATOR_TOKEN`. Each operator has a row in the new
+`operators` table with one of three roles, and mutating console
+commands check the role before touching SQL or the broadcast bus.
+
+- **`crates/world/migrations/0003_operators.sql`** (new) — `operators`
+  table `(id, name, token UNIQUE, role CHECK(viewer|manager|admin),
+  created_at)`. Seeded with `op_default / dev-token / admin` so the
+  existing dev workflow keeps working.
+- **`crates/world/src/auth.rs`** — `validate_operator_token` returns
+  a typed `OperatorIdentity { id, name, role }` instead of `()`. Table
+  lookup first, with `CLIPTOWN_OPERATOR_TOKEN` env-var fallback that
+  returns a synthetic admin so legacy deployments keep working. 4 new
+  unit tests cover seeded admin / unknown / viewer + manager rows /
+  role ordering.
+- **`crates/world/src/loop_.rs`** — `Cmd::HandleConsoleMsg` carries
+  the `OperatorIdentity` captured at WS-hello validation so the loop
+  can hand it to `cmd_console::dispatch` per inbound frame.
+- **`crates/world/src/cmd_console.rs`** — added per-arm role gate.
+  Viewer ≥ : `Hello`, `OperatorPossess`, `OperatorUnpossess`,
+  `OperatorMove`, `OperatorRecheckBackends` (read-ish, no SQL writes
+  beyond avatar state). Manager ≥ : `OperatorDirective`,
+  `OperatorAcceptProposal`, `OperatorRejectProposal`,
+  `OperatorForceAccept`, `OperatorForceFail`, `SkillAttach`,
+  `SkillDetach`. Forbidden returns `{"type":"error","reason":"forbidden"}`
+  before any SQL or broadcast — symmetric with the cross-startup
+  rejection pattern.
+- **`crates/world/src/http.rs::handle_console`** captures the identity
+  from `validate_operator_token` and forwards it on each inbound
+  command.
+- **Tests** — `console_cmds.rs` gains 3 RBAC integration tests
+  (viewer rejected on force_accept, viewer can possess+move, manager
+  can force_accept). All 5 existing `tests/*.rs` files updated to
+  pass an admin identity via `OperatorIdentity::admin_for_tests()`.
+
+Admin-only operator-management commands (provision/revoke operator
+rows, role changes) deferred — schema is ready, surface comes when
+multi-operator deploys actually arrive.
+
 ## M13 — Phase 3 Theme D: observability (2026-05-13)
 
 Third Phase 3 theme. cliptown now exposes a Prometheus-style

@@ -20,6 +20,10 @@ pub enum Cmd {
     Tick,
     HandleConsoleMsg {
         msg: serde_json::Value,
+        /// P3 Theme B: role captured at WS-hello validation. cmd_console gates
+        /// mutating arms (SkillAttach/Detach, ForceAccept/Fail, Directive…) on
+        /// `identity.role.at_least(Manager)`.
+        identity: crate::auth::OperatorIdentity,
         reply: oneshot::Sender<serde_json::Value>,
     },
     HandleWorkerMsg {
@@ -138,8 +142,8 @@ pub fn spawn_with_layout(
                     }
                     let _ = view_tx.send(w.clone());
                 }
-                Cmd::HandleConsoleMsg { msg, reply } => {
-                    let result = crate::cmd_console::dispatch(&mut w, &pool, &out_bus, &event_tx_owned, msg).await;
+                Cmd::HandleConsoleMsg { msg, identity, reply } => {
+                    let result = crate::cmd_console::dispatch(&mut w, &pool, &out_bus, &event_tx_owned, &identity, msg).await;
                     let _ = view_tx.send(w.clone());
                     let _ = reply.send(result);
                 }

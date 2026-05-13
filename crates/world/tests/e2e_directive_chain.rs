@@ -127,8 +127,7 @@ async fn directive_to_founder_then_subtask_then_assigned() {
         &mut w,
         &pool,
         &out_bus,
-        &event_tx,
-        json!({
+        &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
             "type": "operator_directive",
             "v": 1,
             "to_agent_id": "founder1",
