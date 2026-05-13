@@ -1,5 +1,32 @@
 # Changelog
 
+## M13 — docs: local-first deploy + local LLM routing (2026-05-13)
+
+Docs-only follow-up to Theme A. The original deploy guide led with
+Fly.io, which sends the wrong signal — cliptown's most interesting
+LLM workflows are local (ollama, vLLM, LM Studio), and a cloud VM
+can't reach your local GPU.
+
+- **`docs/DEPLOY.md`** restructured: native local → docker compose →
+  **local LLM via ollama (new)** → Fly.io → other targets. The local
+  LLM section documents how the codex / opencode adapters pick up
+  `OPENAI_BASE_URL` + provider-specific model env vars to route at
+  `http://localhost:11434/v1` (ollama's OpenAI-compatible endpoint),
+  including the `host.docker.internal` quirk for docker compose
+  callers. The claude-code adapter needs a translator proxy for
+  local backends — flagged but out of scope.
+- **`README.md`** Deploy section reordered to lead with `pnpm dev` /
+  `docker compose up -d`; Fly.io framed as the "share with
+  collaborators" mode.
+- Added Vercel to the "doesn't fit" list in DEPLOY.md alongside Cloud
+  Run — both are serverless-leaning, neither supports cliptown's
+  stateful single-process model.
+
+No code changes. Adapter env-var pass-through (`...process.env` spread)
+was already in place since M1, so the local LLM routing path "just
+works" once you set the right vars; this PR is purely making that
+discoverable.
+
 ## M13 — Phase 3 Theme C: per-task routing preferences (2026-05-13)
 
 Fifth Phase 3 theme. Tasks were routed implicitly to whatever

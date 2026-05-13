@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 docs — local-first deploy + local LLM routing — 2026-05-13
+**Source:** Post-Phase-3 docs follow-up triggered by "로컬 LLM을 사용하려면 로컬 실행이 더 좋을 것 같다" framing question. PR `<TBD>`.
+
+Was: `docs/DEPLOY.md` led with Fly.io and `README.md` Deploy section pointed straight at cloud. Cloud VM can't reach a local GPU, so for the most interesting LLM workflow (ollama / vLLM / LM Studio on the dev's own box) the guide was actively misleading.
+
+Fixed: DEPLOY.md restructured to native → docker compose → **local LLM (new section)** → Fly.io → other targets. New "Local LLM (ollama, etc.)" section documents how the codex / opencode adapters propagate `OPENAI_BASE_URL` + model env vars to the spawned CLI (`...process.env` spread that was always there but undocumented). claude-code + local backend flagged as needing a translator proxy. Vercel added to "doesn't fit" list alongside Cloud Run. README Deploy paragraph reordered. No code change — purely making the existing local-LLM path discoverable.
+
 ### M13 Phase 3 Theme C — per-task routing preferences — 2026-05-13
 **Source:** Phase 3 roadmap Theme C. PR `#53`.
 
