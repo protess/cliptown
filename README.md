@@ -1,24 +1,35 @@
 # cliptown
 
-cliptown is a multi-startup AI agent simulator with a 2D operator console.
-Real LLM agents (Claude Code, codex, opencode) run as workers in the same
-"town", each working on tasks for their own startup. The operator watches
-from a god-view and can possess any town to drop into the action.
+cliptown is a multi-startup AI agent simulator with a 2D operator
+console. Real LLM agents (Claude Code, codex, opencode) run as workers
+in the same "town", each working on tasks for their own startup. The
+operator watches from a god-view and can possess any town to drop into
+the action.
 
 ## Status
 
-**Phase 0 — sealed (2026-05-11).** All 9 spec invariants pass at the rust
-layer, the real-LLM E2E (§ 11.9) is self-implemented end-to-end against a
-real `claude` CLI, and a 20%-tolerance perf regression gate runs on every
-PR. See [`CHANGELOG.md`](CHANGELOG.md) for the full Phase 0 highlight
-reel; see [`docs/superpowers/ship-gate.md`](docs/superpowers/ship-gate.md)
-for the invariant matrix.
+**Phase 0–2 sealed; Phase 3 underway.** All 9 spec invariants pass at
+the rust layer. Real-LLM § 11.9 ship-gate verified against
+claude-code, codex, and opencode. Phase 2 shipped multica patterns
+(daemon health buckets, per-task execenv directories, skills MVP +
+operator UI). Phase 3 Theme A added Docker + Fly.io deploy story.
 
-Test counts at seal: 213 rust, 62 worker, 12 adapter, 14 frontend Playwright.
+Test counts on main (as of M13 Theme A):
+
+| Layer | Tests |
+|---|---|
+| `cargo test -p cliptown-world` | 246 |
+| `pnpm -F @cliptown/worker test` | 75 |
+| `pnpm -F @cliptown/adapter-{core,claude-code,codex,opencode} test` | 35 |
+| `pnpm -F @cliptown/frontend e2e` | 16 |
+| `node bench/check.mjs` | ok |
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the full milestone reel.
 
 ## Quickstart
 
-Prereqs: Rust 1.86, Node 20, pnpm 9.
+Prereqs: Rust 1.86, Node 20, pnpm 9. (Or just Docker — skip ahead to
+[Deploy](#deploy).)
 
 ```bash
 # Install deps + build cross-language schema.
@@ -45,33 +56,52 @@ cargo run -p cliptown-world
 pnpm --filter @cliptown/frontend dev
 ```
 
-Open `http://127.0.0.1:5173/` — redirects to `/console`.
+Open `http://127.0.0.1:5173/` — redirects to `/console`. The default
+operator token is `dev-token`; the UI uses it automatically in dev mode.
+
+## Real-LLM smoke
+
+The § 11.9 smoke spins up a world, creates a startup + engineer agent,
+and drives one task end-to-end through a real CLI:
+
+```bash
+# Defaults to claude_code. Set BACKEND=codex|opencode to swap.
+BACKEND=claude_code BUDGET_CAP_USD=1.0 \
+  bash scripts/smoke-real-llm.sh
+```
+
+Costs ~$0.15–0.35 per run depending on backend. Each spawn lands a
+markdown artifact at `workspaces/<sid>/artifacts/<tid>.md` and flips
+the task to `awaiting_review`.
 
 ## Deploy
 
 For Docker / Fly.io / cloud deployment, see [`docs/DEPLOY.md`](docs/DEPLOY.md).
-Quick local-prod equivalent:
 
 ```bash
+# Local-prod equivalent.
 docker compose up -d
 curl http://localhost:8080/health
 ```
 
-## Architecture
+## Where things live
 
-- `crates/world/` — Rust world server (single-thread mpsc inbox, SQLite WAL state, axum WS).
-- `packages/worker/` — TypeScript agent worker (WS to world, MCP proxy, supervisor).
-- `packages/adapters/{claude-code,codex,opencode,core}/` — backend CLI adapters + shared contract.
-- `packages/frontend/` — React + Pixi.js console + 2D town view.
-- `packages/protocol/` — auto-generated TS types from Rust ts-rs exports.
-
-See `docs/superpowers/specs/2026-05-07-cliptown-design.md` for the full design.
-
-## Spec invariants
-
-The 9 ship-gate invariants are documented at `docs/superpowers/ship-gate.md`
-with cross-references to existing rust tests.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — system layout, MCP tools,
+  data flow.
+- [`docs/OPERATOR.md`](docs/OPERATOR.md) — how operators use the
+  console: possessing, managing skills, reviewing tasks, budgets.
+- [`docs/AGENT.md`](docs/AGENT.md) — what cliptown looks like from an
+  adapter-spawned CLI's POV: workdir layout, skills, MCP surface,
+  CLAUDE.md contract.
+- [`docs/DEPLOY.md`](docs/DEPLOY.md) — Docker, docker-compose, Fly.io,
+  secrets pattern.
+- [`docs/superpowers/specs/`](docs/superpowers/specs/) — per-milestone
+  design specs (chronological).
+- [`docs/superpowers/plans/`](docs/superpowers/plans/) — per-milestone
+  implementation plans (chronological).
+- [`docs/superpowers/ship-gate.md`](docs/superpowers/ship-gate.md) —
+  the 9 spec invariants + cross-refs to rust tests.
 
 ## Contributing
 
-See `CONTRIBUTING.md`.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
