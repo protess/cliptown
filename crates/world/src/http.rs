@@ -25,6 +25,7 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(|| async { Json(json!({"ok": true})) }))
+        .route("/metrics", get(metrics_handler))
         .route("/api/backend-catalog", get(api_catalog))
         .route("/api/backend-catalog/recheck", post(api_recheck))
         .route("/api/startups", post(crate::api_startups::create_startup))
@@ -128,6 +129,19 @@ async fn ws_worker(ws: WebSocketUpgrade, State(s): State<Arc<AppState>>) -> Resp
 /// tiny (a few startups, dozens of tasks) so the cost is negligible, but
 /// this is a TODO for caching once tick rates climb past a few Hz —
 /// e.g. memoize on `tick_seq` + a cheap "tasks dirty" counter.
+/// P3 Theme D: Prometheus text exposition endpoint at `/metrics`.
+/// Renders process-wide counters + per-scrape gauges from SQL + view.
+async fn metrics_handler(State(s): State<Arc<AppState>>) -> Response {
+    let view = s.handle.view_rx.borrow().clone();
+    let body = crate::metrics::render(&s.pool, &view).await;
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        body,
+    )
+        .into_response()
+}
+
 pub async fn build_console_snapshot(
     pool: &SqlitePool,
     view: &crate::state::WorldView,

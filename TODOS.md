@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 Phase 3 Theme D — observability (/metrics) — 2026-05-13
+**Source:** Phase 3 roadmap Theme D. PR `<TBD>`.
+
+Was: only structured signal was `system_events` in SQL. No metrics endpoint for external scrapers; no easy liveness/load visibility.
+
+Fixed: new `crates/world/src/metrics.rs` hand-rolled Prometheus text exposition + `/metrics` HTTP route. Atomic global counters increment from `mcp_dispatch` per call + per error. Per-scrape gauges from SQL + WorldView: active startups, per-startup budget, tasks-by-status (8 labels), agents-by-health-bucket (4 labels), `tick_seq` for loop liveness. 2 new unit tests (rust 248). Structured tracing spans deferred — add piecemeal as hotspots emerge.
+
 ### M13 Phase 3 Theme F — documentation pass — 2026-05-13
 **Source:** Phase 3 roadmap Theme F. PR `<TBD>`.
 
