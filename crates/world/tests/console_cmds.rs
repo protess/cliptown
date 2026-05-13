@@ -66,7 +66,7 @@ async fn possess_inserts_operator_avatar() {
     let (mut w, pool) = fresh().await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_possess","v":1,"startup_id":"s1"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -79,10 +79,10 @@ async fn unpossess_removes_operator_avatar() {
     let (mut w, pool) = fresh().await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_possess","v":1,"startup_id":"s1"
     })).await;
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_unpossess","v":1
     })).await;
     assert_eq!(r["type"], "ok");
@@ -95,7 +95,7 @@ async fn move_without_possess_errors() {
     let (mut w, pool) = fresh().await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_move","v":1,"target_x":5,"target_y":3
     })).await;
     assert_eq!(r["type"], "error");
@@ -109,7 +109,7 @@ async fn directive_inserts_message_row() {
     insert_startup_agent_task(&pool, "queued").await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_directive","v":1,"to_agent_id":"a1","body":"hi"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -138,7 +138,7 @@ async fn accept_proposal_transitions_to_queued() {
     insert_startup_agent_task(&pool, "proposed").await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_accept_proposal","v":1,"task_id":"T1","assignee_agent_id":"a1"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -154,7 +154,7 @@ async fn reject_proposal_transitions_to_failed() {
     insert_startup_agent_task(&pool, "proposed").await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_reject_proposal","v":1,"task_id":"T1","reason":"bad scope"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -170,7 +170,7 @@ async fn force_accept_only_from_awaiting_review() {
     insert_startup_agent_task(&pool, "in_progress").await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_force_accept","v":1,"task_id":"T1"
     })).await;
     assert_eq!(r["type"], "error");
@@ -184,7 +184,7 @@ async fn force_accept_succeeds_from_awaiting_review() {
     insert_startup_agent_task(&pool, "awaiting_review").await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_force_accept","v":1,"task_id":"T1"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -200,7 +200,7 @@ async fn force_fail_with_note_writes_audit() {
     insert_startup_agent_task(&pool, "queued").await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"operator_force_fail","v":1,"task_id":"T1","note":"abandoned"
     })).await;
     assert_eq!(r["type"], "ok");
@@ -217,7 +217,7 @@ async fn parse_error_returns_error_reply() {
     let (mut w, pool) = fresh().await;
     let bus = empty_bus();
     let (event_tx, mut event_rx) = make_event_tx();
-    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, json!({
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
         "type":"unknown_op","v":1
     })).await;
     assert_eq!(r["type"], "error");
@@ -260,8 +260,7 @@ async fn accept_proposal_rejects_cross_startup_assignee() {
         &mut w,
         &pool,
         &bus,
-        &event_tx,
-        json!({"type":"operator_accept_proposal","v":1,"task_id":"T1","assignee_agent_id":"a2"}),
+        &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({"type":"operator_accept_proposal","v":1,"task_id":"T1","assignee_agent_id":"a2"}),
     ).await;
     assert_eq!(r["type"], "error", "{r}");
     assert_eq!(r["reason"], "cross_startup", "{r}");
@@ -273,4 +272,71 @@ async fn accept_proposal_rejects_cross_startup_assignee() {
     assert_eq!(row.0, "proposed");
     assert_eq!(row.1, None);
     expect_no_broadcasts(&mut event_rx);
+}
+
+/// P3 Theme B: viewer-role operators cannot trigger task-mutating arms; the
+/// dispatcher returns `forbidden` before any SQL or broadcast.
+#[tokio::test]
+async fn viewer_role_cannot_force_accept_task() {
+    let (mut w, pool) = fresh().await;
+    insert_startup_agent_task(&pool, "awaiting_review").await;
+    let bus = empty_bus();
+    let (event_tx, mut event_rx) = make_event_tx();
+    let viewer = cliptown_world::auth::OperatorIdentity {
+        id: "op_v".into(),
+        name: "viewer".into(),
+        role: cliptown_world::auth::OperatorRole::Viewer,
+    };
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &viewer, json!({
+        "type":"operator_force_accept","v":1,"task_id":"T1"
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "forbidden");
+    // SQL untouched.
+    let row: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(row.0, "awaiting_review");
+    expect_no_broadcasts(&mut event_rx);
+}
+
+/// P3 Theme B: viewer can still possess + move (read-ish operations).
+#[tokio::test]
+async fn viewer_role_can_possess_and_move() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _event_rx) = make_event_tx();
+    let viewer = cliptown_world::auth::OperatorIdentity {
+        id: "op_v".into(),
+        name: "viewer".into(),
+        role: cliptown_world::auth::OperatorRole::Viewer,
+    };
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &viewer, json!({
+        "type":"operator_possess","v":1,"startup_id":"s1"
+    })).await;
+    assert_eq!(r["type"], "ok");
+    let r2 = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &viewer, json!({
+        "type":"operator_move","v":1,"target_x":3,"target_y":4
+    })).await;
+    assert_eq!(r2["type"], "ok");
+}
+
+/// P3 Theme B: manager-role operators may force-accept tasks.
+#[tokio::test]
+async fn manager_role_can_force_accept_task() {
+    let (mut w, pool) = fresh().await;
+    insert_startup_agent_task(&pool, "awaiting_review").await;
+    let bus = empty_bus();
+    let (event_tx, _event_rx) = make_event_tx();
+    let mgr = cliptown_world::auth::OperatorIdentity {
+        id: "op_m".into(),
+        name: "manager".into(),
+        role: cliptown_world::auth::OperatorRole::Manager,
+    };
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &mgr, json!({
+        "type":"operator_force_accept","v":1,"task_id":"T1"
+    })).await;
+    assert_eq!(r["type"], "ok", "{r}");
+    let row: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(row.0, "done");
 }

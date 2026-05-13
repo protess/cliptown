@@ -171,8 +171,7 @@ async fn proposal_to_queued_to_assigned() {
         &mut w,
         &pool,
         &out_bus,
-        &event_tx,
-        json!({
+        &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
             "type": "operator_accept_proposal",
             "v": 1,
             "task_id": task_id,
@@ -286,8 +285,7 @@ async fn proposal_rejected_by_operator_audit_trail() {
         &mut w,
         &pool,
         &out_bus,
-        &event_tx,
-        json!({
+        &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
             "type": "operator_reject_proposal",
             "v": 1,
             "task_id": task_id,

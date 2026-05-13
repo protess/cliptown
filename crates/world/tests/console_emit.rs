@@ -111,6 +111,7 @@ async fn broadcasts_on_operator_directive() {
 
     let r = cliptown_world::cmd_console::dispatch(
         &mut w, &ctx.pool, &ctx.out_bus, &ctx.event_tx,
+        &cliptown_world::auth::OperatorIdentity::admin_for_tests(),
         serde_json::json!({
             "type": "operator_directive", "v": 1,
             "to_agent_id": "founder1",
@@ -246,6 +247,7 @@ async fn no_broadcast_on_body_too_long() {
     let long = "x".repeat(4097);
     let r = cliptown_world::cmd_console::dispatch(
         &mut w, &ctx.pool, &ctx.out_bus, &ctx.event_tx,
+        &cliptown_world::auth::OperatorIdentity::admin_for_tests(),
         serde_json::json!({
             "type": "operator_directive", "v": 1,
             "to_agent_id": "founder1",
@@ -270,6 +272,7 @@ async fn no_broadcast_on_unknown_recipient() {
 
     let r = cliptown_world::cmd_console::dispatch(
         &mut w, &ctx.pool, &ctx.out_bus, &ctx.event_tx,
+        &cliptown_world::auth::OperatorIdentity::admin_for_tests(),
         serde_json::json!({
             "type": "operator_directive", "v": 1,
             "to_agent_id": "ghost",

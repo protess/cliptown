@@ -227,10 +227,13 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
     let parsed: serde_json::Value = match serde_json::from_str(&first) { Ok(v) => v, Err(_) => return };
     if parsed.get("type") != Some(&serde_json::Value::String("hello".into())) { return; }
     let token = parsed.get("operator_token").and_then(|v| v.as_str()).unwrap_or("");
-    if crate::auth::validate_operator_token(&state.pool, token).await.is_err() {
-        let _ = socket.send(Message::Text(r#"{"type":"auth_error"}"#.into())).await;
-        return;
-    }
+    let identity = match crate::auth::validate_operator_token(&state.pool, token).await {
+        Ok(id) => id,
+        Err(_) => {
+            let _ = socket.send(Message::Text(r#"{"type":"auth_error"}"#.into())).await;
+            return;
+        }
+    };
 
     // Subscribe to the world view watcher BEFORE sending the initial snapshot
     // so we don't miss a tick that fires between the borrow + the subsequent
@@ -298,7 +301,11 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
                     Some(Ok(Message::Text(txt))) => {
                         let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) else { continue; };
                         let (tx, rx) = oneshot::channel();
-                        let _ = state.handle.tx.send(Cmd::HandleConsoleMsg { msg, reply: tx }).await;
+                        let _ = state.handle.tx.send(Cmd::HandleConsoleMsg {
+                            msg,
+                            identity: identity.clone(),
+                            reply: tx,
+                        }).await;
                         if let Ok(reply) = rx.await {
                             if sender.send(Message::Text(reply.to_string().into())).await.is_err() {
                                 break;
