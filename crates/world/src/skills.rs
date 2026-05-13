@@ -1,0 +1,398 @@
+//! P2.2 skills system: per-startup reusable markdown skills + many-to-many
+//! attachment to agents. Pure SQLx module — no MCP / HTTP / async-task
+//! concerns. The MCP dispatcher and the HTTP endpoint call into these
+//! helpers; tests exercise them directly via TestCtx::pool.
+
+use sqlx::SqlitePool;
+
+/// 64 KB cap on a single skill's markdown. Defensive — agents that mention
+/// "this skill" still need to read the whole thing into the prompt, and
+/// pathological content shouldn't be able to blow up the model context.
+pub const MAX_CONTENT_LEN: usize = 64 * 1024;
+
+/// Skill name must fit `<workdir>/skills/<name>.md` cleanly across filesystems.
+/// `[A-Za-z0-9_-]{1,64}` rejects path separators, dots, whitespace, unicode.
+pub const MAX_NAME_LEN: usize = 64;
+
+fn name_is_valid(name: &str) -> bool {
+    if name.is_empty() || name.len() > MAX_NAME_LEN {
+        return false;
+    }
+    name.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skill {
+    pub id: String,
+    pub startup_id: String,
+    pub name: String,
+    pub content_md: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillListing {
+    pub id: String,
+    pub name: String,
+    pub updated_at: i64,
+    pub len: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachedSkill {
+    pub name: String,
+    pub content_md: String,
+}
+
+#[derive(Debug)]
+pub enum SkillError {
+    BadName,
+    OversizeContent,
+    NotFound,
+    CrossStartup,
+    Sql(String),
+}
+
+impl From<sqlx::Error> for SkillError {
+    fn from(e: sqlx::Error) -> Self {
+        SkillError::Sql(e.to_string())
+    }
+}
+
+pub async fn upsert(
+    pool: &SqlitePool,
+    startup_id: &str,
+    name: &str,
+    content_md: &str,
+) -> Result<(String, bool), SkillError> {
+    if !name_is_valid(name) {
+        return Err(SkillError::BadName);
+    }
+    if content_md.len() > MAX_CONTENT_LEN {
+        return Err(SkillError::OversizeContent);
+    }
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM skills WHERE startup_id = ? AND name = ?")
+            .bind(startup_id)
+            .bind(name)
+            .fetch_optional(pool)
+            .await?;
+    match existing {
+        Some((id,)) => {
+            sqlx::query(
+                "UPDATE skills SET content_md = ?, updated_at = unixepoch() WHERE id = ?",
+            )
+            .bind(content_md)
+            .bind(&id)
+            .execute(pool)
+            .await?;
+            Ok((id, false))
+        }
+        None => {
+            let id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO skills (id, startup_id, name, content_md, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, unixepoch(), unixepoch())",
+            )
+            .bind(&id)
+            .bind(startup_id)
+            .bind(name)
+            .bind(content_md)
+            .execute(pool)
+            .await?;
+            Ok((id, true))
+        }
+    }
+}
+
+pub async fn list(pool: &SqlitePool, startup_id: &str) -> Result<Vec<SkillListing>, SkillError> {
+    let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
+        "SELECT id, name, updated_at, length(content_md) FROM skills \
+         WHERE startup_id = ? ORDER BY name",
+    )
+    .bind(startup_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, updated_at, len)| SkillListing { id, name, updated_at, len })
+        .collect())
+}
+
+pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<Skill>, SkillError> {
+    let row: Option<(String, String, String, String, i64, i64)> = sqlx::query_as(
+        "SELECT id, startup_id, name, content_md, created_at, updated_at \
+         FROM skills WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id, startup_id, name, content_md, created_at, updated_at)| Skill {
+        id,
+        startup_id,
+        name,
+        content_md,
+        created_at,
+        updated_at,
+    }))
+}
+
+pub async fn attach(
+    pool: &SqlitePool,
+    caller_startup_id: &str,
+    agent_id: &str,
+    skill_id: &str,
+) -> Result<(), SkillError> {
+    let skill_row: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_optional(pool)
+            .await?;
+    let skill_startup = match skill_row {
+        Some((s,)) => s,
+        None => return Err(SkillError::NotFound),
+    };
+    if skill_startup != caller_startup_id {
+        return Err(SkillError::CrossStartup);
+    }
+    let agent_row: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM agents WHERE id = ?")
+            .bind(agent_id)
+            .fetch_optional(pool)
+            .await?;
+    let agent_startup = match agent_row {
+        Some((s,)) => s,
+        None => return Err(SkillError::NotFound),
+    };
+    if agent_startup != caller_startup_id {
+        return Err(SkillError::CrossStartup);
+    }
+    sqlx::query(
+        "INSERT INTO agent_skills (agent_id, skill_id, attached_at) \
+         VALUES (?, ?, unixepoch()) \
+         ON CONFLICT(agent_id, skill_id) DO NOTHING",
+    )
+    .bind(agent_id)
+    .bind(skill_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn detach(
+    pool: &SqlitePool,
+    caller_startup_id: &str,
+    agent_id: &str,
+    skill_id: &str,
+) -> Result<(), SkillError> {
+    let skill_row: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_optional(pool)
+            .await?;
+    let skill_startup = match skill_row {
+        Some((s,)) => s,
+        None => return Err(SkillError::NotFound),
+    };
+    if skill_startup != caller_startup_id {
+        return Err(SkillError::CrossStartup);
+    }
+    let agent_row: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM agents WHERE id = ?")
+            .bind(agent_id)
+            .fetch_optional(pool)
+            .await?;
+    let agent_startup = match agent_row {
+        Some((s,)) => s,
+        None => return Err(SkillError::NotFound),
+    };
+    if agent_startup != caller_startup_id {
+        return Err(SkillError::CrossStartup);
+    }
+    sqlx::query("DELETE FROM agent_skills WHERE agent_id = ? AND skill_id = ?")
+        .bind(agent_id)
+        .bind(skill_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete(
+    pool: &SqlitePool,
+    caller_startup_id: &str,
+    skill_id: &str,
+) -> Result<(), SkillError> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_optional(pool)
+            .await?;
+    let owner = match row {
+        Some((s,)) => s,
+        None => return Err(SkillError::NotFound),
+    };
+    if owner != caller_startup_id {
+        return Err(SkillError::CrossStartup);
+    }
+    sqlx::query("DELETE FROM skills WHERE id = ?")
+        .bind(skill_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn for_agent(
+    pool: &SqlitePool,
+    agent_id: &str,
+) -> Result<Vec<AttachedSkill>, SkillError> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT s.name, s.content_md FROM skills s \
+         INNER JOIN agent_skills ags ON ags.skill_id = s.id \
+         WHERE ags.agent_id = ? \
+         ORDER BY s.name",
+    )
+    .bind(agent_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(name, content_md)| AttachedSkill { name, content_md })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage;
+
+    async fn ctx() -> sqlx::SqlitePool {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.db");
+        let pool = storage::open(p.to_str().unwrap()).await.unwrap();
+        crate::seed::seed_if_empty(&pool).await.unwrap();
+        sqlx::query("INSERT INTO startups (id, name, goal_text, budget_cap_usd, budget_spent_usd, town_id, workspace_path, status, created_at) VALUES ('S1','alpha','goal',10.0,0.0,'town_default','/tmp/s1','active',unixepoch())")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO startups (id, name, goal_text, budget_cap_usd, budget_spent_usd, town_id, workspace_path, status, created_at) VALUES ('S2','beta','goal',10.0,0.0,'town_default','/tmp/s2','active',unixepoch())")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, manager_id, status) VALUES ('A1','S1','eng','engineer','claude_code','m','{\"x\":0,\"y\":0}','lobby',NULL,'idle')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, manager_id, status) VALUES ('A2','S2','eng','engineer','claude_code','m','{\"x\":0,\"y\":0}','lobby',NULL,'idle')")
+            .execute(&pool).await.unwrap();
+        std::mem::forget(dir);
+        pool
+    }
+
+    #[tokio::test]
+    async fn upsert_inserts_new_skill_with_id() {
+        let pool = ctx().await;
+        let (id, created) = upsert(&pool, "S1", "deploy-to-fly", "body").await.unwrap();
+        assert!(created);
+        assert!(!id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn upsert_updates_existing_skill_by_name() {
+        let pool = ctx().await;
+        let (id1, c1) = upsert(&pool, "S1", "deploy-to-fly", "v1").await.unwrap();
+        let (id2, c2) = upsert(&pool, "S1", "deploy-to-fly", "v2").await.unwrap();
+        assert!(c1);
+        assert!(!c2);
+        assert_eq!(id1, id2);
+        let s = get(&pool, &id1).await.unwrap().unwrap();
+        assert_eq!(s.content_md, "v2");
+    }
+
+    #[tokio::test]
+    async fn upsert_rejects_bad_name_chars() {
+        let pool = ctx().await;
+        assert!(matches!(
+            upsert(&pool, "S1", "bad name", "x").await,
+            Err(SkillError::BadName)
+        ));
+        assert!(matches!(
+            upsert(&pool, "S1", "..", "x").await,
+            Err(SkillError::BadName)
+        ));
+        assert!(matches!(
+            upsert(&pool, "S1", "", "x").await,
+            Err(SkillError::BadName)
+        ));
+    }
+
+    #[tokio::test]
+    async fn upsert_rejects_oversize_content() {
+        let pool = ctx().await;
+        let big = "x".repeat(MAX_CONTENT_LEN + 1);
+        assert!(matches!(
+            upsert(&pool, "S1", "ok", &big).await,
+            Err(SkillError::OversizeContent)
+        ));
+    }
+
+    #[tokio::test]
+    async fn attach_is_idempotent() {
+        let pool = ctx().await;
+        let (sid, _) = upsert(&pool, "S1", "deploy", "body").await.unwrap();
+        attach(&pool, "S1", "A1", &sid).await.unwrap();
+        attach(&pool, "S1", "A1", &sid).await.unwrap();
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT skill_id FROM agent_skills WHERE agent_id = ?")
+                .bind("A1")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_cross_startup_agent_or_skill() {
+        let pool = ctx().await;
+        let (sid, _) = upsert(&pool, "S1", "deploy", "body").await.unwrap();
+        assert!(matches!(
+            attach(&pool, "S1", "A2", &sid).await,
+            Err(SkillError::CrossStartup)
+        ));
+        assert!(matches!(
+            attach(&pool, "S2", "A2", &sid).await,
+            Err(SkillError::CrossStartup)
+        ));
+    }
+
+    #[tokio::test]
+    async fn delete_cascades_to_agent_skills() {
+        let pool = ctx().await;
+        let (sid, _) = upsert(&pool, "S1", "deploy", "body").await.unwrap();
+        attach(&pool, "S1", "A1", &sid).await.unwrap();
+        delete(&pool, "S1", &sid).await.unwrap();
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT skill_id FROM agent_skills WHERE agent_id = ?")
+                .bind("A1")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_returns_metadata_only_no_content() {
+        let pool = ctx().await;
+        upsert(&pool, "S1", "deploy", "ten bytes!").await.unwrap();
+        let items = list(&pool, "S1").await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "deploy");
+        assert_eq!(items[0].len, 10);
+    }
+
+    #[tokio::test]
+    async fn for_agent_returns_attached_with_content() {
+        let pool = ctx().await;
+        let (sid, _) = upsert(&pool, "S1", "deploy", "body").await.unwrap();
+        attach(&pool, "S1", "A1", &sid).await.unwrap();
+        let items = for_agent(&pool, "A1").await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "deploy");
+        assert_eq!(items[0].content_md, "body");
+    }
+}

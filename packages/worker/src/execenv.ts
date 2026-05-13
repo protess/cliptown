@@ -8,11 +8,17 @@ import { join, resolve } from "node:path";
  *   workdir/
  *     CLAUDE.md           — injected task context
  *     workspaces -> <workspacesRoot>/workspaces (absolute symlink)
+ *     skills/             — optional; one <name>.md per attached skill
  *
  * Returns the absolute path to the workdir. Idempotent — calling twice
  * with the same inputs is a no-op (existing directory / symlink / file
  * are left in place if they already match the expected shape).
  */
+
+export interface SkillContent {
+  name: string;
+  content_md: string;
+}
 
 export interface PrepareWorkdirOpts {
   /** Absolute path passed via --workspace; the parent of the workspaces tree. */
@@ -20,6 +26,7 @@ export interface PrepareWorkdirOpts {
   startupId: string;
   taskId: string;
   agentId: string;
+  skills?: SkillContent[];
 }
 
 export async function prepareWorkdir(opts: PrepareWorkdirOpts): Promise<string> {
@@ -27,22 +34,15 @@ export async function prepareWorkdir(opts: PrepareWorkdirOpts): Promise<string> 
   const workspacesDir = join(wsRoot, "workspaces");
   const workdir = join(workspacesDir, opts.startupId, opts.taskId, "workdir");
 
-  // Ensure the entire chain up to workdir/ exists. mkdir recursive doesn't
-  // throw on existing dirs.
   await mkdir(workdir, { recursive: true });
-  // Also ensure the symlink target exists (defensive — world's
-  // api_startups normally creates this before the worker spawns).
   await mkdir(workspacesDir, { recursive: true });
 
-  // Symlink at <workdir>/workspaces → <wsRoot>/workspaces (absolute).
-  // If it already exists with the correct target, leave it alone.
   const linkPath = join(workdir, "workspaces");
   try {
     await symlink(workspacesDir, linkPath);
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code !== "EEXIST") throw err;
-    // Verify the existing entry points where we expect; if not, replace.
     let existing: string | null = null;
     try {
       existing = await readlink(linkPath);
@@ -50,26 +50,31 @@ export async function prepareWorkdir(opts: PrepareWorkdirOpts): Promise<string> 
       existing = null;
     }
     if (existing !== workspacesDir) {
-      // Stale link or non-link file at the path. Don't overwrite —
-      // surface the conflict so the operator notices.
       throw new Error(
         `workdir/workspaces exists but doesn't point to ${workspacesDir} (got ${existing ?? "non-link entry"})`,
       );
     }
   }
 
-  // CLAUDE.md is always rewritten — content is deterministic from inputs,
-  // so this is safe to call repeatedly.
-  const claudeMd = buildClaudeMd(opts);
+  const skills = opts.skills ?? [];
+  if (skills.length > 0) {
+    const skillsDir = join(workdir, "skills");
+    await mkdir(skillsDir, { recursive: true });
+    for (const s of skills) {
+      await writeFile(join(skillsDir, `${s.name}.md`), s.content_md, "utf-8");
+    }
+  }
+
+  const claudeMd = buildClaudeMd(opts, skills);
   await writeFile(join(workdir, "CLAUDE.md"), claudeMd, "utf-8");
 
   return workdir;
 }
 
-function buildClaudeMd(opts: PrepareWorkdirOpts): string {
+function buildClaudeMd(opts: PrepareWorkdirOpts, skills: SkillContent[]): string {
   const { agentId, taskId, startupId } = opts;
   const canonical = `workspaces/${startupId}/artifacts/${taskId}.md`;
-  return [
+  const lines = [
     "# Task context",
     "",
     `You are agent \`${agentId}\` running task \`${taskId}\` for startup \`${startupId}\`.`,
@@ -89,5 +94,16 @@ function buildClaudeMd(opts: PrepareWorkdirOpts): string {
       canonical +
       "\"`. The world enforces this exact path.",
     "",
-  ].join("\n");
+  ];
+  if (skills.length > 0) {
+    lines.push("## Available skills");
+    lines.push("");
+    lines.push("You have these reusable skills attached. Read them when relevant:");
+    lines.push("");
+    for (const s of skills) {
+      lines.push(`- \`${s.name}\` → \`./skills/${s.name}.md\``);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
 }

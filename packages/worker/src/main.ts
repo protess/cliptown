@@ -6,6 +6,7 @@ import { createMcpProxy, type McpProxy, MCP_TOOL_NAMES } from "./mcp.js";
 import { LLMMock, type ToolUse } from "./llm_mock.js";
 import { resolveSandbox } from "./sandbox.js";
 import { prepareWorkdir } from "./execenv.js";
+import { fetchSkillsForAgent, type SkillContent } from "./skills_client.js";
 import type { BackendAdapter } from "@cliptown/adapter-core";
 import { claudeCodeAdapter } from "@cliptown/adapter-claude-code";
 import { codexAdapter } from "@cliptown/adapter-codex";
@@ -219,6 +220,19 @@ async function main(): Promise<void> {
     // `<agent_id>:<secret>` so the world can resolve which agent is calling
     // without a separate header.
     const mcpToken = `${args.agentId}:${args.secret}`;
+    // P2.2: fetch attached skills from world. prepareWorkdir will write each
+    // as <workdir>/skills/<name>.md and reference them in CLAUDE.md. Failure
+    // is logged but doesn't block — an agent with no skills (or a world that
+    // doesn't support /api/agents/:id/skills) proceeds with an empty list.
+    let skills: SkillContent[] = [];
+    try {
+      skills = await fetchSkillsForAgent(mcpWorldUrl, args.agentId, args.secret);
+      if (skills.length > 0) {
+        console.log(`[worker] fetched ${skills.length} skill(s): ${skills.map((s) => s.name).join(", ")}`);
+      }
+    } catch (e) {
+      console.warn(`[worker] fetchSkillsForAgent failed (continuing without skills): ${(e as Error).message}`);
+    }
     // P2.3: per-task execenv. Creates <wsRoot>/workspaces/<sid>/<tid>/workdir/
     // with an absolute symlink workdir/workspaces → <wsRoot>/workspaces and an
     // injected CLAUDE.md. The agent's existing relative artifact path
@@ -229,6 +243,7 @@ async function main(): Promise<void> {
       startupId: args.startupId,
       taskId: args.taskId,
       agentId: args.agentId,
+      skills,
     });
     console.log(
       `[worker] real mode: spawning ${args.backend} → MCP @ ${mcpWorldUrl}/mcp (cwd=${workdir})`,

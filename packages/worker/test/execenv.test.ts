@@ -73,4 +73,39 @@ describe("prepareWorkdir", () => {
     const lst = await lstat(join(second, "workspaces"));
     expect(lst.isSymbolicLink()).toBe(true);
   });
+
+  it("writes attached skills as <workdir>/skills/<name>.md and lists them in CLAUDE.md", async () => {
+    const workdir = await prepareWorkdir({
+      workspacesRoot: root,
+      startupId: "s1",
+      taskId: "t1",
+      agentId: "a1",
+      skills: [
+        { name: "deploy-to-fly", content_md: "deploy steps" },
+        { name: "read-logs", content_md: "log locations" },
+      ],
+    });
+    const deploy = await readFile(join(workdir, "skills", "deploy-to-fly.md"), "utf-8");
+    const logs = await readFile(join(workdir, "skills", "read-logs.md"), "utf-8");
+    expect(deploy).toBe("deploy steps");
+    expect(logs).toBe("log locations");
+    const claudeMd = await readFile(join(workdir, "CLAUDE.md"), "utf-8");
+    expect(claudeMd).toContain("## Available skills");
+    expect(claudeMd).toContain("deploy-to-fly");
+    expect(claudeMd).toContain("./skills/deploy-to-fly.md");
+    expect(claudeMd).toContain("read-logs");
+  });
+
+  it("omits skills section and skills dir when skills is empty or absent", async () => {
+    const workdir = await prepareWorkdir({
+      workspacesRoot: root,
+      startupId: "s1",
+      taskId: "t1",
+      agentId: "a1",
+      skills: [],
+    });
+    const claudeMd = await readFile(join(workdir, "CLAUDE.md"), "utf-8");
+    expect(claudeMd).not.toContain("## Available skills");
+    await expect(stat(join(workdir, "skills"))).rejects.toThrow();
+  });
 });

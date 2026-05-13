@@ -181,7 +181,7 @@ async fn initialize_returns_handshake() {
 }
 
 #[tokio::test]
-async fn tools_list_returns_all_16_cliptown_tools() {
+async fn tools_list_returns_all_21_cliptown_tools() {
     let app = boot().await;
     let (status, body) = post_mcp(
         app,
@@ -212,11 +212,16 @@ async fn tools_list_returns_all_16_cliptown_tools() {
         "ask_peer",
         "observe_world",
         "read_artifact",
+        "skill_upsert",
+        "skill_list",
+        "skill_attach",
+        "skill_detach",
+        "skill_delete",
     ]
     .into_iter()
     .map(String::from)
     .collect();
-    assert_eq!(names, expected, "tools/list must enumerate all 16 names");
+    assert_eq!(names, expected, "tools/list must enumerate all 21 names");
     // Each tool must carry at least a minimal inputSchema — MCP spec requires it.
     for t in tools {
         assert!(

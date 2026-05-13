@@ -1,4 +1,5 @@
 pub mod agent_supervisor;
+pub mod api_skills;
 pub mod api_startups;
 pub mod auth;
 pub mod backend_catalog;
@@ -22,6 +23,7 @@ pub mod proximity;
 pub mod sandbox;
 pub mod scheduler;
 pub mod seed;
+pub mod skills;
 pub mod state;
 pub mod storage;
 pub mod task_sm;

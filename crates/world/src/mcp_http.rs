@@ -315,6 +315,58 @@ fn handle_tools_list() -> Value {
             "Read an artifact path inside the caller's sandbox.",
             json!({"type": "object"}),
         ),
+        tool(
+            "skill_upsert",
+            "Author or update a workspace-scoped markdown skill.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name":       {"type": "string"},
+                    "content_md": {"type": "string"}
+                },
+                "required": ["name", "content_md"]
+            }),
+        ),
+        tool(
+            "skill_list",
+            "List skills in the caller's startup (metadata only, no content).",
+            json!({"type": "object", "properties": {}}),
+        ),
+        tool(
+            "skill_attach",
+            "Attach a skill to an agent in the caller's startup.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string"},
+                    "skill_id": {"type": "string"}
+                },
+                "required": ["agent_id", "skill_id"]
+            }),
+        ),
+        tool(
+            "skill_detach",
+            "Detach a skill from an agent. Idempotent.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string"},
+                    "skill_id": {"type": "string"}
+                },
+                "required": ["agent_id", "skill_id"]
+            }),
+        ),
+        tool(
+            "skill_delete",
+            "Delete a skill. Cascades to all attachments.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "skill_id": {"type": "string"}
+                },
+                "required": ["skill_id"]
+            }),
+        ),
     ]);
     json!({ "tools": tools })
 }

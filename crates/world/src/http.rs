@@ -32,6 +32,10 @@ pub fn router(state: AppState) -> Router {
             "/api/startups/:id",
             patch(patch_startup).delete(crate::api_startups::delete_startup),
         )
+        .route(
+            "/api/agents/:agent_id/skills",
+            get(crate::api_skills::get_agent_skills),
+        )
         .route("/ws/console", get(ws_console))
         .route("/ws/worker", get(ws_worker))
         // M9.10 A1' — MCP-over-HTTP at the world. See `mcp_http.rs` for the
