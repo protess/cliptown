@@ -82,15 +82,20 @@ pub fn spawn(
 ) -> Handle {
     let layout = TownLayout::default_town();
     let graph = move_sys::graph_from_layout(&layout);
-    spawn_with_layout(initial, pool, layout, graph, event_tx)
+    spawn_with_layout(initial, pool, layout, graph, event_tx, None)
 }
 
+/// P3 Theme C follow-up (Option B): `supervisor` is honored only when
+/// `CLIPTOWN_PER_TASK_WORKERS=1`. In that mode, the scheduler dispatches via
+/// `supervisor.spawn_for_task` instead of pushing `task_assigned` to a long-
+/// running daemon. Tests and the smoke harness pass `None`.
 pub fn spawn_with_layout(
     initial: WorldView,
     pool: SqlitePool,
     layout: TownLayout,
     graph: RoomGraph,
     event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    supervisor: Option<std::sync::Arc<crate::agent_supervisor::AgentSupervisor>>,
 ) -> Handle {
     let (tx, mut rx) = mpsc::channel::<Cmd>(1024);
     let (view_tx, view_rx) = watch::channel(initial.clone());
@@ -129,7 +134,13 @@ pub fn spawn_with_layout(
                         }
                     }
                     let _ = crate::scheduler::tick(
-                        &mut w, &mut paths, &layout, &graph, &out_bus, &pool,
+                        &mut w,
+                        &mut paths,
+                        &layout,
+                        &graph,
+                        &out_bus,
+                        &pool,
+                        supervisor.as_ref(),
                     )
                     .await;
                     crate::proximity::compute_and_emit(&w, &out_bus);

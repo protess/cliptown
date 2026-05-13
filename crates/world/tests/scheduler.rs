@@ -82,7 +82,7 @@ async fn queued_idle_transitions_to_in_progress() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 1);
 
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
@@ -108,7 +108,7 @@ async fn queued_working_agent_does_not_dispatch() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 0);
 
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
@@ -131,7 +131,7 @@ async fn required_room_triggers_move_not_dispatch() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     // No dispatch yet — move was started instead.
     assert_eq!(n, 0);
     assert!(
@@ -167,7 +167,7 @@ async fn required_room_already_satisfied_dispatches() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 1);
     // No move should have been kicked off since agent already in library.
     assert!(!paths.contains_key("a1"));
@@ -193,7 +193,7 @@ async fn dispatched_task_pushes_task_assigned_to_out_bus() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 1);
 
     let msg = rx
@@ -226,6 +226,35 @@ async fn dispatched_task_pushes_task_assigned_to_out_bus() {
     }
 }
 
+/// P3 Theme C follow-up (Option B): with CLIPTOWN_PER_TASK_WORKERS unset,
+/// the legacy out_bus path still fires even when a supervisor handle is
+/// supplied — this confirms the env-var is the only gate.
+#[tokio::test]
+async fn per_task_mode_off_falls_back_to_out_bus_dispatch() {
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (tx, mut rx) = mpsc::channel::<serde_json::Value>(8);
+    out_bus.insert("a1".to_string(), tx);
+    sqlx::query(
+        "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, created_at, updated_at) \
+         VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', unixepoch(), unixepoch())",
+    ).execute(&pool).await.unwrap();
+    let event_tx = tokio::sync::broadcast::channel::<cliptown_world::protocol::ConsoleOutbound>(8).0;
+    let sup = std::sync::Arc::new(cliptown_world::agent_supervisor::AgentSupervisor::new(
+        cliptown_world::agent_supervisor::SupervisorConfig::default(),
+        pool.clone(),
+        event_tx,
+    ));
+    std::env::remove_var("CLIPTOWN_PER_TASK_WORKERS");
+    let n = scheduler::tick(
+        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, Some(&sup),
+    ).await;
+    assert_eq!(n, 1, "dispatch should fire via out_bus when env var unset");
+    let msg = rx.try_recv().expect("legacy path pushes task_assigned via out_bus");
+    let parsed: cliptown_world::protocol::WorkerOutbound =
+        serde_json::from_value(msg).unwrap();
+    assert!(matches!(parsed, cliptown_world::protocol::WorkerOutbound::TaskAssigned { .. }));
+}
+
 /// P3 Theme C: scheduler propagates per-task routing override.
 #[tokio::test]
 async fn dispatched_task_propagates_routing_preference() {
@@ -242,7 +271,7 @@ async fn dispatched_task_propagates_routing_preference() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 1);
 
     let msg = rx.try_recv().expect("task_assigned should fire");
@@ -273,7 +302,7 @@ async fn dispatched_task_writes_audit_trail() {
     .execute(&pool)
     .await
     .unwrap();
-    let _ = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let _ = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     let row: (String,) = sqlx::query_as("SELECT audit_trail FROM tasks WHERE id='T1'")
         .fetch_one(&pool)
         .await
@@ -309,7 +338,7 @@ async fn unreachable_required_room_logs_warn_and_skips_dispatch() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 0);
     assert!(
         !paths.contains_key("a1"),
@@ -337,7 +366,7 @@ async fn dispatch_skips_when_no_out_bus_entry() {
     .await
     .unwrap();
     // out_bus is empty — worker hasn't registered yet.
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 0);
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
         .fetch_one(&pool)
@@ -366,7 +395,7 @@ async fn dispatch_rolls_back_when_out_bus_full() {
     .execute(&pool)
     .await
     .unwrap();
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 0);
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
         .fetch_one(&pool)
@@ -388,7 +417,7 @@ async fn queued_without_assignee_is_ignored() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 0);
 
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")

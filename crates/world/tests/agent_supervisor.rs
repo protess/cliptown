@@ -1,4 +1,6 @@
-use cliptown_world::agent_supervisor::{AgentSupervisor, SpawnConfig, SupervisorConfig};
+use cliptown_world::agent_supervisor::{
+    per_task_workers_enabled, AgentSupervisor, SpawnConfig, SupervisorConfig, TaskSpawn,
+};
 use cliptown_world::storage;
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,7 +57,85 @@ fn spawn_cfg(agent_id: &str, startup_id: &str) -> SpawnConfig {
         secret: "test-secret".to_string(),
         workspace: "/tmp/test-ws".to_string(),
         backend: "claude_code".to_string(),
+        task: None,
     }
+}
+
+// ── P3 Theme C follow-up (Option B): per-task spawn ────────────────────────
+
+/// `per_task_workers_enabled()` toggles purely off the env var. The test
+/// touches the global env so it runs serially via tokio's default single-
+/// threaded runtime, and clears the var afterwards.
+#[tokio::test]
+async fn per_task_workers_enabled_reads_env_var() {
+    std::env::remove_var("CLIPTOWN_PER_TASK_WORKERS");
+    assert!(!per_task_workers_enabled());
+    std::env::set_var("CLIPTOWN_PER_TASK_WORKERS", "1");
+    assert!(per_task_workers_enabled());
+    std::env::set_var("CLIPTOWN_PER_TASK_WORKERS", "0");
+    assert!(!per_task_workers_enabled(), "only literal '1' enables");
+    std::env::remove_var("CLIPTOWN_PER_TASK_WORKERS");
+}
+
+/// When `cfg.task` is `Some`, the supervisor adds `--real --task-id --prompt`
+/// plus any preferred-override flags to the worker command. Verified by a
+/// fixture script that dumps its argv to a file.
+#[tokio::test]
+async fn spawn_with_task_passes_real_and_preferred_flags() {
+    let (pool, dir) = fixture().await;
+    let args_file = dir.path().join("argv.txt");
+    std::env::set_var("CLIPTOWN_TEST_ARGS_FILE", &args_file);
+    let sup = Arc::new(AgentSupervisor::new(
+        config_for("fake_worker_dump_args.sh"),
+        pool,
+        make_event_tx(),
+    ));
+    let mut cfg = spawn_cfg("a1", "s1");
+    cfg.task = Some(TaskSpawn {
+        task_id: "T7".to_string(),
+        prompt: "do the thing".to_string(),
+        preferred_backend: Some("codex".to_string()),
+        preferred_model: Some("gpt-5-mini".to_string()),
+    });
+    sup.spawn_agent(cfg).await.unwrap();
+    // Wait for the clean exit + dump.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let content = std::fs::read_to_string(&args_file).expect("argv dump file");
+    let lines: Vec<&str> = content.lines().collect();
+    assert!(lines.contains(&"--real"), "argv missing --real: {lines:?}");
+    let pair = |flag: &str, val: &str| {
+        let idx = lines.iter().position(|l| *l == flag).expect(&format!("missing {flag}"));
+        assert_eq!(lines.get(idx + 1).copied(), Some(val), "{flag} val mismatch");
+    };
+    pair("--task-id", "T7");
+    pair("--prompt", "do the thing");
+    pair("--preferred-backend", "codex");
+    pair("--preferred-model", "gpt-5-mini");
+    pair("--backend", "claude_code"); // default still wired
+    std::env::remove_var("CLIPTOWN_TEST_ARGS_FILE");
+}
+
+/// When `cfg.task` is `None` (legacy daemon path), `--real` and the per-task
+/// flags are absent. Same fixture, different cfg shape.
+#[tokio::test]
+async fn spawn_without_task_omits_real_and_preferred_flags() {
+    let (pool, dir) = fixture().await;
+    let args_file = dir.path().join("argv.txt");
+    std::env::set_var("CLIPTOWN_TEST_ARGS_FILE", &args_file);
+    let sup = Arc::new(AgentSupervisor::new(
+        config_for("fake_worker_dump_args.sh"),
+        pool,
+        make_event_tx(),
+    ));
+    sup.spawn_agent(spawn_cfg("a1", "s1")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let content = std::fs::read_to_string(&args_file).expect("argv dump file");
+    let lines: Vec<&str> = content.lines().collect();
+    assert!(!lines.contains(&"--real"), "argv unexpectedly has --real: {lines:?}");
+    assert!(!lines.contains(&"--task-id"), "argv unexpectedly has --task-id");
+    assert!(!lines.contains(&"--preferred-backend"));
+    assert!(!lines.contains(&"--preferred-model"));
+    std::env::remove_var("CLIPTOWN_TEST_ARGS_FILE");
 }
 
 #[tokio::test]

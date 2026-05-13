@@ -14,6 +14,9 @@
 //!   so a `move_complete` from this tick is already reflected in `room_id`
 //!   before the scheduler checks `required_room`.
 
+use crate::agent_supervisor::{
+    per_task_workers_enabled, AgentSupervisor, SpawnConfig, TaskSpawn,
+};
 use crate::move_sys::{self, PathStore};
 use crate::path::RoomGraph;
 use crate::protocol::WorkerOutbound;
@@ -22,6 +25,7 @@ use crate::state::WorldView;
 use serde_json::json;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 #[derive(Debug, sqlx::FromRow)]
@@ -36,10 +40,23 @@ struct QueuedTask {
     /// the worker decides (typically its provisioned default).
     preferred_backend: Option<String>,
     preferred_model: Option<String>,
+    /// P3 Theme C follow-up (Option B): joined from `agents.backend`. Used as
+    /// the default backend when `preferred_backend` is NULL and the scheduler
+    /// is in per-task mode (the field is also forwarded to `--backend` so the
+    /// worker has a fallback when no preferred override is set).
+    startup_id: String,
+    agent_backend: String,
+    workspace_path: String,
 }
 
 /// Run one scheduler tick. Returns the number of tasks dispatched
-/// (transitioned to `in_progress` and pushed to the worker out_bus).
+/// (transitioned to `in_progress` and either pushed to the worker out_bus
+/// in legacy mode or handed to the supervisor to spawn a one-shot worker
+/// process in per-task mode).
+///
+/// `supervisor` is honored only when `CLIPTOWN_PER_TASK_WORKERS=1` AND a
+/// handle is supplied (loop_::spawn passes one in production; tests pass
+/// `None` to keep the legacy out_bus path).
 pub async fn tick(
     world: &mut WorldView,
     paths: &mut PathStore,
@@ -47,12 +64,16 @@ pub async fn tick(
     graph: &RoomGraph,
     out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
     pool: &SqlitePool,
+    supervisor: Option<&Arc<AgentSupervisor>>,
 ) -> usize {
     let queued: Vec<QueuedTask> = match sqlx::query_as(
-        "SELECT id, title, description, assignee_agent_id, required_room, parent_id, \
-                preferred_backend, preferred_model \
-         FROM tasks \
-         WHERE status = 'queued' AND assignee_agent_id IS NOT NULL",
+        "SELECT t.id, t.title, t.description, t.assignee_agent_id, t.required_room, \
+                t.parent_id, t.preferred_backend, t.preferred_model, \
+                t.startup_id, a.backend AS agent_backend, s.workspace_path \
+         FROM tasks t \
+         JOIN agents a ON a.id = t.assignee_agent_id \
+         JOIN startups s ON s.id = t.startup_id \
+         WHERE t.status = 'queued' AND t.assignee_agent_id IS NOT NULL",
     )
     .fetch_all(pool)
     .await
@@ -128,14 +149,25 @@ pub async fn tick(
             }
         }
 
-        // Codex round-5 P1#1: gate the transition on a live delivery target.
-        // Without this, a worker that's still connecting (or that just
-        // disconnected) ends up with a task wedged in `in_progress` in SQL
-        // while no `task_assigned` ever arrives — the scheduler only re-queries
-        // `queued` tasks, so it never re-dispatches. Skip this iteration; the
-        // task stays `queued` and the next tick will retry once the worker
-        // registers.
-        if !out_bus.contains_key(&agent_id) {
+        // Codex round-5 P1#1 / Theme C Option B: liveness gate, polarity
+        // depends on the mode.
+        //
+        // Legacy (long-running daemon): a worker that's still connecting (or
+        // that just disconnected) ends up with a task wedged in `in_progress`
+        // in SQL while no `task_assigned` ever arrives — the scheduler only
+        // re-queries `queued` tasks, so it never re-dispatches. We require
+        // an `out_bus` entry before flipping state.
+        //
+        // Per-task (`CLIPTOWN_PER_TASK_WORKERS=1`): inverse — an out_bus
+        // entry means a previously-spawned worker is still mid-task for this
+        // agent. Don't double-spawn. Avatar.status == "idle" + out_bus empty
+        // = safe to spawn a fresh worker.
+        let per_task_mode = per_task_workers_enabled() && supervisor.is_some();
+        if per_task_mode {
+            if out_bus.contains_key(&agent_id) {
+                continue;
+            }
+        } else if !out_bus.contains_key(&agent_id) {
             continue;
         }
 
@@ -174,31 +206,79 @@ pub async fn tick(
         )
         .await;
 
-        let payload = WorkerOutbound::TaskAssigned {
-            v: 1,
-            task_id: task.id.clone(),
-            title: task.title.clone(),
-            description: task.description.clone(),
-            required_room: task.required_room.clone(),
-            parent_id: task.parent_id.clone(),
-            preferred_backend: task.preferred_backend.clone(),
-            preferred_model: task.preferred_model.clone(),
-        };
-        let payload_json = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
-        // The contains_key check above is racy w.r.t. a worker disconnect
-        // between then and now; treat a missing entry the same as a closed
-        // channel and roll back.
-        let send_result = match out_bus.get(&agent_id) {
-            Some(tx) => tx.try_send(payload_json),
-            None => Err(tokio::sync::mpsc::error::TrySendError::Closed(json!({}))),
-        };
-        if let Err(err) = send_result {
-            // Channel full or closed — roll back the SQL transition and the
-            // in-memory avatar status so the next tick re-attempts dispatch.
-            let kind = match err {
-                tokio::sync::mpsc::error::TrySendError::Full(_) => "full",
-                tokio::sync::mpsc::error::TrySendError::Closed(_) => "closed",
+        let dispatch_failed_reason: Option<&'static str> = if per_task_mode {
+            // Per-task: hand off to the supervisor. The supervisor returns
+            // once the spawn syscall has succeeded; the worker connects WS,
+            // spawns its adapter, runs to completion, and exits cleanly. The
+            // supervisor's existing watch_loop returns on clean exit so no
+            // respawn fires.
+            let sup = supervisor.expect("checked above");
+            let secret = std::env::var(format!("CLIPTOWN_AGENT_SECRET_{}", agent_id))
+                .unwrap_or_else(|_| "dev-secret".to_string());
+            let world_url = std::env::var("CLIPTOWN_WORLD_WS_URL")
+                .unwrap_or_else(|_| "ws://127.0.0.1:8080/ws/worker".to_string());
+            let prompt = format!(
+                "You are agent {agent} in startup {sid}. Implement task '{title}':\n\n\
+                 {desc}\n\nWhen complete, call the `task_done` MCP tool with \
+                 artifact_path \"workspaces/{sid}/artifacts/{tid}.md\". Save your \
+                 output to that path first.",
+                agent = agent_id,
+                sid = task.startup_id,
+                title = task.title,
+                desc = task.description,
+                tid = task.id,
+            );
+            let cfg = SpawnConfig {
+                agent_id: agent_id.clone(),
+                startup_id: task.startup_id.clone(),
+                world_url,
+                secret,
+                workspace: task.workspace_path.clone(),
+                backend: task.agent_backend.clone(),
+                task: Some(TaskSpawn {
+                    task_id: task.id.clone(),
+                    prompt,
+                    preferred_backend: task.preferred_backend.clone(),
+                    preferred_model: task.preferred_model.clone(),
+                }),
             };
+            match sup.spawn_agent(cfg).await {
+                Ok(()) => None,
+                Err(e) => {
+                    tracing::warn!(component = "scheduler",
+                        agent_id = %agent_id, task_id = %task.id, error = %e,
+                        "supervisor spawn_for_task failed"
+                    );
+                    Some("spawn_failed")
+                }
+            }
+        } else {
+            let payload = WorkerOutbound::TaskAssigned {
+                v: 1,
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                description: task.description.clone(),
+                required_room: task.required_room.clone(),
+                parent_id: task.parent_id.clone(),
+                preferred_backend: task.preferred_backend.clone(),
+                preferred_model: task.preferred_model.clone(),
+            };
+            let payload_json = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
+            // The contains_key check above is racy w.r.t. a worker disconnect
+            // between then and now; treat a missing entry the same as a closed
+            // channel and roll back.
+            let send_result = match out_bus.get(&agent_id) {
+                Some(tx) => tx.try_send(payload_json),
+                None => Err(tokio::sync::mpsc::error::TrySendError::Closed(json!({}))),
+            };
+            match send_result {
+                Ok(()) => None,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Some("full"),
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Some("closed"),
+            }
+        };
+
+        if let Some(reason) = dispatch_failed_reason {
             let _ = sqlx::query(
                 "UPDATE tasks SET status = 'queued', updated_at = unixepoch() WHERE id = ?",
             )
@@ -211,8 +291,8 @@ pub async fn tick(
             tracing::warn!(component = "scheduler",
                 agent_id = %agent_id,
                 task_id = %task.id,
-                reason = kind,
-                "out_bus delivery failed, rolled back to queued"
+                reason = reason,
+                "dispatch failed, rolled back to queued"
             );
             continue;
         }

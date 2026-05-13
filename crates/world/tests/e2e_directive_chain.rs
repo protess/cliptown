@@ -205,7 +205,7 @@ async fn directive_to_founder_then_subtask_then_assigned() {
     assert_eq!(status, "queued", "founder is manager → queued, not proposed");
 
     // ── Step 3: scheduler tick → task_assigned to engineer's out_bus.
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
     assert_eq!(n, 1, "scheduler should dispatch the queued task");
 
     let assigned = eng_rx

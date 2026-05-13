@@ -255,6 +255,14 @@ Same image works on any Docker host. Quick notes:
 - **`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`** — override the CLI's
   upstream endpoint. Used for local-LLM routing (ollama, vLLM,
   LiteLLM proxy, etc.). See [Local LLM](#local-llm-ollama-etc).
+- **`CLIPTOWN_PER_TASK_WORKERS=1`** — opt in to per-task worker
+  spawn. The scheduler hands each `queued` task to the supervisor,
+  which fires a one-shot `worker --real --task-id --prompt
+  --preferred-backend --preferred-model …` process. The legacy
+  long-running daemon spawn at startup-creation time is skipped.
+  Completes the Phase 3 Theme C wire — `tasks.preferred_*` columns
+  now flow through to adapter spawn. Leave unset for the legacy
+  daemon model (smoke harness, anything that hasn't migrated).
 
 Never commit any of these. `.env` is gitignored; `fly secrets` are
 encrypted at rest.

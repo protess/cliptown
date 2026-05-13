@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — per-task worker spawn (Theme C Option B) — 2026-05-13
+**Source:** Phase 3 Theme C follow-up #2 — supervisor side. Closes the Theme C wire end-to-end. PR `<TBD>`.
+
+Was: #58 wired the worker to honor `--preferred-backend` / `--preferred-model` flags, but no one passed them. The agent supervisor was per-agent / startup-time-only — it had no knowledge of tasks or their `preferred_*` columns. The Theme C chain stopped at the worker's CLI argv with no caller.
+
+Fixed: opt-in `CLIPTOWN_PER_TASK_WORKERS=1` flips the production path to per-task spawn. With it set: `create_startup` skips daemon spawn; `scheduler::tick` joins `tasks` + `agents` + `startups`, builds a `SpawnConfig { task: Some(TaskSpawn { prompt, preferred_* }) }`, and calls `supervisor.spawn_agent`; `spawn_child` appends `--real --task-id --prompt --preferred-*` when `cfg.task.is_some()`; out_bus liveness check polarity inverts (presence = busy, don't double-spawn); rollback on spawn failure mirrors the existing out_bus failure path. Env var unset keeps the legacy daemon path unchanged so the smoke harness (which sets `CLIPTOWN_TEST_DISABLE_SUPERVISOR=1` and spawns its worker out-of-band) is untouched. 3 supervisor tests (env-var toggle + per-task argv + legacy negative) and 1 scheduler test (env-off fallback). New `fake_worker_dump_args.sh` fixture lets the test assert argv shape without running a real worker. DEPLOY.md secrets section documents the new env var.
+
 ### M13 chore — worker honors per-task routing preferences — 2026-05-13
 **Source:** Phase 3 Theme C follow-up (worker side of `preferred_backend`/`preferred_model`). PR `<TBD>`.
 
