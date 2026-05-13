@@ -1,5 +1,44 @@
 # Changelog
 
+## M13 — feat: per-task worker spawn (Theme C Option B) (2026-05-13)
+
+Phase 3 Theme C follow-up #2 — the supervisor side. Completes the
+chain Theme C started: `tasks.preferred_*` columns → SQL JOIN in
+scheduler → SpawnConfig → `worker --real --task-id --prompt
+--preferred-backend --preferred-model` → adapter env override
+honoring (#58).
+
+Opt-in via **`CLIPTOWN_PER_TASK_WORKERS=1`**. With the env var set:
+
+- `api_startups::create_startup` skips the legacy long-running
+  daemon spawn — agents have SQL rows but no live worker until a
+  task dispatches.
+- `scheduler::tick` joins `agents` + `startups` to assemble a
+  `SpawnConfig { task: Some(TaskSpawn { prompt, preferred_* }) }`
+  and calls `supervisor.spawn_agent`. A canonical prompt is built
+  from the task title/description with the artifact path baked in.
+- `agent_supervisor::spawn_child` appends `--real --task-id
+  --prompt --preferred-backend --preferred-model` when
+  `cfg.task.is_some()`. Existing watch_loop already returns on
+  clean exit (no respawn) so each task is a one-shot.
+- The out_bus liveness check inverts polarity in per-task mode: an
+  out_bus entry means a previous worker is still mid-task for this
+  agent — skip, don't double-spawn.
+- Rollback on `spawn_agent` failure (worker bin missing, etc.)
+  mirrors the existing out_bus failure path: SQL flips back to
+  queued, avatar.status back to idle.
+
+Env var unset = legacy daemon path unchanged. Smoke harness keeps
+working (it sets `CLIPTOWN_TEST_DISABLE_SUPERVISOR=1` and spawns
+its own worker out-of-band).
+
+3 new supervisor tests cover the env-var toggle, per-task argv
+shape, and the legacy-shape negative case. 1 new scheduler test
+confirms the env-var-off fallback.
+
+Worker-side adapter spawn already honors `--preferred-*` from #58
+so no worker changes were needed.
+
 ## M13 — chore: worker honors per-task routing preferences (2026-05-13)
 
 Phase 3 Theme C follow-up #1. `task_assigned` carries

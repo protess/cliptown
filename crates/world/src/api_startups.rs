@@ -16,7 +16,7 @@
 //! point at the founder. This is enforced by the per-agent insert ordering
 //! below — founder first so its id can be referenced by the others.
 
-use crate::agent_supervisor::SpawnConfig;
+use crate::agent_supervisor::{per_task_workers_enabled, SpawnConfig};
 use crate::health::Health;
 use crate::http::AppState;
 use crate::loop_::Cmd;
@@ -261,8 +261,17 @@ pub async fn create_startup(
             secret,
             workspace: workspace_path.clone(),
             backend: backend.to_string(),
+            task: None,
         };
         if supervisor_disabled {
+            continue;
+        }
+        // P3 Theme C follow-up: in per-task mode, the supervisor doesn't pre-
+        // spawn long-running daemons here. The scheduler tick will call
+        // `spawn_for_task` when a queued task is ready to dispatch, so daemons
+        // at startup-creation time are redundant (and would conflict on WS
+        // auth when the per-task worker connects with the same agent id).
+        if per_task_workers_enabled() {
             continue;
         }
         if let Err(e) = s.supervisor.spawn_agent(cfg).await {

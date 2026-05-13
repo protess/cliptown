@@ -17,6 +17,16 @@ use tokio::sync::Mutex;
 pub const DEFAULT_BACKOFF_MS: [u64; 3] = [1_000, 5_000, 30_000];
 pub const DISSOLVE_GRACE_MS: u64 = 5_000;
 
+/// P3 Theme C follow-up: opt-in switch for per-task worker spawn. When
+/// `CLIPTOWN_PER_TASK_WORKERS=1` is set, `api_startups::create_startup` skips
+/// the legacy long-running daemon and `scheduler::tick` instead calls
+/// `supervisor.spawn_for_task` for each queued task — completing the
+/// Theme C wire. Off by default so the smoke harness and any deployment
+/// that hasn't migrated keeps working unchanged.
+pub fn per_task_workers_enabled() -> bool {
+    std::env::var("CLIPTOWN_PER_TASK_WORKERS").as_deref() == Ok("1")
+}
+
 #[derive(Clone)]
 pub struct SpawnConfig {
     pub agent_id: String,
@@ -25,6 +35,21 @@ pub struct SpawnConfig {
     pub secret: String,
     pub workspace: String,
     pub backend: String,
+    /// P3 Theme C follow-up (Option B): per-task one-shot spawn. When `Some`,
+    /// the worker is launched with `--real --task-id <id> --prompt <p>` plus
+    /// any preferred overrides — i.e. a single adapter invocation against
+    /// this specific task, exiting cleanly when done. When `None`, the
+    /// supervisor preserves the legacy long-running daemon spawn for
+    /// backward compat with the smoke test path.
+    pub task: Option<TaskSpawn>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskSpawn {
+    pub task_id: String,
+    pub prompt: String,
+    pub preferred_backend: Option<String>,
+    pub preferred_model: Option<String>,
 }
 
 #[derive(Clone)]
@@ -139,6 +164,26 @@ impl AgentSupervisor {
             .arg(&cfg.workspace)
             .arg("--backend")
             .arg(&cfg.backend);
+        // P3 Theme C follow-up (Option B): per-task one-shot. The presence of
+        // `cfg.task` flips the worker into `--real` mode with task identity
+        // + Theme C routing preferences plumbed via CLI flags. The worker
+        // spawns the adapter once, runs to completion, sends a budget report,
+        // and exits cleanly — the supervisor's watch_loop already returns on
+        // clean exit, so no respawn fires.
+        if let Some(t) = &cfg.task {
+            command
+                .arg("--real")
+                .arg("--task-id")
+                .arg(&t.task_id)
+                .arg("--prompt")
+                .arg(&t.prompt);
+            if let Some(b) = &t.preferred_backend {
+                command.arg("--preferred-backend").arg(b);
+            }
+            if let Some(m) = &t.preferred_model {
+                command.arg("--preferred-model").arg(m);
+            }
+        }
         command.kill_on_drop(true);
         command.spawn()
     }

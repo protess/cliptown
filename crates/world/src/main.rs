@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cliptown_world::{
     agent_supervisor::{AgentSupervisor, SupervisorConfig},
-    backend_catalog, config, http, loop_, seed,
+    backend_catalog, config, http, loop_, move_sys, seed,
     state::WorldView, storage,
 };
 use std::sync::Arc;
@@ -26,7 +26,25 @@ async fn main() -> Result<()> {
     tracing::info!(component = "world", event = "town_seeded", town_id = "town_default");
 
     let (event_tx, _) = tokio::sync::broadcast::channel::<cliptown_world::protocol::ConsoleOutbound>(4096);
-    let handle = loop_::spawn(WorldView::default(), pool.clone(), event_tx.clone());
+    // P3 Theme C follow-up (Option B): create the supervisor before the loop
+    // spawn so we can hand it in. The loop only consults it when
+    // CLIPTOWN_PER_TASK_WORKERS=1; otherwise legacy out_bus dispatch is
+    // preserved unchanged.
+    let supervisor = Arc::new(AgentSupervisor::new(
+        SupervisorConfig::default(),
+        pool.clone(),
+        event_tx.clone(),
+    ));
+    let layout = seed::TownLayout::default_town();
+    let graph = move_sys::graph_from_layout(&layout);
+    let handle = loop_::spawn_with_layout(
+        WorldView::default(),
+        pool.clone(),
+        layout,
+        graph,
+        event_tx.clone(),
+        Some(supervisor.clone()),
+    );
     tracing::info!(component = "world", event = "loop_started");
 
     // Boot probe — populate catalog before serving traffic
@@ -87,11 +105,6 @@ async fn main() -> Result<()> {
         });
     }
 
-    let supervisor = Arc::new(AgentSupervisor::new(
-        SupervisorConfig::default(),
-        pool.clone(),
-        event_tx.clone(),
-    ));
     let max_review_rounds = cfg.task.max_review_rounds;
     let app = http::router(http::AppState {
         pool, handle, catalog, supervisor, max_review_rounds,
