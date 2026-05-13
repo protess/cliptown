@@ -7,7 +7,7 @@ _(empty)_
 ## Completed
 
 ### M12 P2.2 skills broadcasts + UI — 2026-05-13
-**Source:** P2.2 known-limitation cleanup. PR `<TBD>` (follow-up to #43).
+**Source:** P2.2 known-limitation cleanup. PR `#46` (follow-up to #43).
 
 Was: P2.2 MVP shipped DAO + MCP tools + worker integration but left no operator console UI and no `skill_changed` broadcasts — operators had to use SQL or MCP tools blind.
 
