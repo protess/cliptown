@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M12 P2.2 skills broadcasts + UI — 2026-05-13
+**Source:** P2.2 known-limitation cleanup. PR `<TBD>` (follow-up to #43).
+
+Was: P2.2 MVP shipped DAO + MCP tools + worker integration but left no operator console UI and no `skill_changed` broadcasts — operators had to use SQL or MCP tools blind.
+
+Fixed: 2 new ConsoleOutbound variants (SkillChanged on every mutation, SkillsSnapshot at connect) + 2 new ConsoleInbound (SkillAttach/Detach via operator). All 5 MCP skill handlers emit broadcasts. New `SkillsPanel.tsx` in the operator console: read view + attach dropdown + detach chips. Content authoring (create/edit/delete) still on MCP for now (heavier editor deferred).
+
 ### M12 P2.2 skills system — 2026-05-13
 **Source:** Phase 2 backlog last item (from `docs/superpowers/specs/2026-05-09-real-llm-e2e-design.md` § P2.2). PR `#43`.
 

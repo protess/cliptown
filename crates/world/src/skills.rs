@@ -262,6 +262,75 @@ pub async fn for_agent(
         .collect())
 }
 
+/// SkillsSnapshot row shape: listing metadata + the list of agent_ids
+/// that have this skill attached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillWithAttachments {
+    pub id: String,
+    pub name: String,
+    pub len: i64,
+    pub updated_at: i64,
+    pub attachments: Vec<String>,
+}
+
+/// List all skills in a startup with their attachments. Used by the console
+/// snapshot delivery + the per-mutation broadcast for `kind="upsert"`.
+pub async fn list_with_attachments(
+    pool: &SqlitePool,
+    startup_id: &str,
+) -> Result<Vec<SkillWithAttachments>, SkillError> {
+    let skills: Vec<(String, String, i64, i64)> = sqlx::query_as(
+        "SELECT id, name, length(content_md), updated_at FROM skills \
+         WHERE startup_id = ? ORDER BY name",
+    )
+    .bind(startup_id)
+    .fetch_all(pool)
+    .await?;
+    let mut out: Vec<SkillWithAttachments> = Vec::with_capacity(skills.len());
+    for (id, name, len, updated_at) in skills {
+        let attachments: Vec<(String,)> =
+            sqlx::query_as("SELECT agent_id FROM agent_skills WHERE skill_id = ? ORDER BY agent_id")
+                .bind(&id)
+                .fetch_all(pool)
+                .await?;
+        out.push(SkillWithAttachments {
+            id,
+            name,
+            len,
+            updated_at,
+            attachments: attachments.into_iter().map(|(a,)| a).collect(),
+        });
+    }
+    Ok(out)
+}
+
+/// Fetch all (startup_id, [SkillWithAttachments]) pairs for the SkillsSnapshot
+/// emitted at console connect. Returns a flat map; the caller serializes.
+pub async fn list_all_with_attachments(
+    pool: &SqlitePool,
+) -> Result<std::collections::HashMap<String, Vec<SkillWithAttachments>>, SkillError> {
+    let startups: Vec<(String,)> = sqlx::query_as("SELECT DISTINCT startup_id FROM skills")
+        .fetch_all(pool)
+        .await?;
+    let mut out = std::collections::HashMap::with_capacity(startups.len());
+    for (sid,) in startups {
+        let v = list_with_attachments(pool, &sid).await?;
+        out.insert(sid, v);
+    }
+    Ok(out)
+}
+
+/// Build a serde JSON object from a `SkillWithAttachments` for broadcast use.
+pub fn skill_with_attachments_to_json(s: &SkillWithAttachments) -> serde_json::Value {
+    serde_json::json!({
+        "id": s.id,
+        "name": s.name,
+        "len": s.len,
+        "updated_at": s.updated_at,
+        "attachments": s.attachments,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -102,6 +102,14 @@ export interface MessageVM {
   recipient_id: string | null;
 }
 
+export interface SkillVM {
+  id: string;
+  name: string;
+  len: number;
+  updated_at: number;
+  attachments: string[];
+}
+
 export interface WorldState {
   status: ConnectionStatus;
   avatars: Record<string, AvatarVM>;
@@ -112,6 +120,7 @@ export interface WorldState {
   toasts: ToastVM[];
   modals: ModalVM[];
   messages: MessageVM[];
+  skills: Record<string, Record<string, SkillVM>>;
 }
 
 const INITIAL: WorldState = {
@@ -124,6 +133,7 @@ const INITIAL: WorldState = {
   toasts: [],
   modals: [],
   messages: [],
+  skills: {},
 };
 
 const MAX_SYSTEM_EVENTS = 200;
@@ -292,6 +302,18 @@ function indexTasks(raw: unknown): Record<string, TaskVM> {
   return out;
 }
 
+function coerceSkill(a: Record<string, unknown>): SkillVM {
+  return {
+    id: asString(a.id),
+    name: asString(a.name),
+    len: typeof a.len === "number" ? a.len : 0,
+    updated_at: typeof a.updated_at === "number" ? a.updated_at : 0,
+    attachments: Array.isArray(a.attachments)
+      ? (a.attachments as unknown[]).filter((x): x is string => typeof x === "string")
+      : [],
+  };
+}
+
 function severityFromString(s: unknown): SystemEventVM["severity"] {
   if (s === "warn" || s === "alert" || s === "critical") return s;
   return "info";
@@ -423,6 +445,51 @@ function reducer(state: WorldState, action: Action): WorldState {
       const next = [...state.messages, msg];
       if (next.length > MAX_MESSAGES) next.splice(0, next.length - MAX_MESSAGES);
       return { ...state, messages: next };
+    }
+    case "skills_snapshot": {
+      const startups = (m as { startups?: Record<string, unknown> }).startups ?? {};
+      const out: Record<string, Record<string, SkillVM>> = {};
+      for (const [sid, arr] of Object.entries(startups)) {
+        if (!Array.isArray(arr)) continue;
+        const inner: Record<string, SkillVM> = {};
+        for (const raw of arr) {
+          if (typeof raw !== "object" || raw === null) continue;
+          const skill = coerceSkill(raw as Record<string, unknown>);
+          if (skill.id) inner[skill.id] = skill;
+        }
+        out[sid] = inner;
+      }
+      return { ...state, skills: out };
+    }
+    case "skill_changed": {
+      const sid = asString((m as { startup_id?: unknown }).startup_id);
+      const kind = asString((m as { kind?: unknown }).kind);
+      const skill_id = asString((m as { skill_id?: unknown }).skill_id);
+      const agent_id: string | null =
+        typeof (m as { agent_id?: unknown }).agent_id === "string"
+          ? (m as { agent_id: string }).agent_id
+          : null;
+      const raw = (m as { skill?: unknown }).skill;
+      const next = { ...(state.skills ?? {}) };
+      const inner = { ...(next[sid] ?? {}) };
+      if (kind === "upsert" && typeof raw === "object" && raw !== null) {
+        inner[skill_id] = coerceSkill(raw as Record<string, unknown>);
+      } else if (kind === "delete") {
+        delete inner[skill_id];
+      } else if (kind === "attach" && inner[skill_id] && agent_id) {
+        const existing = inner[skill_id];
+        if (!existing.attachments.includes(agent_id)) {
+          inner[skill_id] = { ...existing, attachments: [...existing.attachments, agent_id] };
+        }
+      } else if (kind === "detach" && inner[skill_id] && agent_id) {
+        const existing = inner[skill_id];
+        inner[skill_id] = {
+          ...existing,
+          attachments: existing.attachments.filter((a) => a !== agent_id),
+        };
+      }
+      next[sid] = inner;
+      return { ...state, skills: next };
     }
     default:
       return state;

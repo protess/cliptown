@@ -32,13 +32,38 @@ path.
 
 ### Known limitations carried forward
 
-- No frontend skill management UI. Operators manage skills via MCP
-  tools or direct SQL.
-- No `skill_changed` ConsoleOutbound broadcasts. Lazy fetch at spawn
-  is the contract; live edits don't affect in-flight tasks.
+- Skill content authoring UI (create/edit/delete) still routes through
+  MCP `skill_upsert` / `skill_delete`. SkillsPanel covers read + attach
+  + detach. Inline content editor is a future PR.
 - No global (non-workspace) skills.
 - No file attachments beyond the markdown content_md body.
 - No versioning / history (upsert is mutable; latest wins).
+
+## M12 — skills broadcasts + read+attach/detach UI (2026-05-13)
+
+P2.2 follow-up that closes two of five known-limitations from the
+initial Phase 2 MVP entry.
+
+- **`ConsoleOutbound::SkillChanged`** broadcast on every skill
+  mutation (upsert / delete / attach / detach). All 5 MCP skill_*
+  handlers + the 2 new console-side arms emit. `kind="upsert"`
+  carries the full listing row so the frontend reducer applies in
+  place without a follow-up fetch.
+- **`ConsoleOutbound::SkillsSnapshot`** delivered right after
+  `WorldViewSnapshot` at console connect. Payload is `{sid: [{id,
+  name, len, updated_at, attachments}]}` for every startup with
+  skills.
+- **`ConsoleInbound::SkillAttach` / `SkillDetach`**: operator-side
+  attach/detach commands (no agent caller required). Skill authoring
+  (create/edit/delete) still flows through MCP `skill_upsert` /
+  `skill_delete` for now — heavier editor UX deferred.
+- **`SkillsPanel.tsx`** in the operator console: lists skills for
+  the currently-possessed startup, attached-agent chips (click to
+  detach), "Attach to…" dropdown of unattached agents.
+
+Known limitations retired by this section: "no frontend skill
+management UI" partially (read + attach/detach is in; create/edit/
+delete still via MCP) and "no `skill_changed` broadcasts" fully.
 
 ## M12 — P2.3 per-task execenv directories (2026-05-13)
 

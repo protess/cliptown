@@ -5,16 +5,44 @@
  * Phase 0 / M4.13 — selection is read from the WorldProvider context so the
  * global keymap (j/k cycle, `t` open-town) can mutate it without prop
  * drilling.
+ *
+ * M12 P2.2 — SkillsPanel added below the Kanban. `possessedStartupId` is
+ * derived from the `__operator__` avatar (same convention as ChatPanel).
  */
+import { useCallback } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 import { TopBar } from "./TopBar.js";
 import { Sidebar } from "./Sidebar.js";
 import { MainHeader } from "./MainHeader.js";
 import { Kanban } from "./Kanban.js";
 import { ChatPanel } from "./ChatPanel.js";
+import { SkillsPanel } from "./SkillsPanel.js";
+
+const OPERATOR_AVATAR_ID = "__operator__";
 
 export function Console() {
-  const { selectedStartupId, setSelectedStartupId } = useWorld();
+  const { state, send, selectedStartupId, setSelectedStartupId } = useWorld();
+
+  // The operator "possesses" a startup by being present as the __operator__
+  // avatar in that startup — same convention as ChatPanel.
+  const possessedStartupId = state.avatars[OPERATOR_AVATAR_ID]?.startup_id ?? null;
+
+  const onSkillAttach = useCallback(
+    (skillId: string, agentId: string) => {
+      if (!possessedStartupId) return;
+      send({ type: "skill_attach", v: 1, startup_id: possessedStartupId, agent_id: agentId, skill_id: skillId });
+    },
+    [send, possessedStartupId],
+  );
+
+  const onSkillDetach = useCallback(
+    (skillId: string, agentId: string) => {
+      if (!possessedStartupId) return;
+      send({ type: "skill_detach", v: 1, startup_id: possessedStartupId, agent_id: agentId, skill_id: skillId });
+    },
+    [send, possessedStartupId],
+  );
+
   return (
     <div
       style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
@@ -44,6 +72,12 @@ export function Console() {
           <div style={{ overflow: "auto", flex: 1 }}>
             <Kanban startupId={selectedStartupId} />
           </div>
+          <SkillsPanel
+            state={state}
+            possessedStartupId={possessedStartupId}
+            onAttach={onSkillAttach}
+            onDetach={onSkillDetach}
+          />
         </main>
       </div>
       <ChatPanel />
