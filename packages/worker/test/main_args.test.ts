@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseWorkerArgs, substitutePlaceholders, pickAdapter } from "../src/main.js";
+import {
+  parseWorkerArgs,
+  substitutePlaceholders,
+  pickAdapter,
+  modelEnvForBackend,
+} from "../src/main.js";
 
 describe("worker arg parsing", () => {
   const baseArgs = [
@@ -62,6 +67,48 @@ describe("worker arg parsing", () => {
 
   it("rejects unknown args under strict mode", () => {
     expect(() => parseWorkerArgs([...baseArgs, "--unknown", "x"])).toThrow();
+  });
+
+  // P3 Theme C honoring
+  it("parses --preferred-backend and --preferred-model when set", () => {
+    const a = parseWorkerArgs([
+      ...baseArgs,
+      "--preferred-backend", "codex",
+      "--preferred-model", "gpt-5-mini",
+    ]);
+    expect(a.preferredBackend).toBe("codex");
+    expect(a.preferredModel).toBe("gpt-5-mini");
+  });
+
+  it("leaves preferred fields undefined when not passed", () => {
+    const a = parseWorkerArgs(baseArgs);
+    expect(a.preferredBackend).toBeUndefined();
+    expect(a.preferredModel).toBeUndefined();
+  });
+
+  it("treats empty --preferred-* values as unset (defensive)", () => {
+    const a = parseWorkerArgs([
+      ...baseArgs,
+      "--preferred-backend", "",
+      "--preferred-model", "",
+    ]);
+    expect(a.preferredBackend).toBeUndefined();
+    expect(a.preferredModel).toBeUndefined();
+  });
+});
+
+describe("modelEnvForBackend", () => {
+  it("maps codex to CODEX_MODEL_ID", () => {
+    expect(modelEnvForBackend("codex")).toBe("CODEX_MODEL_ID");
+  });
+  it("maps opencode to OPENCODE_MODEL", () => {
+    expect(modelEnvForBackend("opencode")).toBe("OPENCODE_MODEL");
+  });
+  it("returns null for claude_code (no model env knob today)", () => {
+    expect(modelEnvForBackend("claude_code")).toBeNull();
+  });
+  it("returns null for unknown backends", () => {
+    expect(modelEnvForBackend("future_backend")).toBeNull();
   });
 });
 

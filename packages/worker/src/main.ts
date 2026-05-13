@@ -30,6 +30,18 @@ export interface ParsedArgs {
    * the WS and exits. Mutually exclusive with `--mock`.
    */
   real: boolean;
+  /**
+   * P3 Theme C honoring: when set, overrides `backend` for adapter selection.
+   * The upstream sets this from `tasks.preferred_backend` so a single task can
+   * opt into a cheaper / heavier backend without re-provisioning the agent.
+   */
+  preferredBackend: string | undefined;
+  /**
+   * P3 Theme C honoring: when set, forwarded to the resolved adapter via its
+   * model env var (CODEX_MODEL_ID, OPENCODE_MODEL, or — pending claude-code
+   * adapter support — CLAUDE_CODE_MODEL).
+   */
+  preferredModel: string | undefined;
 }
 
 export function parseWorkerArgs(argv: string[]): ParsedArgs {
@@ -47,6 +59,8 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
       "fixture":    { type: "string" },
       "prompt":     { type: "string", default: "" },
       "real":       { type: "boolean", default: false },
+      "preferred-backend": { type: "string" },
+      "preferred-model":   { type: "string" },
     },
     strict: true,
     allowPositionals: false,
@@ -71,7 +85,28 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
     fixture:   typeof values["fixture"] === "string" ? values["fixture"] : undefined,
     prompt:    String(values["prompt"]),
     real:      Boolean(values["real"]),
+    preferredBackend: typeof values["preferred-backend"] === "string" && values["preferred-backend"].length > 0
+      ? values["preferred-backend"]
+      : undefined,
+    preferredModel: typeof values["preferred-model"] === "string" && values["preferred-model"].length > 0
+      ? values["preferred-model"]
+      : undefined,
   };
+}
+
+/**
+ * P3 Theme C: map a backend id to the adapter-specific env var name that
+ * controls its model selection. Returns null when the backend has no
+ * supported model env var yet (currently claude_code — the adapter doesn't
+ * thread a model knob; tracked as a known limitation).
+ */
+export function modelEnvForBackend(backend: string): string | null {
+  switch (backend) {
+    case "codex":       return "CODEX_MODEL_ID";
+    case "opencode":    return "OPENCODE_MODEL";
+    case "claude_code": return null;
+    default:            return null;
+  }
 }
 
 /**
@@ -206,7 +241,20 @@ async function main(): Promise<void> {
     // spawn the adapter, log hooks + stdio, wait for CLI exit, close WS, done.
     // MCP traffic flows CLI → world `/mcp` (HTTP) directly per A1' — the
     // worker's `McpProxy` is unused in this path.
-    const adapter = pickAdapter(args.backend);
+    //
+    // P3 Theme C: per-task preferred_backend (when set) overrides the agent's
+    // provisioned backend so a single task can opt into a different CLI.
+    // preferred_model rides via the adapter's model env var (see
+    // modelEnvForBackend). Both are wired from upstream (--preferred-backend /
+    // --preferred-model CLI args); the agent supervisor is not yet
+    // task-preference-aware — that wiring is the next follow-up.
+    const resolvedBackend = args.preferredBackend ?? args.backend;
+    if (args.preferredBackend && args.preferredBackend !== args.backend) {
+      console.log(
+        `[worker] preferred_backend override: ${args.backend} → ${resolvedBackend}`,
+      );
+    }
+    const adapter = pickAdapter(resolvedBackend);
     // `args.worldUrl` is the WS endpoint (ws://host:port/ws/worker). The HTTP
     // base for `/mcp` strips the path and switches scheme. wss:// → https://
     // works too because we replace the literal `ws` prefix.
@@ -245,18 +293,37 @@ async function main(): Promise<void> {
       agentId: args.agentId,
       skills,
     });
+    // P3 Theme C: if preferred_model is set and the resolved backend has a
+    // known model env var, forward via opts.env. claude_code currently lacks
+    // a model env knob — log + skip rather than fail so the spawn still works
+    // with the adapter's CLI default.
+    const adapterEnv: NodeJS.ProcessEnv = {};
+    if (args.preferredModel) {
+      const envName = modelEnvForBackend(resolvedBackend);
+      if (envName) {
+        adapterEnv[envName] = args.preferredModel;
+        console.log(
+          `[worker] preferred_model → ${envName}=${args.preferredModel}`,
+        );
+      } else {
+        console.warn(
+          `[worker] preferred_model=${args.preferredModel} ignored: backend ${resolvedBackend} has no model env knob`,
+        );
+      }
+    }
     console.log(
-      `[worker] real mode: spawning ${args.backend} → MCP @ ${mcpWorldUrl}/mcp (cwd=${workdir})`,
+      `[worker] real mode: spawning ${resolvedBackend} → MCP @ ${mcpWorldUrl}/mcp (cwd=${workdir})`,
     );
     const spawned = await adapter.spawn({
       prompt: args.prompt,
       cwd: workdir,
       mcp_world_url: mcpWorldUrl,
       mcp_token: mcpToken,
+      env: Object.keys(adapterEnv).length > 0 ? adapterEnv : undefined,
       onHook: (e) => console.log(`[worker] hook: ${e.kind} tool=${e.tool}`),
       onLog: (stream, line) => {
         const out = stream === "stderr" ? process.stderr : process.stdout;
-        out.write(`[${args.backend}] ${line}`);
+        out.write(`[${resolvedBackend}] ${line}`);
       },
     });
     const exit = await spawned.wait();

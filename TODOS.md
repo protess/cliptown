@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 chore — worker honors per-task routing preferences — 2026-05-13
+**Source:** Phase 3 Theme C follow-up (worker side of `preferred_backend`/`preferred_model`). PR `<TBD>`.
+
+Was: Theme C (#53) added `preferred_backend` + `preferred_model` columns + forwarded both fields via `TaskAssigned`. Nothing downstream read them — the wire was dead.
+
+Fixed: worker grows two CLI flags `--preferred-backend` / `--preferred-model`. When `--preferred-backend` is set, it overrides `--backend` for adapter selection in `--real` mode. When `--preferred-model` is set, it's forwarded to the resolved adapter via its model env var (codex → `CODEX_MODEL_ID`, opencode → `OPENCODE_MODEL`). New `modelEnvForBackend()` helper exported + unit-tested. claude_code returns null today — the adapter doesn't thread a model knob (CLI has `--model`, the wrapper doesn't expose it); flagged as a known limit. 5 new tests in `main_args.test.ts`. Agent supervisor still per-agent-default — next wiring step is to extend `SpawnConfig` + supervisor spawn path so the world auto-injects `--preferred-*` based on the dispatched task's row.
+
 ### M13 chore — execenv GC script — 2026-05-13
 **Source:** Phase 3 roadmap carry-forward #2 (Execenv GC daemon). PR `<TBD>`.
 

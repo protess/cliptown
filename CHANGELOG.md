@@ -1,5 +1,32 @@
 # Changelog
 
+## M13 — chore: worker honors per-task routing preferences (2026-05-13)
+
+Phase 3 Theme C follow-up #1. `task_assigned` carries
+`preferred_backend` + `preferred_model` since #53, but nothing
+downstream read them. This PR wires the consumer end.
+
+- **`packages/worker/src/main.ts`** — two new CLI args:
+  `--preferred-backend` (overrides `--backend` for adapter
+  selection in `--real` mode) and `--preferred-model` (passed to
+  the resolved adapter via its model env var).
+- **`modelEnvForBackend(backend)`** helper — maps `codex →
+  CODEX_MODEL_ID` and `opencode → OPENCODE_MODEL`. claude_code
+  returns null today: the adapter doesn't thread a model knob
+  (CLI has `--model`, the adapter wrapper doesn't expose it) —
+  flagged as a known limitation.
+- Real-mode spawn picks adapter via the resolved (preferred-or-
+  default) backend, logs the override decision, and merges the
+  model env var into `SpawnOpts.env` so the adapter inherits it.
+- 5 new tests in `packages/worker/test/main_args.test.ts` cover
+  the CLI parse + the env-mapping helper.
+
+**Not in this PR:** the agent supervisor doesn't yet read
+`tasks.preferred_*` from SQL when spawning workers — it's still
+per-agent-default. The next wiring step (smaller follow-up) is to
+extend `SpawnConfig` + the supervisor's spawn path so the world
+auto-injects `--preferred-*` based on the task being dispatched.
+
 ## M13 — chore: execenv GC script (2026-05-13)
 
 Carry-forward housekeeping #2 from the Phase 3 roadmap. Per-task
