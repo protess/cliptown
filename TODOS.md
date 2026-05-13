@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 Phase 3 Theme F — documentation pass — 2026-05-13
+**Source:** Phase 3 roadmap Theme F. PR `<TBD>`.
+
+Was: contributor + operator docs were sparse. README focused on stale Phase 0 details; no ARCHITECTURE, no OPERATOR, no AGENT guide. Onboarding required code-reading.
+
+Fixed: README rewrite reflecting Phase 0-2 sealed + Phase 3 underway with updated test counts and new "Real-LLM smoke" + "Where things live" sections. New ARCHITECTURE.md with topology diagram + component walkthrough + 21-tool MCP catalog summary + invariants. New docs/OPERATOR.md covering console UX (possess / kanban / skills / directives / budget / system events / SQL recipes). New docs/AGENT.md covering the adapter-CLI POV (workdir layout, CLAUDE.md contract, all 21 MCP tools categorized, hooks, budget, sandbox, common patterns).
+
 ### M13 Phase 3 Theme A — production deploy story — 2026-05-13
 **Source:** Phase 3 roadmap Theme A (from `docs/superpowers/specs/2026-05-13-phase-3-roadmap.md`). PR `<TBD>`.
 

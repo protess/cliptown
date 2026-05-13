@@ -1,5 +1,31 @@
 # Changelog
 
+## M13 — Phase 3 Theme F: documentation pass (2026-05-13)
+
+Second Phase 3 theme. cliptown's contributor and operator docs were
+sparse. README focused on Phase 0 details that have since rotted; no
+ARCHITECTURE, no OPERATOR, no AGENT guide.
+
+- **`README.md`** rewritten — current status reflects sealed Phase
+  0-2, Phase 3 underway. Test counts updated. New "Real-LLM smoke"
+  section. "Where things live" index points at the new docs.
+- **`ARCHITECTURE.md`** (new) — topology diagram, per-component
+  walkthrough (world, worker, adapters, frontend, protocol), MCP
+  tools catalog summary (21 tools across task lifecycle / knowledge
+  / world interaction / skills), architectural invariants, spec
+  cross-references.
+- **`docs/OPERATOR.md`** (new) — operator console guide. Health
+  buckets, possess flow, kanban actions (accept/reject proposal,
+  force accept/fail, review rounds), skills management, directives,
+  budget controls, system events, SQL spelunking recipes.
+- **`docs/AGENT.md`** (new) — what cliptown looks like from inside
+  an adapter-spawned CLI. Workdir layout, CLAUDE.md contract, all
+  21 MCP tools categorized, hook events, budget ladder, sandboxing
+  rules, common patterns (finish task / propose subtask / read peer
+  artifact / author skill).
+
+No code paths affected; all tests stay green.
+
 ## M13 — Phase 3 Theme A: production deploy story (2026-05-13)
 
 First Phase 3 theme. cliptown now ships a Dockerfile, docker-compose
