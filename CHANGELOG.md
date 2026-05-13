@@ -1,5 +1,31 @@
 # Changelog
 
+## M13 — Phase 3 Theme D: observability (2026-05-13)
+
+Third Phase 3 theme. cliptown now exposes a Prometheus-style
+`/metrics` endpoint so ops can scrape liveness and load.
+
+- **`/metrics`** HTTP endpoint emits text exposition format. Metrics:
+  - `cliptown_mcp_calls_total` (counter, all MCP tool call attempts)
+  - `cliptown_mcp_errors_total` (counter, calls that returned mcp_error)
+  - `cliptown_agents{health="..."}` (gauge, 4 labels for P2.1 health buckets)
+  - `cliptown_startups_active` (gauge)
+  - `cliptown_budget_spent_usd{startup_id="..."}` + `cliptown_budget_cap_usd{...}` (gauges)
+  - `cliptown_tasks{status="..."}` (gauge, 8 status labels)
+  - `cliptown_tick_seq` (counter, monotonic loop liveness)
+- **`crates/world/src/metrics.rs`** (new) — hand-rolled text format
+  renderer + atomic global counters. No external prometheus crate
+  dependency. 2 unit tests cover zero-state rendering + counter
+  increment.
+- **`mcp_dispatch::dispatch`** increments `mcp_calls_total` per call
+  and `mcp_errors_total` per error.
+
+Scrape latency: O(active startups + tasks). Single-digit ms on
+current scale; revisit caching if it climbs past 100ms.
+
+Structured tracing spans through hot paths deferred — incremental
+add as needed.
+
 ## M13 — Phase 3 Theme F: documentation pass (2026-05-13)
 
 Second Phase 3 theme. cliptown's contributor and operator docs were

@@ -94,6 +94,9 @@ pub async fn dispatch(
         None => return mcp_err(&corr_id, "unknown_agent", "agent not found in world"),
     };
 
+    // P3 Theme D: per-call counter for /metrics.
+    crate::metrics::COUNTERS.inc_call();
+
     let result: HandlerResult = match tool.as_str() {
         "move_intent" => {
             handle_move_intent(world, paths, layout, graph, pool, event_tx, &caller, args).await
@@ -128,7 +131,10 @@ pub async fn dispatch(
 
     match result {
         Ok(v) => json!({"type":"mcp_reply","v":1,"corr_id":corr_id,"result":v}),
-        Err((code, message)) => mcp_err(&corr_id, &code, &message),
+        Err((code, message)) => {
+            crate::metrics::COUNTERS.inc_error();
+            mcp_err(&corr_id, &code, &message)
+        }
     }
 }
 
