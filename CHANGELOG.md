@@ -1,5 +1,33 @@
 # Changelog
 
+## M12 — P2.3 per-task execenv directories (2026-05-13)
+
+Worker now creates a per-task execenv directory at
+`<workspaces_root>/workspaces/<sid>/<tid>/workdir/` before each
+`--real` adapter spawn, and uses that workdir as the adapter's cwd.
+
+- **`packages/worker/src/execenv.ts`** (new) — `prepareWorkdir({
+  workspacesRoot, startupId, taskId, agentId })` creates the workdir
+  hierarchy, an absolute symlink `workdir/workspaces` →
+  `<workspaces_root>/workspaces`, and an injected `CLAUDE.md` with
+  agent_id / task_id / startup_id + the canonical artifact path
+  contract. Idempotent.
+- **`--task-id`** is now a required worker arg. The smoke script
+  passes the existing `TASK_ID` value through.
+- **No protocol / world / adapter changes.** The symlink lets the
+  agent's existing relative path `workspaces/<sid>/artifacts/<tid>.md`
+  resolve to the canonical location without touching the prompt or
+  the world's `task_done` validator.
+- **Reserves space for P2.2 (skills).** Sibling dirs under
+  `<sid>/<tid>/` (e.g., `skills/`, `cache/`) are layout-ready; this
+  PR doesn't ship any skill machinery.
+
+### Known limitations carried forward
+
+- No GC daemon for old execenv directories. Local smoke cleans up via
+  tmpdir; long-running deployments will need a sweeper (separate
+  follow-up).
+
 ## M12 — P2.1 daemon health buckets (2026-05-12)
 
 Replaces cliptown's binary worker-liveness signal (WS connected vs
