@@ -64,6 +64,11 @@ pub enum ConsoleInbound {
     OperatorForceAccept { v: u8, task_id: String },
     OperatorForceFail { v: u8, task_id: String, note: String },
     OperatorRecheckBackends,
+    /// P2.2 operator-side skills management (attach/detach only; upsert/
+    /// delete still go through MCP tools). `startup_id` is explicit so the
+    /// operator can manage skills across startups without re-possessing.
+    SkillAttach { v: u8, startup_id: String, agent_id: String, skill_id: String },
+    SkillDetach { v: u8, startup_id: String, agent_id: String, skill_id: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, TS, Clone)]
@@ -103,4 +108,21 @@ pub enum ConsoleOutbound {
         body: String,
         in_response_to_task: Option<String>,
     },
+    /// P2.2 broadcast on every skills mutation. `kind` is "upsert", "delete",
+    /// "attach", or "detach". `agent_id` is `Some` for attach/detach.
+    /// For `kind="upsert"` the `skill` field carries the listing row
+    /// (`{id, name, len, updated_at, attachments}`) so the frontend can apply
+    /// in place without a follow-up fetch.
+    SkillChanged {
+        v: u8,
+        startup_id: String,
+        kind: String,
+        skill_id: String,
+        agent_id: Option<String>,
+        skill: Option<serde_json::Value>,
+    },
+    /// P2.2 initial state delivery — emitted at console connect after the
+    /// WorldViewSnapshot. `startups` is `{sid: [{id, name, len, updated_at,
+    /// attachments: [agent_id]}]}` for every startup the operator can see.
+    SkillsSnapshot { v: u8, startups: serde_json::Value },
 }

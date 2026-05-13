@@ -115,11 +115,11 @@ pub async fn dispatch(
         "ask_peer" => handle_ask_peer(args).await,
         "observe_world" => handle_observe_world(world, pool, &caller, args).await,
         "read_artifact" => handle_read_artifact(&caller, args).await,
-        "skill_upsert" => handle_skill_upsert(pool, &caller, args).await,
+        "skill_upsert" => handle_skill_upsert(pool, event_tx, &caller, args).await,
         "skill_list" => handle_skill_list(pool, &caller, args).await,
-        "skill_attach" => handle_skill_attach(pool, &caller, args).await,
-        "skill_detach" => handle_skill_detach(pool, &caller, args).await,
-        "skill_delete" => handle_skill_delete(pool, &caller, args).await,
+        "skill_attach" => handle_skill_attach(pool, event_tx, &caller, args).await,
+        "skill_detach" => handle_skill_detach(pool, event_tx, &caller, args).await,
+        "skill_delete" => handle_skill_delete(pool, event_tx, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
             format!("no handler for tool: {}", tool),
@@ -1201,13 +1201,34 @@ async fn handle_read_artifact(caller: &AvatarView, args: Value) -> HandlerResult
 
 async fn handle_skill_upsert(
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
     let name = require_str(&args, "name")?.to_string();
     let content_md = require_str(&args, "content_md")?.to_string();
     match crate::skills::upsert(pool, &caller.startup_id, &name, &content_md).await {
-        Ok((id, created)) => Ok(json!({"id": id, "created": created})),
+        Ok((id, created)) => {
+            // P2.2 broadcast: re-fetch the listing row so frontend can apply
+            // in place without a follow-up snapshot.
+            if let Ok(rows) =
+                crate::skills::list_with_attachments(pool, &caller.startup_id).await
+            {
+                let skill_json = rows
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(crate::skills::skill_with_attachments_to_json);
+                let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                    v: 1,
+                    startup_id: caller.startup_id.clone(),
+                    kind: "upsert".to_string(),
+                    skill_id: id.clone(),
+                    agent_id: None,
+                    skill: skill_json,
+                });
+            }
+            Ok(json!({"id": id, "created": created}))
+        }
         Err(crate::skills::SkillError::BadName) => Err((
             "bad_skill_name".into(),
             format!("name must match [A-Za-z0-9_-]{{1,64}}; got {name:?}"),
@@ -1253,13 +1274,24 @@ async fn handle_skill_list(
 
 async fn handle_skill_attach(
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
     let agent_id = require_str(&args, "agent_id")?.to_string();
     let skill_id = require_str(&args, "skill_id")?.to_string();
     match crate::skills::attach(pool, &caller.startup_id, &agent_id, &skill_id).await {
-        Ok(()) => Ok(json!({"ok": true})),
+        Ok(()) => {
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                v: 1,
+                startup_id: caller.startup_id.clone(),
+                kind: "attach".to_string(),
+                skill_id: skill_id.clone(),
+                agent_id: Some(agent_id.clone()),
+                skill: None,
+            });
+            Ok(json!({"ok": true}))
+        }
         Err(crate::skills::SkillError::NotFound) => {
             Err(("not_found".into(), "agent or skill not found".into()))
         }
@@ -1274,13 +1306,24 @@ async fn handle_skill_attach(
 
 async fn handle_skill_detach(
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
     let agent_id = require_str(&args, "agent_id")?.to_string();
     let skill_id = require_str(&args, "skill_id")?.to_string();
     match crate::skills::detach(pool, &caller.startup_id, &agent_id, &skill_id).await {
-        Ok(()) => Ok(json!({"ok": true})),
+        Ok(()) => {
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                v: 1,
+                startup_id: caller.startup_id.clone(),
+                kind: "detach".to_string(),
+                skill_id: skill_id.clone(),
+                agent_id: Some(agent_id.clone()),
+                skill: None,
+            });
+            Ok(json!({"ok": true}))
+        }
         Err(crate::skills::SkillError::NotFound) => {
             Err(("not_found".into(), "agent or skill not found".into()))
         }
@@ -1295,12 +1338,24 @@ async fn handle_skill_detach(
 
 async fn handle_skill_delete(
     pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
     caller: &AvatarView,
     args: Value,
 ) -> HandlerResult {
     let skill_id = require_str(&args, "skill_id")?.to_string();
-    match crate::skills::delete(pool, &caller.startup_id, &skill_id).await {
-        Ok(()) => Ok(json!({"ok": true})),
+    let startup_id = caller.startup_id.clone();
+    match crate::skills::delete(pool, &startup_id, &skill_id).await {
+        Ok(()) => {
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                v: 1,
+                startup_id,
+                kind: "delete".to_string(),
+                skill_id: skill_id.clone(),
+                agent_id: None,
+                skill: None,
+            });
+            Ok(json!({"ok": true}))
+        }
         Err(crate::skills::SkillError::NotFound) => {
             Err(("not_found".into(), format!("no skill: {skill_id}")))
         }

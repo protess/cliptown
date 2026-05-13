@@ -264,6 +264,50 @@ pub async fn dispatch(
             // POST /api/backend-catalog/recheck HTTP endpoint.
             json!({"type":"ok","kind":"operator_recheck_backends","note":"use POST /api/backend-catalog/recheck"})
         }
+        ConsoleInbound::SkillAttach { startup_id, agent_id, skill_id, .. } => {
+            match crate::skills::attach(pool, &startup_id, &agent_id, &skill_id).await {
+                Ok(()) => {
+                    let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                        v: 1,
+                        startup_id: startup_id.clone(),
+                        kind: "attach".to_string(),
+                        skill_id: skill_id.clone(),
+                        agent_id: Some(agent_id.clone()),
+                        skill: None,
+                    });
+                    json!({"type":"ok","kind":"skill_attach"})
+                }
+                Err(crate::skills::SkillError::NotFound) => {
+                    json!({"type":"error","reason":"not_found"})
+                }
+                Err(crate::skills::SkillError::CrossStartup) => {
+                    json!({"type":"error","reason":"cross_startup"})
+                }
+                Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
+            }
+        }
+        ConsoleInbound::SkillDetach { startup_id, agent_id, skill_id, .. } => {
+            match crate::skills::detach(pool, &startup_id, &agent_id, &skill_id).await {
+                Ok(()) => {
+                    let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                        v: 1,
+                        startup_id: startup_id.clone(),
+                        kind: "detach".to_string(),
+                        skill_id: skill_id.clone(),
+                        agent_id: Some(agent_id.clone()),
+                        skill: None,
+                    });
+                    json!({"type":"ok","kind":"skill_detach"})
+                }
+                Err(crate::skills::SkillError::NotFound) => {
+                    json!({"type":"error","reason":"not_found"})
+                }
+                Err(crate::skills::SkillError::CrossStartup) => {
+                    json!({"type":"error","reason":"cross_startup"})
+                }
+                Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
+            }
+        }
     }
 }
 

@@ -245,6 +245,34 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
+    // P2.2: send the SkillsSnapshot right after WorldViewSnapshot so the
+    // SkillsPanel hydrates immediately. Failure here logs and proceeds —
+    // skills are optional product surface.
+    {
+        let by_startup = crate::skills::list_all_with_attachments(&state.pool)
+            .await
+            .unwrap_or_default();
+        let payload: serde_json::Value = by_startup
+            .into_iter()
+            .map(|(sid, rows)| {
+                let arr: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(crate::skills::skill_with_attachments_to_json)
+                    .collect();
+                (sid, serde_json::Value::Array(arr))
+            })
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        let frame = json!({
+            "type": "skills_snapshot",
+            "v": 1,
+            "startups": payload,
+        });
+        if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
+            return;
+        }
+    }
+
     // Phase 2: split + select! loop. Inbound frames go to the world via
     // `Cmd::HandleConsoleMsg`; world-view changes are pushed back as fresh
     // snapshots. Mirrors the structure used by `handle_worker`.
