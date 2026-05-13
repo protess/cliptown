@@ -1,5 +1,29 @@
 # Changelog
 
+## M13 — Phase 3 Theme C: per-task routing preferences (2026-05-13)
+
+Fifth Phase 3 theme. Tasks were routed implicitly to whatever
+backend/model was provisioned on the agent at startup; cheaper
+models couldn't be opted into for trivial subtasks.
+
+- **`crates/world/migrations/0004_task_routing_preferences.sql`**
+  (new) — adds nullable `preferred_backend` + `preferred_model` to
+  `tasks`. NULL falls back to the agent's provisioned default.
+- **`WorkerOutbound::TaskAssigned`** (ts-rs auto-export) carries the
+  two new optional fields; the scheduler reads them from the queued-
+  task row and forwards them on dispatch.
+- **`task_set_preference` MCP tool** (22 tools total now) — manager-
+  or-assignee can set/clear either field. Both managers (budget POV)
+  and assignees (load POV) are reasonable callers. Cross-startup
+  blocked, stranger callers refused. Audit row appended +
+  `task_routing_changed` system_event broadcast for operator audit.
+- Worker-side adapter honoring is documented but not enforced — the
+  field arrives on `task_assigned`; worker implementations decide
+  whether to override the spawn arguments. Carry-forward note.
+
+Cost variance telemetry (estimated-vs-actual emission to
+system_events) deferred — needs estimate inputs first.
+
 ## M13 — Phase 3 Theme B: operator RBAC (2026-05-13)
 
 Fourth Phase 3 theme. Console access is no longer a single shared

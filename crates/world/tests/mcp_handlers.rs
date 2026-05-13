@@ -1047,6 +1047,131 @@ async fn subtask_create_with_unknown_assignee_rejected() {
     fx.expect_no_broadcasts();
 }
 
+// ── P3 Theme C: task_set_preference ────────────────────────────────────────
+
+/// Manager of the task can set both backend + model. Audit + system_event
+/// fan out, SQL reflects the override.
+#[tokio::test]
+async fn task_set_preference_by_manager_updates_sql() {
+    let mut fx = fixture().await;
+    let r = fx
+        .call(
+            "m1",
+            "task_set_preference",
+            json!({
+                "task_id":"T1",
+                "preferred_backend":"claude_code",
+                "preferred_model":"claude-haiku-4-5"
+            }),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_reply", "{r}");
+    assert_eq!(r["result"]["task_id"], "T1");
+    let row: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT preferred_backend, preferred_model FROM tasks WHERE id='T1'")
+            .fetch_one(&fx.pool).await.unwrap();
+    assert_eq!(row.0.as_deref(), Some("claude_code"));
+    assert_eq!(row.1.as_deref(), Some("claude-haiku-4-5"));
+    // Audit trail records the change.
+    let audit: (String,) = sqlx::query_as("SELECT audit_trail FROM tasks WHERE id='T1'")
+        .fetch_one(&fx.pool).await.unwrap();
+    assert!(audit.0.contains("task_set_preference"), "audit: {}", audit.0);
+}
+
+/// Assignee may also override (knows how heavy the task feels).
+#[tokio::test]
+async fn task_set_preference_by_assignee_allowed() {
+    let mut fx = fixture().await;
+    let r = fx
+        .call(
+            "e1",
+            "task_set_preference",
+            json!({"task_id":"T1","preferred_model":"claude-opus-4-7"}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_reply", "{r}");
+    let row: (Option<String>,) =
+        sqlx::query_as("SELECT preferred_model FROM tasks WHERE id='T1'")
+            .fetch_one(&fx.pool).await.unwrap();
+    assert_eq!(row.0.as_deref(), Some("claude-opus-4-7"));
+}
+
+/// Strangers (not manager, not assignee) are refused.
+#[tokio::test]
+async fn task_set_preference_by_stranger_rejected() {
+    let mut fx = fixture().await;
+    // Add a third agent in the same startup that's neither manager nor assignee.
+    sqlx::query(
+        "INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status) \
+         VALUES ('e1b', 's1', 'E1B', 'engineer', 'claude_code', 'm', '{}', 'suite_1', 'idle')"
+    ).execute(&fx.pool).await.unwrap();
+    fx.world.avatars.insert(
+        "e1b".to_string(),
+        AvatarView {
+            agent_id: "e1b".into(),
+            startup_id: "s1".into(),
+            role: "engineer".into(),
+            backend: "claude_code".into(),
+            current_pos: (5, 3),
+            target_pos: None,
+            room_id: "suite_1".into(),
+            status: "idle".into(),
+            last_seen_at: None,
+            health: cliptown_world::health::Health::Offline,
+        },
+    );
+    let r = fx
+        .call(
+            "e1b",
+            "task_set_preference",
+            json!({"task_id":"T1","preferred_model":"x"}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_error", "{r}");
+    assert_eq!(r["code"], "no_permission");
+    // SQL untouched.
+    let row: (Option<String>,) =
+        sqlx::query_as("SELECT preferred_model FROM tasks WHERE id='T1'")
+            .fetch_one(&fx.pool).await.unwrap();
+    assert!(row.0.is_none());
+}
+
+/// Cross-startup: m2 cannot set preferences on s1's T1.
+#[tokio::test]
+async fn task_set_preference_rejects_cross_startup() {
+    let mut fx = fixture().await;
+    let r = fx
+        .call(
+            "m2",
+            "task_set_preference",
+            json!({"task_id":"T1","preferred_model":"x"}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_error", "{r}");
+    assert_eq!(r["code"], "cross_startup");
+}
+
+/// Explicit null clears the override.
+#[tokio::test]
+async fn task_set_preference_null_clears_field() {
+    let mut fx = fixture().await;
+    sqlx::query("UPDATE tasks SET preferred_backend='codex', preferred_model='gpt-5' WHERE id='T1'")
+        .execute(&fx.pool).await.unwrap();
+    let r = fx
+        .call(
+            "m1",
+            "task_set_preference",
+            json!({"task_id":"T1","preferred_backend":null,"preferred_model":null}),
+        )
+        .await;
+    assert_eq!(r["type"], "mcp_reply", "{r}");
+    let row: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT preferred_backend, preferred_model FROM tasks WHERE id='T1'")
+            .fetch_one(&fx.pool).await.unwrap();
+    assert!(row.0.is_none());
+    assert!(row.1.is_none());
+}
+
 /// Sibling guard: an unknown assignee_agent_id is rejected before any
 /// state-machine transition runs.
 #[tokio::test]

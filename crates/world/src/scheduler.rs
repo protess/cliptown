@@ -32,6 +32,10 @@ struct QueuedTask {
     assignee_agent_id: String,
     required_room: Option<String>,
     parent_id: Option<String>,
+    /// P3 Theme C: per-task routing override. NULL falls back to whatever
+    /// the worker decides (typically its provisioned default).
+    preferred_backend: Option<String>,
+    preferred_model: Option<String>,
 }
 
 /// Run one scheduler tick. Returns the number of tasks dispatched
@@ -45,7 +49,9 @@ pub async fn tick(
     pool: &SqlitePool,
 ) -> usize {
     let queued: Vec<QueuedTask> = match sqlx::query_as(
-        "SELECT id, title, description, assignee_agent_id, required_room, parent_id FROM tasks \
+        "SELECT id, title, description, assignee_agent_id, required_room, parent_id, \
+                preferred_backend, preferred_model \
+         FROM tasks \
          WHERE status = 'queued' AND assignee_agent_id IS NOT NULL",
     )
     .fetch_all(pool)
@@ -175,6 +181,8 @@ pub async fn tick(
             description: task.description.clone(),
             required_room: task.required_room.clone(),
             parent_id: task.parent_id.clone(),
+            preferred_backend: task.preferred_backend.clone(),
+            preferred_model: task.preferred_model.clone(),
         };
         let payload_json = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
         // The contains_key check above is racy w.r.t. a worker disconnect

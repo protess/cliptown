@@ -37,7 +37,7 @@ pub enum WorkerOutbound {
     WorldState { v: u8, snapshot: serde_json::Value },
     WorldStateChunk { v: u8, seq: u32, total: u32, payload: serde_json::Value },
     WorldStateEnd { v: u8 },
-    TaskAssigned { v: u8, task_id: String, title: String, description: String, required_room: Option<String>, parent_id: Option<String> },
+    TaskAssigned { v: u8, task_id: String, title: String, description: String, required_room: Option<String>, parent_id: Option<String>, preferred_backend: Option<String>, preferred_model: Option<String> },
     SubtaskProposed { v: u8, parent_id: String, proposed_task_id: String, proposer_agent_id: String, title: String, description: String, suggested_assignee_role: Option<String> },
     SubtaskDone { v: u8, parent_id: String, child_id: String, artifact_path: String, review_round: u32 },
     Directive { v: u8, from_agent_id: String, body: String, in_response_to_task: Option<String> },

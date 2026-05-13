@@ -367,6 +367,19 @@ fn handle_tools_list() -> Value {
                 "required": ["skill_id"]
             }),
         ),
+        tool(
+            "task_set_preference",
+            "Set per-task model routing override (preferred_backend / preferred_model). Manager-or-assignee only; null clears.",
+            json!({
+                "type": "object",
+                "required": ["task_id"],
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "preferred_backend": {"type": ["string", "null"]},
+                    "preferred_model": {"type": ["string", "null"]}
+                }
+            }),
+        ),
     ]);
     json!({ "tools": tools })
 }
