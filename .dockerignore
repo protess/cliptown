@@ -1,0 +1,16 @@
+target
+node_modules
+.git
+.gstack
+**/.DS_Store
+**/dist
+**/.next
+**/.turbo
+**/.vite
+*.log
+.env
+.env.local
+docs
+.github
+playwright-report
+test-results

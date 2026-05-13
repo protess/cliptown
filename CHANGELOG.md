@@ -1,5 +1,39 @@
 # Changelog
 
+## M13 — Phase 3 Theme A: production deploy story (2026-05-13)
+
+First Phase 3 theme. cliptown now ships a Dockerfile, docker-compose
+config, and a Fly.io app config + deploy guide so operators can run it
+for real workloads.
+
+- **`Dockerfile`** (new) — multi-stage build. Stage 1 builds the rust
+  world binary (release); stage 2 installs the worker's pnpm deps
+  (workers run via tsx, no transpile step); stage 3 is a debian-slim
+  runtime carrying the world binary + node 20 + worker source +
+  migrations + `cliptown.toml`. Runs as the unprivileged `cliptown`
+  user. Healthcheck against `/health`.
+- **`docker-compose.yml`** (new) — single-service local-prod equivalent
+  with persistent volumes for `/data` (SQLite) and `/workspaces`
+  (per-task execenv). Forwards provider keys from a gitignored `.env`.
+- **`fly.toml`** (new) — single-VM single-region Fly.io app config.
+  Mounts a persistent volume to `/data`. Health check + auto-start.
+  Cliptown is single-process today; scale up VM size, not replicas.
+- **`docs/DEPLOY.md`** (new) — quickstart for docker-compose, full
+  Fly.io walkthrough (launch / volume / secrets / deploy / rotate /
+  rollback), sketches for AWS / GCP / K8s / bare VPS, secrets pattern
+  doc (`CLIPTOWN_OPERATOR_TOKEN`, `CLIPTOWN_AGENT_SECRET_*`, provider
+  keys).
+- **`README.md`** — adds a Deploy section pointing at DEPLOY.md.
+
+Verified: `docker build` succeeds, `docker run` boots the world
+server, `/health` returns `{"ok": true}` on first request.
+
+### Known limitations carried forward
+
+- `scripts/smoke-real-llm.sh` boots its own world; parameterizing it
+  to target a remote deploy is a follow-up. DEPLOY.md documents the
+  manual verification path in the meantime.
+
 ## M12 — P2.2 skills system (Phase 2 MVP, 2026-05-13)
 
 Per-startup reusable markdown skills attached many-to-many to agents.

@@ -47,6 +47,16 @@ pnpm --filter @cliptown/frontend dev
 
 Open `http://127.0.0.1:5173/` — redirects to `/console`.
 
+## Deploy
+
+For Docker / Fly.io / cloud deployment, see [`docs/DEPLOY.md`](docs/DEPLOY.md).
+Quick local-prod equivalent:
+
+```bash
+docker compose up -d
+curl http://localhost:8080/health
+```
+
 ## Architecture
 
 - `crates/world/` — Rust world server (single-thread mpsc inbox, SQLite WAL state, axum WS).
