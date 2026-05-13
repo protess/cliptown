@@ -123,6 +123,7 @@ pub async fn dispatch(
         "skill_attach" => handle_skill_attach(pool, event_tx, &caller, args).await,
         "skill_detach" => handle_skill_detach(pool, event_tx, &caller, args).await,
         "skill_delete" => handle_skill_delete(pool, event_tx, &caller, args).await,
+        "task_set_preference" => handle_task_set_preference(pool, event_tx, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
             format!("no handler for tool: {}", tool),
@@ -1372,4 +1373,134 @@ async fn handle_skill_delete(
         Err(crate::skills::SkillError::Sql(e)) => Err(("sql".into(), e)),
         Err(_) => Err(("sql".into(), "unexpected error".into())),
     }
+}
+
+/// P3 Theme C: set per-task model routing override. Manager-or-assignee may
+/// override — both are reasonable: managers know the budget, assignees know
+/// how heavy the task feels. Backend/model strings are not validated against
+/// a catalog; that catalog evolves between releases and the cost of a typo is
+/// a worker-side adapter spawn failure, not data corruption. Pass `null` or
+/// omit a field to clear it; both fields default to the agent's provisioned
+/// default when null.
+///
+/// Emits a `task_routing_changed` system_event so the operator console can
+/// audit who routed what to which model. Skipped when neither field changes.
+async fn handle_task_set_preference(
+    pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let task_id = require_str(&args, "task_id")?.to_string();
+    // `null` and absent are both treated as "clear", but we distinguish absent
+    // (don't change) from null (clear) by reading the key presence directly.
+    let backend_change = args.get("preferred_backend").map(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_str().map(|s| s.to_string())
+        }
+    });
+    let model_change = args.get("preferred_model").map(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_str().map(|s| s.to_string())
+        }
+    });
+    if backend_change.is_none() && model_change.is_none() {
+        return Err((
+            "bad_args".into(),
+            "at least one of preferred_backend or preferred_model required".into(),
+        ));
+    }
+
+    let task = load_task(pool, &task_id).await?;
+    if task.startup_id != caller.startup_id {
+        return Err((
+            "cross_startup".into(),
+            "task belongs to another startup".into(),
+        ));
+    }
+    let is_manager = caller_is_manager_of_task(pool, caller, &task).await?;
+    let is_assignee = task
+        .assignee_agent_id
+        .as_deref()
+        .map(|a| a == caller.agent_id)
+        .unwrap_or(false);
+    if !is_manager && !is_assignee {
+        return Err((
+            "no_permission".into(),
+            "task_set_preference: caller must be manager or assignee".into(),
+        ));
+    }
+
+    // Build the UPDATE dynamically based on which fields the caller wants to
+    // touch. Both branches are nullable so a clear (`null`) maps cleanly.
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ("sql".into(), e.to_string()))?;
+    if let Some(b) = &backend_change {
+        sqlx::query("UPDATE tasks SET preferred_backend = ?, updated_at = unixepoch() WHERE id = ?")
+            .bind(b.as_deref())
+            .bind(&task_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ("sql".into(), e.to_string()))?;
+    }
+    if let Some(m) = &model_change {
+        sqlx::query("UPDATE tasks SET preferred_model = ?, updated_at = unixepoch() WHERE id = ?")
+            .bind(m.as_deref())
+            .bind(&task_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ("sql".into(), e.to_string()))?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| ("sql".into(), e.to_string()))?;
+
+    let _ = persist::append_audit(
+        pool,
+        &task_id,
+        &json!({
+            "actor": "agent",
+            "kind": "task_set_preference",
+            "agent_id": caller.agent_id,
+            "preferred_backend": backend_change.clone().flatten(),
+            "preferred_model": model_change.clone().flatten(),
+        })
+        .to_string(),
+    )
+    .await;
+
+    if let Err(e) = crate::emit::emit_system_event(
+        pool,
+        event_tx,
+        Some(&caller.startup_id),
+        "task_routing_changed",
+        &json!({
+            "task_id": task_id,
+            "set_by": caller.agent_id,
+            "preferred_backend": backend_change.clone().flatten(),
+            "preferred_model": model_change.clone().flatten(),
+        })
+        .to_string(),
+        "info",
+    )
+    .await
+    {
+        tracing::warn!(component = "mcp_dispatch",
+            task_id = %task_id,
+            err = %e,
+            "task_set_preference: system_event emit failed after UPDATE committed"
+        );
+    }
+
+    Ok(json!({
+        "task_id": task_id,
+        "preferred_backend": backend_change.flatten(),
+        "preferred_model": model_change.flatten(),
+    }))
 }

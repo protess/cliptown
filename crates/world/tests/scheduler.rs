@@ -210,6 +210,8 @@ async fn dispatched_task_pushes_task_assigned_to_out_bus() {
             description,
             required_room,
             parent_id,
+            preferred_backend,
+            preferred_model,
         } => {
             assert_eq!(v, 1);
             assert_eq!(task_id, "T1");
@@ -217,6 +219,43 @@ async fn dispatched_task_pushes_task_assigned_to_out_bus() {
             assert_eq!(description, "desc");
             assert!(required_room.is_none());
             assert!(parent_id.is_none());
+            assert!(preferred_backend.is_none());
+            assert!(preferred_model.is_none());
+        }
+        other => panic!("expected TaskAssigned, got {:?}", other),
+    }
+}
+
+/// P3 Theme C: scheduler propagates per-task routing override.
+#[tokio::test]
+async fn dispatched_task_propagates_routing_preference() {
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (tx, mut rx) = mpsc::channel::<serde_json::Value>(8);
+    out_bus.insert("a1".to_string(), tx);
+
+    sqlx::query(
+        "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, \
+                            preferred_backend, preferred_model, created_at, updated_at) \
+         VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', 'codex', 'gpt-5-mini', unixepoch(), unixepoch())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool).await;
+    assert_eq!(n, 1);
+
+    let msg = rx.try_recv().expect("task_assigned should fire");
+    let parsed: cliptown_world::protocol::WorkerOutbound =
+        serde_json::from_value(msg).expect("payload deserializes");
+    match parsed {
+        cliptown_world::protocol::WorkerOutbound::TaskAssigned {
+            preferred_backend,
+            preferred_model,
+            ..
+        } => {
+            assert_eq!(preferred_backend.as_deref(), Some("codex"));
+            assert_eq!(preferred_model.as_deref(), Some("gpt-5-mini"));
         }
         other => panic!("expected TaskAssigned, got {:?}", other),
     }

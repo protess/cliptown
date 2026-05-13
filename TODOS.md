@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 Phase 3 Theme C — per-task routing preferences — 2026-05-13
+**Source:** Phase 3 roadmap Theme C. PR `<TBD>`.
+
+Was: tasks were routed implicitly to whatever backend/model was provisioned on the agent at startup. No way to opt a single subtask into a cheaper model (haiku for trivial work, opus for the heavy reasoning step) without re-provisioning the agent.
+
+Fixed: migration 0004 adds nullable `preferred_backend` + `preferred_model` to `tasks`. `WorkerOutbound::TaskAssigned` (ts-rs auto-export) carries both. Scheduler reads the row and forwards them on dispatch. New 22nd MCP tool `task_set_preference` (manager-or-assignee gated, cross-startup blocked, audit row + `task_routing_changed` system_event). 4 new MCP handler tests + 1 scheduler propagation test. Worker-side adapter honoring documented in CHANGELOG carry-forward — the field arrives on `task_assigned`; the adapter spawn path will start preferring it once the budget-routing UX lands. Cost variance telemetry (estimate-vs-actual emit) deferred — needs estimate inputs.
+
 ### M13 Phase 3 Theme B — operator RBAC — 2026-05-13
 **Source:** Phase 3 roadmap Theme B. PR `<TBD>`.
 
