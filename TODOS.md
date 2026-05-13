@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 chore — bench gate flipped + CI baselines recalibrated — 2026-05-13
+**Source:** Phase 3 roadmap carry-forward #1 (bench.yml hard-gate flip). PR `<TBD>`.
+
+Was: `bench.yml` ran `continue-on-error: true` so regressions never failed PRs. Baselines were Apple Silicon numbers (~3x off ubuntu CI), and on top of that the bench compile had been broken since Phase 3 Theme B (#52) — `Cmd::HandleConsoleMsg` gained an `identity` field but `crates/world/benches/world_bench.rs` was never updated. Bench was effectively dead since #52.
+
+Fixed: bench compile patched (`OperatorIdentity::admin_for_tests()` passed through). `bench/baselines.json` v3 with CI-grade numbers (72 µs tick, 361k msgs/s throughput) averaged from 3 recent successful CI runs, with `_ci_samples_*` fields preserved for future re-baseline reference. `continue-on-error: true` dropped — bench regressions now fail the PR. Tolerance stays at 20%; widen the baselines (not the tolerance) if it starts flapping.
+
 ### M13 docs — local-first deploy + local LLM routing — 2026-05-13
 **Source:** Post-Phase-3 docs follow-up triggered by "로컬 LLM을 사용하려면 로컬 실행이 더 좋을 것 같다" framing question. PR `<TBD>`.
 

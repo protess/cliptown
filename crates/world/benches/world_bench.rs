@@ -72,7 +72,11 @@ fn bench_console_dispatch_throughput(c: &mut Criterion) {
                     let msg = serde_json::json!({"type":"bench_noop"});
                     handle
                         .tx
-                        .send(loop_::Cmd::HandleConsoleMsg { msg, reply: reply_tx })
+                        .send(loop_::Cmd::HandleConsoleMsg {
+                            msg,
+                            identity: cliptown_world::auth::OperatorIdentity::admin_for_tests(),
+                            reply: reply_tx,
+                        })
                         .await
                         .unwrap();
                     replies.push(reply_rx);

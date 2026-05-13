@@ -19,14 +19,13 @@ jobs:
       - name: Run criterion benches
         run: cargo bench -p cliptown-world
       - name: Check regression gate
-        # M10.1: 20% tolerance. The baselines in bench/baselines.json were
-        # captured on developer hardware; the first CI run will tell us
-        # whether ubuntu-latest needs its own numbers. `continue-on-error`
-        # keeps the gate informational while we collect a few CI samples
-        # — flip to `false` once the baseline has been re-calibrated for
-        # the CI environment.
+        # 20% tolerance against CI-calibrated baselines (see
+        # bench/baselines.json `_ci_samples_*`). Flipped to a hard gate
+        # 2026-05-13 after 3 post-Phase-3 CI runs landed inside the
+        # tolerance window. If this starts flapping, average 3+ fresh
+        # successful CI medians and update the baselines rather than
+        # widening the tolerance.
         id: gate
-        continue-on-error: true
         run: |
           node bench/check.mjs | tee /tmp/bench-result.json
       - name: Publish bench result to job summary
