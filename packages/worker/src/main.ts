@@ -14,6 +14,7 @@ export interface ParsedArgs {
   worldUrl: string;
   agentId: string;
   startupId: string;
+  taskId: string;
   secret: string;
   backend: string;
   workspace: string;
@@ -36,6 +37,7 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
       "world-url":  { type: "string" },
       "agent-id":   { type: "string" },
       "startup-id": { type: "string" },
+      "task-id":    { type: "string" },
       "secret":     { type: "string" },
       "backend":    { type: "string", default: "claude_code" },
       "workspace":  { type: "string" },
@@ -59,6 +61,7 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
     worldUrl:  required("world-url",  values["world-url"]),
     agentId:   required("agent-id",   values["agent-id"]),
     startupId: required("startup-id", values["startup-id"]),
+    taskId:    required("task-id",    values["task-id"]),
     secret:    required("secret",     values["secret"]),
     backend:   String(values["backend"]),
     workspace: required("workspace",  values["workspace"]),

@@ -6,6 +6,7 @@ describe("worker arg parsing", () => {
     "--world-url", "ws://localhost:8080/ws/worker",
     "--agent-id", "a1",
     "--startup-id", "s1",
+    "--task-id", "t1",
     "--secret", "shh",
     "--workspace", "/tmp/ws/s1",
   ];
@@ -15,6 +16,7 @@ describe("worker arg parsing", () => {
     expect(a.worldUrl).toBe("ws://localhost:8080/ws/worker");
     expect(a.agentId).toBe("a1");
     expect(a.startupId).toBe("s1");
+    expect(a.taskId).toBe("t1");
     expect(a.secret).toBe("shh");
     expect(a.workspace).toBe("/tmp/ws/s1");
     expect(a.backend).toBe("claude_code"); // default
@@ -39,6 +41,11 @@ describe("worker arg parsing", () => {
   it("throws on missing --agent-id", () => {
     const args = baseArgs.filter((_, i, arr) => !(arr[i-1] === "--agent-id" || arr[i] === "--agent-id"));
     expect(() => parseWorkerArgs(args)).toThrow(/missing required arg --agent-id/);
+  });
+
+  it("throws on missing --task-id", () => {
+    const args = baseArgs.filter((_, i, arr) => !(arr[i-1] === "--task-id" || arr[i] === "--task-id"));
+    expect(() => parseWorkerArgs(args)).toThrow(/missing required arg --task-id/);
   });
 
   it("accepts --mock and --fixture", () => {
