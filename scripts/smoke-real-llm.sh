@@ -153,6 +153,19 @@ SQL
 # agree on the directory layout.
 mkdir -p "$SMOKE_DIR/workspaces/$STARTUP_ID/artifacts"
 
+# ── 5.5. seed a skill + attach to engineer (P2.2 verification) ─────────────
+say "seeding skill 'smoke-skill-deploy' and attaching to engineer"
+# uuidgen on macOS prints uppercase; sqlite-stored uuids in cliptown are
+# lowercased by convention (matches what api_startups produces).
+SKILL_ID="$(uuidgen | tr 'A-Z' 'a-z' 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
+SKILL_CONTENT="Smoke test skill content. The agent should see this file in its execenv."
+sqlite3 "$SMOKE_DIR/cliptown.db" <<SQL
+INSERT INTO skills (id, startup_id, name, content_md, created_at, updated_at)
+  VALUES ('$SKILL_ID', '$STARTUP_ID', 'smoke-skill-deploy', '$SKILL_CONTENT', unixepoch(), unixepoch());
+INSERT INTO agent_skills (agent_id, skill_id, attached_at)
+  VALUES ('$ENGINEER_ID', '$SKILL_ID', unixepoch());
+SQL
+
 # ── 6. spawn worker in --real mode ─────────────────────────────────────────
 ARTIFACT_REL="workspaces/$STARTUP_ID/artifacts/$TASK_ID.md"
 ARTIFACT_ABS="$SMOKE_DIR/$ARTIFACT_REL"
@@ -247,6 +260,16 @@ CLAUDE_MD="$EXECENV_WORKDIR/CLAUDE.md"
 grep -q "workspaces/$STARTUP_ID/artifacts/$TASK_ID.md" "$CLAUDE_MD" \
   || fail "CLAUDE.md does not reference canonical artifact path"
 say "execenv check passed: workdir + symlink + CLAUDE.md all present"
+
+# ── 7.6. verify: skill landed in execenv (P2.2) ────────────────────────────
+say "verify: attached skill at workspaces/$STARTUP_ID/$TASK_ID/workdir/skills/"
+SKILL_FILE="$EXECENV_WORKDIR/skills/smoke-skill-deploy.md"
+[[ -f "$SKILL_FILE" ]] || fail "skill file missing: $SKILL_FILE"
+grep -q "Smoke test skill content" "$SKILL_FILE" \
+  || fail "skill file content mismatch"
+grep -q "smoke-skill-deploy" "$EXECENV_WORKDIR/CLAUDE.md" \
+  || fail "CLAUDE.md does not mention attached skill 'smoke-skill-deploy'"
+say "skill check passed: skill file + CLAUDE.md reference both present"
 
 say "verify: budget under cap"
 SPENT="$(sqlite3 "$SMOKE_DIR/cliptown.db" \
