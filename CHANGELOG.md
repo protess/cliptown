@@ -1,5 +1,45 @@
 # Changelog
 
+## M12 — P2.2 skills system (Phase 2 MVP, 2026-05-13)
+
+Per-startup reusable markdown skills attached many-to-many to agents.
+At `--real` adapter spawn the worker fetches the agent's attached
+skills and writes each as `<workdir>/skills/<name>.md` (alongside
+CLAUDE.md and the workspaces symlink from P2.3). CLAUDE.md gains an
+"Available skills" section listing each skill's name and relative
+path.
+
+- **Schema:** `skills` (workspace-scoped, `UNIQUE(startup_id, name)`)
+  + `agent_skills` (M:N attachment). Migration `0002_skills.sql`.
+- **DAO:** `crates/world/src/skills.rs` with 9 inline unit tests
+  (upsert/list/attach/detach/delete/for_agent + bad-name +
+  oversize-content + cross-startup). Names constrained to
+  `[A-Za-z0-9_-]{1,64}` (filesystem-safe); content capped at 64 KB.
+- **MCP tools (5 new, catalog 16 → 21):** `skill_upsert`,
+  `skill_list`, `skill_attach`, `skill_detach`, `skill_delete`.
+  All enforce cross-startup checks.
+- **HTTP API:** `GET /api/agents/:agent_id/skills` returns
+  `{skills: [{name, content_md}]}` for the worker. Bearer auth via
+  `<agent_id>:<secret>` reuses `crate::auth::validate_agent_secret`
+  (env-var-backed; default `dev-secret`). 403 on path-vs-bearer
+  agent mismatch; 401 on bad secret.
+- **Worker:** new `skills_client.ts::fetchSkillsForAgent` +
+  `prepareWorkdir` extension write skills into the execenv. Warn-
+  and-continue on fetch failure (an agent with no skills proceeds
+  with an empty list).
+- **Smoke:** seeds `smoke-skill-deploy` + attaches it (§5.5);
+  post-spawn asserts the file + CLAUDE.md reference (§7.6).
+
+### Known limitations carried forward
+
+- No frontend skill management UI. Operators manage skills via MCP
+  tools or direct SQL.
+- No `skill_changed` ConsoleOutbound broadcasts. Lazy fetch at spawn
+  is the contract; live edits don't affect in-flight tasks.
+- No global (non-workspace) skills.
+- No file attachments beyond the markdown content_md body.
+- No versioning / history (upsert is mutable; latest wins).
+
 ## M12 — P2.3 per-task execenv directories (2026-05-13)
 
 Worker now creates a per-task execenv directory at
