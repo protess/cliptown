@@ -108,6 +108,8 @@ export interface SkillVM {
   len: number;
   updated_at: number;
   attachments: string[];
+  /** P3 carry-forward: admin-only global flag. Defaults to false. */
+  is_global: boolean;
 }
 
 export interface WorldState {
@@ -330,6 +332,7 @@ function coerceSkill(a: Record<string, unknown>): SkillVM {
     attachments: Array.isArray(a.attachments)
       ? (a.attachments as unknown[]).filter((x): x is string => typeof x === "string")
       : [],
+    is_global: a.is_global === true,
   };
 }
 

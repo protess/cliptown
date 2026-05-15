@@ -1,5 +1,20 @@
 # Changelog
 
+## M13 — feat: is_global toggle + indicator in SkillsPanel (2026-05-15)
+
+Roadmap polish — finishes the global-skills surface. #68 added the
+backend flag + `skill_set_global` ConsoleInbound; this PR adds the
+UI knob.
+
+- `SkillWithAttachments` carries `is_global`; the SkillsPanel
+  snapshot + broadcast already shipped the rest of the row.
+- `SkillVM` gains `is_global: boolean`; the WS reducer coerces it.
+- Per-row globe button toggles the flag (admin-only on the server;
+  non-admins see the `forbidden` reply silently). When set, the
+  skill name displays a 🌐 badge.
+- Tooltips spell out "admin" on the toggle so non-admins know why
+  it might not work for them.
+
 ## M13 — feat: operator management panel in the console (2026-05-15)
 
 Final Phase 3 carry-forward — Theme B frontend surface.

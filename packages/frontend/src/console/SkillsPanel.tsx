@@ -17,6 +17,7 @@ interface Props {
   onDetach: (skillId: string, agentId: string) => void;
   onUpsert: (name: string, contentMd: string, skillId: string | null) => void;
   onDelete: (skillId: string) => void;
+  onSetGlobal: (skillId: string, isGlobal: boolean) => void;
 }
 
 export function SkillsPanel({
@@ -26,6 +27,7 @@ export function SkillsPanel({
   onDetach,
   onUpsert,
   onDelete,
+  onSetGlobal,
 }: Props) {
   const [creating, setCreating] = useState(false);
   const skills = useMemo(() => {
@@ -87,6 +89,7 @@ export function SkillsPanel({
               onDetach={(agentId) => onDetach(s.id, agentId)}
               onSave={(name, content) => onUpsert(name, content, s.id)}
               onDelete={() => onDelete(s.id)}
+              onToggleGlobal={() => onSetGlobal(s.id, !s.is_global)}
             />
           ))}
         </ul>
@@ -102,17 +105,36 @@ interface SkillRowProps {
   onDetach: (agentId: string) => void;
   onSave: (name: string, contentMd: string) => void;
   onDelete: () => void;
+  onToggleGlobal: () => void;
 }
 
-function SkillRow({ skill, agents, onAttach, onDetach, onSave, onDelete }: SkillRowProps) {
+function SkillRow({ skill, agents, onAttach, onDetach, onSave, onDelete, onToggleGlobal }: SkillRowProps) {
   const [editing, setEditing] = useState(false);
   const unattached = agents.filter((a) => !skill.attachments.includes(a.agent_id));
   return (
     <li style={rowStyle} data-testid={`skill-row-${skill.name}`}>
       <div style={rowHeaderStyle}>
-        <strong>{skill.name}</strong>
+        <strong>
+          {skill.name}
+          {skill.is_global && (
+            <span title="Visible to every agent in every startup" style={globeBadgeStyle}>
+              🌐
+            </span>
+          )}
+        </strong>
         <div style={{ display: "flex", gap: 6 }}>
           <span style={{ color: "var(--fg-secondary)", fontSize: 11 }}>{skill.len} bytes</span>
+          <button
+            style={{
+              ...iconButtonStyle,
+              color: skill.is_global ? "var(--accent, #4a90e2)" : "var(--fg-secondary)",
+            }}
+            onClick={onToggleGlobal}
+            data-testid={`skill-global-toggle-${skill.name}`}
+            title={skill.is_global ? "Clear global flag (admin)" : "Mark global (admin)"}
+          >
+            🌐
+          </button>
           <button
             style={iconButtonStyle}
             onClick={() => setEditing((v) => !v)}
@@ -337,6 +359,12 @@ const selectStyle: CSSProperties = {
   background: "var(--bg)",
   color: "var(--fg)",
   cursor: "pointer",
+};
+
+const globeBadgeStyle: CSSProperties = {
+  marginLeft: 4,
+  fontSize: 11,
+  opacity: 0.7,
 };
 
 const iconButtonStyle: CSSProperties = {
