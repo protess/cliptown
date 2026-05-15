@@ -121,6 +121,22 @@ export interface WorldState {
   modals: ModalVM[];
   messages: MessageVM[];
   skills: Record<string, Record<string, SkillVM>>;
+  /**
+   * P3 Theme B follow-up: operator-management state for the admin panel.
+   * `null` = not yet fetched (panel sends `operator_list` on mount to
+   * hydrate). `[]` = fetched but empty (or forbidden — non-admin caller).
+   * `mintedToken` is set on `operator_create` so the UI can show the
+   * freshly-minted bearer exactly once; cleared by the panel after copy.
+   */
+  operators: OperatorRow[] | null;
+  mintedOperatorToken: { id: string; name: string; token: string } | null;
+}
+
+export interface OperatorRow {
+  id: string;
+  name: string;
+  role: string;
+  created_at: number;
 }
 
 const INITIAL: WorldState = {
@@ -134,6 +150,8 @@ const INITIAL: WorldState = {
   modals: [],
   messages: [],
   skills: {},
+  operators: null,
+  mintedOperatorToken: null,
 };
 
 const MAX_SYSTEM_EVENTS = 200;
@@ -145,7 +163,8 @@ type Msg = Record<string, unknown> & { type?: unknown };
 type Action =
   | { kind: "status"; status: ConnectionStatus }
   | { kind: "msg"; msg: Msg }
-  | { kind: "localToast"; severity: string; body: string; sticky?: boolean };
+  | { kind: "localToast"; severity: string; body: string; sticky?: boolean }
+  | { kind: "clearMintedOperatorToken" };
 
 function asObject(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v)
@@ -321,6 +340,9 @@ function severityFromString(s: unknown): SystemEventVM["severity"] {
 
 function reducer(state: WorldState, action: Action): WorldState {
   if (action.kind === "status") return { ...state, status: action.status };
+  if (action.kind === "clearMintedOperatorToken") {
+    return { ...state, mintedOperatorToken: null };
+  }
   if (action.kind === "localToast") {
     const t: ToastVM = {
       id: newId(),
@@ -491,6 +513,58 @@ function reducer(state: WorldState, action: Action): WorldState {
       next[sid] = inner;
       return { ...state, skills: next };
     }
+    // P3 Theme B follow-up: operator-management replies. The world responds
+    // with `{type:"ok", kind:"operator_*"}` envelopes; the reducer hoists
+    // the payload into `state.operators` / `state.mintedOperatorToken` so
+    // the OperatorsPanel can render without a separate fetch round-trip.
+    case "ok": {
+      const kind = typeof m.kind === "string" ? m.kind : "";
+      if (kind === "operator_list" && Array.isArray(m.operators)) {
+        const rows = (m.operators as unknown[])
+          .map((o): OperatorRow | null => {
+            const obj = asObject(o);
+            if (!obj) return null;
+            return {
+              id: String(obj.id ?? ""),
+              name: String(obj.name ?? ""),
+              role: String(obj.role ?? ""),
+              created_at: Number(obj.created_at ?? 0),
+            };
+          })
+          .filter((o): o is OperatorRow => o !== null && o.id !== "");
+        return { ...state, operators: rows };
+      }
+      if (kind === "operator_create" && typeof m.id === "string" && typeof m.token === "string") {
+        const row: OperatorRow = {
+          id: String(m.id),
+          name: String(m.name ?? ""),
+          role: String(m.role ?? ""),
+          created_at: Math.floor(Date.now() / 1000),
+        };
+        return {
+          ...state,
+          operators: state.operators ? [...state.operators, row] : [row],
+          mintedOperatorToken: { id: row.id, name: row.name, token: String(m.token) },
+        };
+      }
+      if (kind === "operator_revoke" && typeof m.id === "string") {
+        return {
+          ...state,
+          operators: state.operators ? state.operators.filter((o) => o.id !== m.id) : null,
+        };
+      }
+      if (kind === "operator_set_role" && typeof m.id === "string" && typeof m.role === "string") {
+        const id = String(m.id);
+        const role = String(m.role);
+        return {
+          ...state,
+          operators: state.operators
+            ? state.operators.map((o) => (o.id === id ? { ...o, role } : o))
+            : null,
+        };
+      }
+      return state;
+    }
     default:
       return state;
   }
@@ -512,6 +586,8 @@ export interface UseConsoleResult {
    * UI-side ephemeral feedback only.
    */
   addToast: (severity: string, body: string, sticky?: boolean) => void;
+  /** P3 Theme B follow-up: clear the post-`operator_create` minted-token banner. */
+  clearMintedOperatorToken: () => void;
 }
 
 export function useConsole(opts: UseConsoleOpts): UseConsoleResult {
@@ -563,5 +639,6 @@ export function useConsole(opts: UseConsoleOpts): UseConsoleResult {
     send: (msg) => clientRef.current?.send(msg),
     addToast: (severity, body, sticky) =>
       dispatch({ kind: "localToast", severity, body, sticky }),
+    clearMintedOperatorToken: () => dispatch({ kind: "clearMintedOperatorToken" }),
   };
 }

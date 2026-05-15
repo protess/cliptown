@@ -40,6 +40,7 @@ interface WorldContextValue {
   state: WorldState;
   send: (msg: object) => void;
   addToast: (severity: string, body: string, sticky?: boolean) => void;
+  clearMintedOperatorToken: () => void;
   selectedStartupId: string | null;
   setSelectedStartupId: (id: string | null) => void;
 }
@@ -57,6 +58,7 @@ export function WorldProvider({ children }: { children: ReactNode }) {
         state: console.state,
         send: console.send,
         addToast: console.addToast,
+        clearMintedOperatorToken: console.clearMintedOperatorToken,
         selectedStartupId,
         setSelectedStartupId,
       }}

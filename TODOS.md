@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — operator management panel in the console — 2026-05-15
+**Source:** Theme B frontend follow-up. PR `<TBD>`.
+
+Was: `operator_list` / `_create` / `_revoke` / `_set_role` ConsoleInbound variants landed in #61 but only via raw WS — no UI surface in the console.
+
+Fixed: new `OperatorsPanel.tsx` mounted below SkillsPanel, collapsed by default. On expand sends `operator_list` to hydrate. Per-row name + role select + Revoke (confirm). Footer creates new operators — on success the freshly-minted `opt_*` token displays in a `MintedTokenBanner` with a copy-now warning that the operator dismisses (cliptown never displays it again). Store reducer handles the four `{type:"ok", kind:"operator_*"}` replies. Non-admin callers see empty list (server's `forbidden` reply is silently swallowed) — explicit role-detect not surfaced yet. Closes the M13 roadmap.
+
 ### M13 feat — globally-visible skills — 2026-05-15
 **Source:** Roadmap carry-forward (Skills global / non-workspace, M-sized). PR `<TBD>`.
 
