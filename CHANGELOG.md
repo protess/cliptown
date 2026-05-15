@@ -1,5 +1,17 @@
 # Changelog
 
+## M13 — feat: world-side periodic execenv GC daemon (2026-05-15)
+
+Closes the "World-side periodic auto-GC deferred" note from the
+script PR.
+
+- New `execenv_gc` module with `run_pass` + `spawn`. Selection
+  mirrors `scripts/gc-execenv.sh`: terminal-state tasks past age
+  cutoff. Artifacts dir not touched.
+- Opt-in via `CLIPTOWN_EXECENV_GC_ENABLED=1`. Overrides:
+  `_AGE_DAYS` (7), `_INTERVAL_HOURS` (6), `CLIPTOWN_WORKSPACES_ROOT`.
+- 4 unit tests; DEPLOY.md updated.
+
 ## M13 — feat: skill_revert (rollback to historical revision) (2026-05-15)
 
 Closes the "Rollback deferred" note from #67. Schema was ready;

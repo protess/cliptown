@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — world-side periodic execenv GC daemon — 2026-05-15
+**Source:** Closes the "World-side periodic auto-GC deferred" note. PR `<TBD>`.
+
+Was: `scripts/gc-execenv.sh` covered operator-driven cleanups; unattended deploys had no scheduled sweep.
+
+Fixed: new `execenv_gc` module (`run_pass` + `spawn`). Selection mirrors the script: terminal-state tasks past age cutoff. Opt-in via `CLIPTOWN_EXECENV_GC_ENABLED=1` with `_AGE_DAYS`, `_INTERVAL_HOURS`, `CLIPTOWN_WORKSPACES_ROOT` overrides. 4 unit tests; DEPLOY.md secrets section updated.
+
 ### M13 feat — skill_revert (rollback to historical revision) — 2026-05-15
 **Source:** Closes the "Rollback deferred" note from #67. PR `<TBD>`.
 
