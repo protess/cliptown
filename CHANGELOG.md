@@ -1,5 +1,23 @@
 # Changelog
 
+## M13 — feat: globally-visible skills (2026-05-15)
+
+Roadmap carry-forward. Skills were strictly startup-scoped; style
+guides / debug primers had to be duplicated. Adds an admin-only
+`is_global` flag that auto-surfaces a skill in every agent's
+execenv regardless of `agent_skills` attachment.
+
+- Migration 0008 adds `is_global INTEGER NOT NULL DEFAULT 0` +
+  partial index. `skills::for_agent` UNIONs attached rows with
+  `is_global = 1`; DISTINCT-by-id prevents double-listing.
+- `skills::set_global` DAO. New admin-only ConsoleInbound
+  `skill_set_global {skill_id, is_global}`.
+- SkillChanged broadcasts emit `set_global` / `clear_global` kinds.
+- 4 new DAO tests.
+
+Agents cannot flag their own skills global by design. Frontend UI
+deferred (single boolean wire).
+
 ## M13 — feat: skills file attachments (2026-05-15)
 
 Roadmap carry-forward. Skills could only carry a single `content_md`
