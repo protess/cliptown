@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 chore — structured tracing events across hot paths — 2026-05-15
+**Source:** Phase 3 Theme D follow-up. `/metrics` (#51) covered the metrics endpoint; the spec's "structured tracing spans through hot paths" stayed deferred. PR `<TBD>`.
+
+Was: only structured signal was `system_events` and `tracing::warn!`/`tracing::info!` ad-hoc calls. No way to bucket dispatch latency or correlate handler activity post-hoc.
+
+Fixed: event-pair tracing (enter + exit-with-elapsed) on `mcp_dispatch::dispatch`, `scheduler::tick`, `cmd_console::dispatch`. Each pair carries kind/identity + corr_id (or tick_seq) + elapsed_us + outcome. Event-pair over Span::entered() because the WS loop's task awaits inside handlers — a `!Send` Span guard breaks `tokio::spawn`'s bound. Default `RUST_LOG=info` sees only error-path; `cliptown_world=debug` surfaces the full pair. Quiet scheduler ticks (no dispatches, <5ms) skip the log.
+
 ### M13 feat — admin-only operator management commands — 2026-05-15
 **Source:** Phase 3 Theme B follow-up. #52 landed the schema; this PR adds the surface so admins can provision operators without touching SQL. PR `<TBD>`.
 

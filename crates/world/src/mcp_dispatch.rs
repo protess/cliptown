@@ -94,6 +94,22 @@ pub async fn dispatch(
         None => return mcp_err(&corr_id, "unknown_agent", "agent not found in world"),
     };
 
+    // P3 Theme D follow-up: structured tracing for every MCP dispatch.
+    // We log an event-pair (enter + exit-with-elapsed) instead of holding a
+    // Span across `.await` boundaries — the WS loop's task captures a `!Send`
+    // Span guard, which breaks tokio::spawn's Send bound. The downside is
+    // that nested handler logs aren't visually grouped under the dispatch in
+    // a console subscriber, but structured backends correlate via `corr_id`.
+    let dispatch_start = std::time::Instant::now();
+    tracing::debug!(
+        component = "mcp_dispatch",
+        event = "enter",
+        tool = %tool,
+        agent_id = %caller.agent_id,
+        startup_id = %caller.startup_id,
+        corr_id = %corr_id,
+    );
+
     // P3 Theme D: per-call counter for /metrics.
     crate::metrics::COUNTERS.inc_call();
 
@@ -130,10 +146,30 @@ pub async fn dispatch(
         )),
     };
 
+    let elapsed_us = dispatch_start.elapsed().as_micros() as u64;
     match result {
-        Ok(v) => json!({"type":"mcp_reply","v":1,"corr_id":corr_id,"result":v}),
+        Ok(v) => {
+            tracing::debug!(
+                component = "mcp_dispatch",
+                event = "exit",
+                tool = %tool,
+                corr_id = %corr_id,
+                elapsed_us,
+                outcome = "ok",
+            );
+            json!({"type":"mcp_reply","v":1,"corr_id":corr_id,"result":v})
+        }
         Err((code, message)) => {
             crate::metrics::COUNTERS.inc_error();
+            tracing::info!(
+                component = "mcp_dispatch",
+                event = "exit",
+                tool = %tool,
+                corr_id = %corr_id,
+                elapsed_us,
+                outcome = "error",
+                code = %code,
+            );
             mcp_err(&corr_id, &code, &message)
         }
     }
