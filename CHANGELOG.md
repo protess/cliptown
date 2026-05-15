@@ -1,5 +1,25 @@
 # Changelog
 
+## M13 — feat: skills content authoring in the operator console (2026-05-15)
+
+Roadmap carry-forward. SkillsPanel only supported attach/detach;
+operators had to use MCP tools or SQL for content authoring.
+
+- 2 new manager-gated ConsoleInbound variants:
+  `skill_upsert_operator` + `skill_delete_operator`. Routes through
+  the same `skills::upsert`/`skills::delete` paths as the MCP tools.
+  `skill_id` on upsert is wire-compat-only — server resolves by
+  `(startup_id, name)`.
+- `SkillsPanel.tsx` gets `+ New skill` button + per-row ✎ edit /
+  ✕ delete with confirm. Inline editor for both create + edit.
+- Editor starts blank for edit too — the WS snapshot ships skill
+  metadata only (`len`/`updated_at`); re-fetching `content_md` per
+  skill would inflate every snapshot. Operators paste/re-type;
+  upsert resolves by `(startup_id, name)` so the existing row
+  updates in place.
+- 4 new integration tests cover upsert (create + update-in-place),
+  delete, and viewer-forbidden on both.
+
 ## M13 — feat: cost variance telemetry (2026-05-15)
 
 Final Theme C deferred bit. Tasks can carry a `cost_estimate_usd`

@@ -69,6 +69,12 @@ pub enum ConsoleInbound {
     /// operator can manage skills across startups without re-possessing.
     SkillAttach { v: u8, startup_id: String, agent_id: String, skill_id: String },
     SkillDetach { v: u8, startup_id: String, agent_id: String, skill_id: String },
+    /// P3 Theme F follow-up: operator-side authoring. `skill_id` is the
+    /// upsert target — pass None to create. Manager-or-above; viewers can't
+    /// reshape content. Mirrors the agent-side `skill_upsert` MCP tool but
+    /// scoped by the operator's possessed startup.
+    SkillUpsertOperator { v: u8, startup_id: String, skill_id: Option<String>, name: String, content_md: String },
+    SkillDeleteOperator { v: u8, startup_id: String, skill_id: String },
     /// P3 Theme B follow-up: admin-only operator-management commands. The
     /// `operators` table has been in place since #52 with role gating wired
     /// through dispatch; these complete the surface so an admin can

@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — skills content authoring in operator console — 2026-05-15
+**Source:** Roadmap carry-forward (Skills content authoring UI, M-sized). PR `<TBD>`.
+
+Was: SkillsPanel only handled attach/detach. Operators had to use MCP tools or raw SQL to create / edit / delete skill content.
+
+Fixed: 2 new ConsoleInbound variants (`skill_upsert_operator` / `skill_delete_operator`), both manager-gated, routing through the same `skills::upsert`/`skills::delete` paths as the agent-side MCP tools. SkillsPanel gains `+ New skill` + per-row ✎ edit / ✕ delete with confirm. The editor starts blank for edit too because the WS snapshot ships skill metadata only — re-fetching content per skill would inflate every snapshot. Operators paste/re-type; upsert resolves by `(startup_id, name)` so the existing row is updated in place. 4 new integration tests.
+
 ### M13 feat — cost variance telemetry — 2026-05-15
 **Source:** Final Theme C deferred bit (estimate-vs-actual emit). PR `<TBD>`.
 
