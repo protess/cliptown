@@ -96,15 +96,14 @@ export function parseWorkerArgs(argv: string[]): ParsedArgs {
 
 /**
  * P3 Theme C: map a backend id to the adapter-specific env var name that
- * controls its model selection. Returns null when the backend has no
- * supported model env var yet (currently claude_code — the adapter doesn't
- * thread a model knob; tracked as a known limitation).
+ * controls its model selection. Returns null for backends that don't expose
+ * a model knob yet — the worker logs + skips rather than failing the spawn.
  */
 export function modelEnvForBackend(backend: string): string | null {
   switch (backend) {
     case "codex":       return "CODEX_MODEL_ID";
     case "opencode":    return "OPENCODE_MODEL";
-    case "claude_code": return null;
+    case "claude_code": return "CLAUDE_CODE_MODEL";
     default:            return null;
   }
 }

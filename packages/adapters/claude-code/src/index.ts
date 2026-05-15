@@ -120,6 +120,16 @@ export const claudeCodeAdapter: BackendAdapter = {
       // The env var is kept above because the fixture-cli used in contract
       // tests still reads it (its argparse is strict and rejects --settings).
       args.push("--settings", join(cfg.cfgDir, "settings.json"));
+      // P3 Theme C follow-up: when CLAUDE_CODE_MODEL is set, forward it as
+      // `--model <id>`. Worker's `modelEnvForBackend("claude_code")` now maps
+      // the per-task `preferred_model` to this env var so cliptown can route
+      // a single task at, e.g., claude-haiku-4-5 without re-provisioning the
+      // agent. Gated on useJsonOutput so the fixture-cli (contract tests)
+      // never sees the flag — it doesn't grok `--model`.
+      const model = env.CLAUDE_CODE_MODEL;
+      if (typeof model === "string" && model.length > 0) {
+        args.push("--model", model);
+      }
     }
     const child = nodeSpawn(
       bin,

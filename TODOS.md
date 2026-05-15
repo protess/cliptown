@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 chore — claude-code adapter honors CLAUDE_CODE_MODEL — 2026-05-15
+**Source:** Theme C known-limit follow-up from #58 / #59. PR `<TBD>`.
+
+Was: Theme C wired `preferred_model` → worker → adapter env, but the claude-code adapter didn't surface a model knob (CLI has `--model`; wrapper ignored it). worker's `modelEnvForBackend("claude_code")` returned null and the worker logged + skipped. Theme C wire was 2/3 closed.
+
+Fixed: adapter reads `CLAUDE_CODE_MODEL` from `opts.env`, pushes `--model <id>` onto the CLI args when set. Gated on `useJsonOutput` so the fixture-cli (contract tests) never sees the flag. `modelEnvForBackend("claude_code")` returns `"CLAUDE_CODE_MODEL"`. Worker test updated. Theme C wire 3/3 closed across all adapters.
+
 ### M13 feat — per-task worker spawn (Theme C Option B) — 2026-05-13
 **Source:** Phase 3 Theme C follow-up #2 — supervisor side. Closes the Theme C wire end-to-end. PR `<TBD>`.
 
