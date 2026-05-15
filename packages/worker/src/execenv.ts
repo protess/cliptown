@@ -62,6 +62,19 @@ export async function prepareWorkdir(opts: PrepareWorkdirOpts): Promise<string> 
     await mkdir(skillsDir, { recursive: true });
     for (const s of skills) {
       await writeFile(join(skillsDir, `${s.name}.md`), s.content_md, "utf-8");
+      // P3 carry-forward: associated text files materialize under
+      // `<skills-dir>/<skill-name>/<file-name>`. Path safety is enforced
+      // by the world's `file_name_is_valid` at upload time (no `..`, no
+      // `/`, alphanumeric + dash + underscore + dot only), so a plain
+      // join is safe here.
+      const files = s.files ?? [];
+      if (files.length > 0) {
+        const skillSubdir = join(skillsDir, s.name);
+        await mkdir(skillSubdir, { recursive: true });
+        for (const f of files) {
+          await writeFile(join(skillSubdir, f.name), f.content, "utf-8");
+        }
+      }
     }
   }
 

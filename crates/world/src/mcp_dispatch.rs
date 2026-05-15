@@ -140,6 +140,8 @@ pub async fn dispatch(
         "skill_detach" => handle_skill_detach(pool, event_tx, &caller, args).await,
         "skill_delete" => handle_skill_delete(pool, event_tx, &caller, args).await,
         "task_set_preference" => handle_task_set_preference(pool, event_tx, &caller, args).await,
+        "skill_file_upsert" => handle_skill_file_upsert(pool, event_tx, &caller, args).await,
+        "skill_file_delete" => handle_skill_file_delete(pool, event_tx, &caller, args).await,
         "skill_list_revisions" => handle_skill_list_revisions(pool, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
@@ -1548,6 +1550,64 @@ async fn handle_task_set_preference(
         "preferred_backend": backend_change.flatten(),
         "preferred_model": model_change.flatten(),
     }))
+}
+
+/// P3 carry-forward: skill_files CRUD MCP tools.
+async fn handle_skill_file_upsert(
+    pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let skill_id = require_str(&args, "skill_id")?.to_string();
+    let name = require_str(&args, "name")?.to_string();
+    let content = require_str(&args, "content")?.to_string();
+    match crate::skills::upsert_file(pool, &caller.startup_id, &skill_id, &name, &content).await {
+        Ok(id) => {
+            // Reuse SkillChanged with kind="file_upsert" so any subscribed
+            // console fans hear it without a new variant.
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                v: 1,
+                startup_id: caller.startup_id.clone(),
+                kind: "file_upsert".to_string(),
+                skill_id: skill_id.clone(),
+                agent_id: None,
+                skill: None,
+            });
+            Ok(json!({"file_id": id, "skill_id": skill_id, "name": name}))
+        }
+        Err(crate::skills::SkillError::NotFound) => Err(("not_found".into(), "skill not found".into())),
+        Err(crate::skills::SkillError::CrossStartup) => Err(("cross_startup".into(), "skill belongs to another startup".into())),
+        Err(crate::skills::SkillError::BadName) => Err(("bad_name".into(), "file name contains invalid characters".into())),
+        Err(crate::skills::SkillError::OversizeContent) => Err(("content_too_large".into(), "file content exceeds limit".into())),
+        Err(e) => Err(("sql".into(), format!("{e:?}"))),
+    }
+}
+
+async fn handle_skill_file_delete(
+    pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let skill_id = require_str(&args, "skill_id")?.to_string();
+    let name = require_str(&args, "name")?.to_string();
+    match crate::skills::delete_file(pool, &caller.startup_id, &skill_id, &name).await {
+        Ok(()) => {
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                v: 1,
+                startup_id: caller.startup_id.clone(),
+                kind: "file_delete".to_string(),
+                skill_id: skill_id.clone(),
+                agent_id: None,
+                skill: None,
+            });
+            Ok(json!({"ok": true, "skill_id": skill_id, "name": name}))
+        }
+        Err(crate::skills::SkillError::NotFound) => Err(("not_found".into(), "skill or file not found".into())),
+        Err(crate::skills::SkillError::CrossStartup) => Err(("cross_startup".into(), "skill belongs to another startup".into())),
+        Err(e) => Err(("sql".into(), format!("{e:?}"))),
+    }
 }
 
 /// P3 carry-forward: skill revision history. Returns up to the most recent
