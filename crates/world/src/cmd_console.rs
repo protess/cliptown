@@ -46,7 +46,38 @@ pub async fn dispatch(
 
     let is_manager = identity.role.at_least(OperatorRole::Manager);
 
-    match inbound {
+    // P3 Theme D follow-up: trace the command kind + operator so audit
+    // replays correlate with structured logs. `Hello` and `Recheck` are
+    // chatty; debug level keeps a default-filter subscriber clean while
+    // letting `RUST_LOG=cliptown_world::cmd_console=debug` surface them.
+    let cmd_start = std::time::Instant::now();
+    let command_kind = match &inbound {
+        ConsoleInbound::Hello { .. } => "hello",
+        ConsoleInbound::OperatorMove { .. } => "operator_move",
+        ConsoleInbound::OperatorPossess { .. } => "operator_possess",
+        ConsoleInbound::OperatorUnpossess { .. } => "operator_unpossess",
+        ConsoleInbound::OperatorDirective { .. } => "operator_directive",
+        ConsoleInbound::OperatorAcceptProposal { .. } => "operator_accept_proposal",
+        ConsoleInbound::OperatorRejectProposal { .. } => "operator_reject_proposal",
+        ConsoleInbound::OperatorForceAccept { .. } => "operator_force_accept",
+        ConsoleInbound::OperatorForceFail { .. } => "operator_force_fail",
+        ConsoleInbound::OperatorRecheckBackends => "operator_recheck_backends",
+        ConsoleInbound::SkillAttach { .. } => "skill_attach",
+        ConsoleInbound::SkillDetach { .. } => "skill_detach",
+        ConsoleInbound::OperatorList { .. } => "operator_list",
+        ConsoleInbound::OperatorCreate { .. } => "operator_create",
+        ConsoleInbound::OperatorRevoke { .. } => "operator_revoke",
+        ConsoleInbound::OperatorSetRole { .. } => "operator_set_role",
+    };
+    tracing::debug!(
+        component = "cmd_console",
+        event = "enter",
+        command_kind,
+        operator_id = %identity.id,
+        operator_role = identity.role.as_str(),
+    );
+
+    let result = match inbound {
         ConsoleInbound::Hello { .. } => {
             // Auth was already validated in http::handle_console; subsequent hello is a no-op echo.
             json!({"type":"ok","kind":"hello"})
@@ -411,7 +442,16 @@ pub async fn dispatch(
                 Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
             }
         }
-    }
+    };
+    tracing::debug!(
+        component = "cmd_console",
+        event = "exit",
+        command_kind,
+        operator_id = %identity.id,
+        elapsed_us = cmd_start.elapsed().as_micros() as u64,
+        outcome = result.get("type").and_then(|v| v.as_str()).unwrap_or("?"),
+    );
+    result
 }
 
 /// Generic helper: read current task status, compute new status via task_sm, run UPDATE.

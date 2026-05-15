@@ -1,5 +1,34 @@
 # Changelog
 
+## M13 — chore: structured tracing events across hot paths (2026-05-15)
+
+Phase 3 Theme D follow-up. `/metrics` (#51) covered the metrics
+endpoint but the spec for Theme D also called out "structured
+`tracing` spans through hot paths (MCP dispatch, scheduler tick,
+view broadcast)." That side stayed deferred.
+
+This PR adds **event-pair tracing** (enter + exit-with-elapsed) on
+the three dispatch hot paths:
+
+- `mcp_dispatch::dispatch` — per-call enter/exit with tool +
+  agent_id + startup_id + corr_id + outcome (ok|error) + elapsed_us.
+- `scheduler::tick` — emits `tick_complete` debug event when
+  dispatched>0 or elapsed>5ms, with tick_seq + dispatched +
+  elapsed_us. Quiet ticks skip the log so a default-level
+  subscriber stays clean.
+- `cmd_console::dispatch` — enter/exit with command_kind (16
+  variants enumerated) + operator_id + operator_role + outcome.
+
+We use the event-pair pattern rather than `Span::entered()` because
+the WS loop's task awaits SQL inside these handlers — a `!Send`
+Span guard would break `tokio::spawn`'s Send bound. Structured
+backends correlate enter+exit via the `corr_id` field; console
+subscribers see two compact events per dispatch.
+
+Default subscriber filter (`RUST_LOG=info`) sees only error-path
+events; debug-level filter (`RUST_LOG=cliptown_world=debug`)
+surfaces the full enter/exit pair for latency replay.
+
 ## M13 — feat: admin-only operator management commands (2026-05-15)
 
 Phase 3 Theme B follow-up. #52 landed the `operators` table + role-

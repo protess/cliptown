@@ -66,6 +66,11 @@ pub async fn tick(
     pool: &SqlitePool,
     supervisor: Option<&Arc<AgentSupervisor>>,
 ) -> usize {
+    // P3 Theme D follow-up: tick-level tracing event so post-hoc analysis can
+    // bucket dispatch latency by tick. Same event-pair pattern as
+    // mcp_dispatch — no Span guard because the tick handler awaits SQL.
+    let tick_start = std::time::Instant::now();
+    let tick_seq = world.tick_seq;
     let queued: Vec<QueuedTask> = match sqlx::query_as(
         "SELECT t.id, t.title, t.description, t.assignee_agent_id, t.required_room, \
                 t.parent_id, t.preferred_backend, t.preferred_model, \
@@ -297,6 +302,18 @@ pub async fn tick(
             continue;
         }
         dispatched += 1;
+    }
+    if dispatched > 0 || tick_start.elapsed().as_millis() > 5 {
+        // Only log non-trivial ticks. Quiet ticks (0 dispatches, <5ms) are
+        // skipped so /metrics' tick_seq counter is the cheap path; this
+        // event is for "something happened" replay.
+        tracing::debug!(
+            component = "scheduler",
+            event = "tick_complete",
+            tick_seq,
+            dispatched,
+            elapsed_us = tick_start.elapsed().as_micros() as u64,
+        );
     }
     dispatched
 }
