@@ -1,5 +1,28 @@
 # Changelog
 
+## M13 — feat: cost variance telemetry (2026-05-15)
+
+Final Theme C deferred bit. Tasks can carry a `cost_estimate_usd`
+hint; when actual spend lands via `report_budget`, the world emits a
+`task_cost_variance` system_event when |actual−estimate|/estimate ≥
+50%. Operators get an early warning when a routing decision (model
+choice, prompt complexity) blew the estimate.
+
+- Migration 0005 adds nullable `cost_estimate_usd REAL` to `tasks`.
+  NULL = no estimate, variance comparison skipped.
+- `POST /api/admin/tasks` accepts the field. Validated as finite +
+  non-negative at the boundary; bad inputs return 400 with
+  `bad_cost_estimate`.
+- `cmd_worker::ReportBudget` joins on the task row after a
+  successful budget apply; when both estimate and cost are present
+  and crossed the ±50% threshold, emits the system_event. Overrun
+  ⇒ `severity = "warn"`; underrun ⇒ `severity = "info"`. Within
+  threshold = silent. Multi-spawn / resumed runs may emit twice for
+  the same task — the operator console dedupes by `task_id` (no
+  cliptown-side dedup state).
+- 4 new integration tests cover overrun + underrun + within +
+  no-estimate paths.
+
 ## M13 — feat: smoke against remote world targets (2026-05-15)
 
 Phase 3 Theme A carry-forward. The smoke harness was local-only —
