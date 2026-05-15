@@ -3,27 +3,67 @@
 ## M13 — feat: world-side periodic execenv GC daemon (2026-05-15)
 
 Closes the "World-side periodic auto-GC deferred" note from the
-execenv-GC chore PR. The standalone `scripts/gc-execenv.sh` works
-for operator-driven cleanups; unattended deploys want a daemon
-that runs the same criteria automatically.
+script PR.
 
-- New `crates/world/src/execenv_gc.rs` module with `run_pass()` +
-  `spawn()`. Selection mirrors the script: terminal-state tasks
-  (`done` / `failed` / `escalated`) with `updated_at` older than
-  the age cutoff. Removes `<workspaces_root>/<startup_id>/<task_id>/`.
-  Artifacts at `<startup_id>/artifacts/` are NOT touched.
-- Opt-in via **`CLIPTOWN_EXECENV_GC_ENABLED=1`**. Overrides:
-  `CLIPTOWN_EXECENV_GC_AGE_DAYS` (default 7),
-  `CLIPTOWN_EXECENV_GC_INTERVAL_HOURS` (default 6),
-  `CLIPTOWN_WORKSPACES_ROOT` (default `./workspaces`).
-- `main.rs` spawns the GC task at boot when enabled; logs
-  `execenv_gc_enabled` + per-pass `pass_complete { reaped }` when
-  ≥ 1 dir was removed.
-- 4 unit tests: terminal-old-reaped + busy-old-kept + recent-kept
-  combo, missing-workdir-silently-skipped, env-disabled-by-default,
-  env-overrides-honored.
+- New `execenv_gc` module with `run_pass` + `spawn`. Selection
+  mirrors `scripts/gc-execenv.sh`: terminal-state tasks past age
+  cutoff. Artifacts dir not touched.
+- Opt-in via `CLIPTOWN_EXECENV_GC_ENABLED=1`. Overrides:
+  `_AGE_DAYS` (7), `_INTERVAL_HOURS` (6), `CLIPTOWN_WORKSPACES_ROOT`.
+- 4 unit tests; DEPLOY.md updated.
 
-`DEPLOY.md` Secrets section documents the new env vars.
+## M13 — feat: skill_revert (rollback to historical revision) (2026-05-15)
+
+Closes the "Rollback deferred" note from #67. Schema was ready;
+this PR ships the mutation path.
+
+- `skills::revert_to_revision` loads historical row, sets it live,
+  appends a NEW revision pointing at the same content. History
+  stays linear.
+- 26th MCP tool `skill_revert {skill_id, rev_seq}`. Same-startup
+  gate.
+- Emits `SkillChanged { kind: "revert" }`.
+- 4 new DAO tests.
+
+Operator-side ConsoleInbound + frontend UI deferred — MCP path is
+callable today.
+
+## M13 — feat: operator identity on hello reply + admin-only UI gate (2026-05-15)
+
+Closes a known limit on #69. OperatorsPanel + SkillsPanel global
+toggle were admin-only on the server but always visible client-side.
+
+- New ConsoleOutbound `HelloOk { operator_id, operator_name, role }`.
+  Emitted after token validation; token not echoed.
+- Frontend reducer populates `state.currentOperator`.
+- `OperatorsPanel` returns null when role ≠ admin (hooks run first
+  so React's hook-order invariant holds; also hides pre-hello to
+  avoid flash-in).
+
+## M13 — feat: is_global toggle + indicator in SkillsPanel (2026-05-15)
+
+Finishes the global-skills surface. #68 added the backend flag +
+`skill_set_global` ConsoleInbound; this PR adds the UI knob.
+
+- `SkillWithAttachments` carries `is_global`. `SkillVM` mirrors it.
+- Per-row globe toggle (admin-only on server). 🌐 badge appears
+  next to the name when set.
+
+## M13 — docs: Phase 4 roadmap brainstorm (2026-05-15)
+
+Closes the "Phase 4 brainstorm needed" note from the Phase 3
+roadmap. Catalogues candidate themes — peer review, time-bounded
+dependencies, work-stealing (the deferred Theme E), local-LLM
+polish, operator UX polish, and a sketched multi-cliptown
+federation theme — with sizing + recommended sequencing.
+
+Recommended first PR cycle: Theme F1 (local-LLM smoke) to validate
+the local-first narrative from #55 before stacking new
+coordination features.
+
+Each theme will get its own brainstorm spec when picked up; this
+doc is intentionally a strategic-direction sketch, not a binding
+plan.
 
 ## M13 — feat: operator management panel in the console (2026-05-15)
 

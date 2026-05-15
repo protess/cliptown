@@ -236,6 +236,21 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
         }
     };
 
+    // P3 carry-forward: tell the frontend who's connected so it can gate
+    // admin-only UI surfaces (OperatorsPanel, the SkillsPanel global toggle).
+    // Token is NOT echoed; identity-only. Failure to send drops the
+    // connection — the snapshot send below will fail identically.
+    let hello_ok = json!({
+        "type": "hello_ok",
+        "v": 1,
+        "operator_id": identity.id,
+        "operator_name": identity.name,
+        "role": identity.role.as_str(),
+    });
+    if socket.send(Message::Text(hello_ok.to_string().into())).await.is_err() {
+        return;
+    }
+
     // Subscribe to the world view watcher BEFORE sending the initial snapshot
     // so we don't miss a tick that fires between the borrow + the subsequent
     // `changed()` await.
