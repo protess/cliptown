@@ -143,6 +143,7 @@ pub async fn dispatch(
         "skill_file_upsert" => handle_skill_file_upsert(pool, event_tx, &caller, args).await,
         "skill_file_delete" => handle_skill_file_delete(pool, event_tx, &caller, args).await,
         "skill_list_revisions" => handle_skill_list_revisions(pool, &caller, args).await,
+        "skill_revert" => handle_skill_revert(pool, event_tx, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
             format!("no handler for tool: {}", tool),
@@ -1645,6 +1646,52 @@ async fn handle_skill_list_revisions(
         }
         Err(crate::skills::SkillError::NotFound) => Err(("not_found".into(), "skill not found".into())),
         Err(crate::skills::SkillError::CrossStartup) => Err(("cross_startup".into(), "skill belongs to another startup".into())),
+        Err(e) => Err(("sql".into(), format!("{e:?}"))),
+    }
+}
+
+/// P3 carry-forward: revert a skill to a previous revision. Agent path —
+/// caller must own the skill's startup (same-startup gate). Appends a NEW
+/// revision row referencing the historical content so the audit log stays
+/// linear.
+async fn handle_skill_revert(
+    pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let skill_id = require_str(&args, "skill_id")?.to_string();
+    let rev_seq = args
+        .get("rev_seq")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| ("bad_args".to_string(), "rev_seq required".to_string()))?;
+    match crate::skills::revert_to_revision(
+        pool,
+        &caller.startup_id,
+        &skill_id,
+        rev_seq,
+        crate::skills::Author::Agent(&caller.agent_id),
+    )
+    .await
+    {
+        Ok(content_md) => {
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                v: 1,
+                startup_id: caller.startup_id.clone(),
+                kind: "revert".to_string(),
+                skill_id: skill_id.clone(),
+                agent_id: None,
+                skill: None,
+            });
+            Ok(json!({"skill_id": skill_id, "rev_seq": rev_seq, "len": content_md.len()}))
+        }
+        Err(crate::skills::SkillError::NotFound) => {
+            Err(("not_found".into(), "skill or revision not found".into()))
+        }
+        Err(crate::skills::SkillError::CrossStartup) => Err((
+            "cross_startup".into(),
+            "skill belongs to another startup".into(),
+        )),
         Err(e) => Err(("sql".into(), format!("{e:?}"))),
     }
 }
