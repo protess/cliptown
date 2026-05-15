@@ -7,11 +7,25 @@ _(empty)_
 ## Completed
 
 ### M13 feat — operator identity on hello reply + admin-only UI gate — 2026-05-15
-**Source:** Known limit flagged on #69 (frontend always-visible admin panel). PR `<TBD>`.
+**Source:** Known limit flagged on #69. PR `<TBD>`.
 
-Was: `OperatorsPanel` (#69) and the SkillsPanel global toggle (#70) gated admin-only on the server but were visible to every operator client-side. Non-admins saw an empty panel + got silent `forbidden` errors.
+Was: `OperatorsPanel` + SkillsPanel global toggle gated admin on the server but always visible client-side. Non-admins got silent `forbidden` errors.
 
-Fixed: new `ConsoleOutbound::HelloOk { operator_id, operator_name, role }` emitted by `http.rs::handle_console` after token validation (token not echoed). Frontend reducer captures into `state.currentOperator`. `OperatorsPanel` returns `null` when role ≠ admin (also hides pre-hello to avoid the brief flash-in). `currentOperator` available via context for future panels.
+Fixed: new `ConsoleOutbound::HelloOk { operator_id, operator_name, role }` emitted after token validation (token not echoed). Frontend reducer populates `state.currentOperator`. `OperatorsPanel` hides for non-admin (hooks called first to preserve React's hook-order invariant).
+
+### M13 feat — is_global toggle in SkillsPanel — 2026-05-15
+**Source:** Roadmap polish, finishes the global-skills surface (#68 backend-only). PR `<TBD>`.
+
+Was: #68 added `is_global` + admin-only `skill_set_global` but SkillsPanel had no UI knob.
+
+Fixed: `SkillWithAttachments` + JSON carry `is_global`; `SkillVM` mirrors. Per-row globe toggle button (admin-only on server); 🌐 badge next to the name when set.
+
+### M13 docs — Phase 4 roadmap brainstorm — 2026-05-15
+**Source:** Closes the "Phase 4 brainstorm needed" note from the Phase 3 roadmap. PR `<TBD>`.
+
+Was: Phase 3 done end-to-end, every carry-forward landed (including token hashing in #74), but Phase 4 had no spec. Theme E (multi-agent coordination) was deferred from Phase 3 with "needs its own brainstorm before committing."
+
+Fixed: `docs/superpowers/specs/2026-05-15-phase-4-roadmap.md`. Theme E split into E1 (peer review beyond manager), E2 (blocking dependencies + deadlines), E3 (work-stealing among idle peers). Plus F1 (local-LLM smoke), F2 (multi-cliptown federation — XL, may defer), G (operator UX polish bucket). Sequencing recommends F1 first to validate the local-first narrative from #55, then E1→E2→G→E3.
 
 ### M13 feat — operator management panel in the console — 2026-05-15
 **Source:** Theme B frontend follow-up. PR `<TBD>`.

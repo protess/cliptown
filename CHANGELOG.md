@@ -2,23 +2,40 @@
 
 ## M13 — feat: operator identity on hello reply + admin-only UI gate (2026-05-15)
 
-Closes a known limitation flagged on #69. Operator console
-surfaces (`OperatorsPanel`, the SkillsPanel global toggle from #70)
-were admin-only on the server but always visible client-side —
-non-admin operators saw an empty `OperatorsPanel` and got silent
-`forbidden` replies.
+Closes a known limit on #69. OperatorsPanel + SkillsPanel global
+toggle were admin-only on the server but always visible client-side.
 
-- New ConsoleOutbound variant `HelloOk { operator_id, operator_name, role }`.
-  Emitted by `http.rs::handle_console` immediately after token
-  validation, before the WorldViewSnapshot. Token is NOT echoed —
-  identity-only.
-- Frontend reducer captures the frame into `state.currentOperator`
-  (`{id, name, role}` or `null` pre-hello).
-- `OperatorsPanel` returns `null` when role ≠ admin. Hides for
-  viewer / manager + briefly for everyone during the post-connect
-  pre-hello window (avoids a flash-in).
-- `currentOperator` available via context for any future panels
-  that want to gate themselves.
+- New ConsoleOutbound `HelloOk { operator_id, operator_name, role }`.
+  Emitted after token validation; token not echoed.
+- Frontend reducer populates `state.currentOperator`.
+- `OperatorsPanel` returns null when role ≠ admin (hooks run first
+  so React's hook-order invariant holds; also hides pre-hello to
+  avoid flash-in).
+
+## M13 — feat: is_global toggle + indicator in SkillsPanel (2026-05-15)
+
+Finishes the global-skills surface. #68 added the backend flag +
+`skill_set_global` ConsoleInbound; this PR adds the UI knob.
+
+- `SkillWithAttachments` carries `is_global`. `SkillVM` mirrors it.
+- Per-row globe toggle (admin-only on server). 🌐 badge appears
+  next to the name when set.
+
+## M13 — docs: Phase 4 roadmap brainstorm (2026-05-15)
+
+Closes the "Phase 4 brainstorm needed" note from the Phase 3
+roadmap. Catalogues candidate themes — peer review, time-bounded
+dependencies, work-stealing (the deferred Theme E), local-LLM
+polish, operator UX polish, and a sketched multi-cliptown
+federation theme — with sizing + recommended sequencing.
+
+Recommended first PR cycle: Theme F1 (local-LLM smoke) to validate
+the local-first narrative from #55 before stacking new
+coordination features.
+
+Each theme will get its own brainstorm spec when picked up; this
+doc is intentionally a strategic-direction sketch, not a binding
+plan.
 
 ## M13 — feat: operator management panel in the console (2026-05-15)
 
