@@ -1,5 +1,30 @@
 # Changelog
 
+## M13 — feat: world-side periodic execenv GC daemon (2026-05-15)
+
+Closes the "World-side periodic auto-GC deferred" note from the
+execenv-GC chore PR. The standalone `scripts/gc-execenv.sh` works
+for operator-driven cleanups; unattended deploys want a daemon
+that runs the same criteria automatically.
+
+- New `crates/world/src/execenv_gc.rs` module with `run_pass()` +
+  `spawn()`. Selection mirrors the script: terminal-state tasks
+  (`done` / `failed` / `escalated`) with `updated_at` older than
+  the age cutoff. Removes `<workspaces_root>/<startup_id>/<task_id>/`.
+  Artifacts at `<startup_id>/artifacts/` are NOT touched.
+- Opt-in via **`CLIPTOWN_EXECENV_GC_ENABLED=1`**. Overrides:
+  `CLIPTOWN_EXECENV_GC_AGE_DAYS` (default 7),
+  `CLIPTOWN_EXECENV_GC_INTERVAL_HOURS` (default 6),
+  `CLIPTOWN_WORKSPACES_ROOT` (default `./workspaces`).
+- `main.rs` spawns the GC task at boot when enabled; logs
+  `execenv_gc_enabled` + per-pass `pass_complete { reaped }` when
+  ≥ 1 dir was removed.
+- 4 unit tests: terminal-old-reaped + busy-old-kept + recent-kept
+  combo, missing-workdir-silently-skipped, env-disabled-by-default,
+  env-overrides-honored.
+
+`DEPLOY.md` Secrets section documents the new env vars.
+
 ## M13 — feat: operator management panel in the console (2026-05-15)
 
 Final Phase 3 carry-forward — Theme B frontend surface.

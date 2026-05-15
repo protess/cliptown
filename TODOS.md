@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — world-side periodic execenv GC daemon — 2026-05-15
+**Source:** Closes the "World-side periodic auto-GC deferred" note from the script PR. PR `<TBD>`.
+
+Was: `scripts/gc-execenv.sh` works for operator-driven cleanups, but unattended deploys had no scheduled sweep.
+
+Fixed: new `crates/world/src/execenv_gc.rs` with `run_pass` + `spawn`. Selection mirrors the script (terminal-state tasks past age cutoff). Opt-in via `CLIPTOWN_EXECENV_GC_ENABLED=1` with `CLIPTOWN_EXECENV_GC_AGE_DAYS` (7), `CLIPTOWN_EXECENV_GC_INTERVAL_HOURS` (6), `CLIPTOWN_WORKSPACES_ROOT` (`./workspaces`) overrides. `main.rs` spawns the task at boot. Logs `pass_complete { reaped }` per non-empty pass. 4 unit tests. DEPLOY.md documents the env vars.
+
 ### M13 feat — operator management panel in the console — 2026-05-15
 **Source:** Theme B frontend follow-up. PR `<TBD>`.
 
