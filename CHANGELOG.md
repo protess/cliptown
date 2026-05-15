@@ -1,5 +1,14 @@
 # Changelog
 
+## M13 — feat: is_global toggle + indicator in SkillsPanel (2026-05-15)
+
+Finishes the global-skills surface. #68 added the backend flag +
+`skill_set_global` ConsoleInbound; this PR adds the UI knob.
+
+- `SkillWithAttachments` carries `is_global`. `SkillVM` mirrors it.
+- Per-row globe toggle (admin-only on server). 🌐 badge appears
+  next to the name when set.
+
 ## M13 — docs: Phase 4 roadmap brainstorm (2026-05-15)
 
 Closes the "Phase 4 brainstorm needed" note from the Phase 3

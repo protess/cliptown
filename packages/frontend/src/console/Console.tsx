@@ -73,6 +73,13 @@ export function Console() {
     [send, possessedStartupId],
   );
 
+  const onSkillSetGlobal = useCallback(
+    (skillId: string, isGlobal: boolean) => {
+      send({ type: "skill_set_global", v: 1, skill_id: skillId, is_global: isGlobal });
+    },
+    [send],
+  );
+
   return (
     <div
       style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
@@ -109,6 +116,7 @@ export function Console() {
             onDetach={onSkillDetach}
             onUpsert={onSkillUpsert}
             onDelete={onSkillDelete}
+            onSetGlobal={onSkillSetGlobal}
           />
           <OperatorsPanel />
         </main>

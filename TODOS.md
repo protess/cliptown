@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — is_global toggle in SkillsPanel — 2026-05-15
+**Source:** Roadmap polish, finishes the global-skills surface (#68 backend-only). PR `<TBD>`.
+
+Was: #68 added `is_global` + admin-only `skill_set_global` but SkillsPanel had no UI knob.
+
+Fixed: `SkillWithAttachments` + JSON carry `is_global`; `SkillVM` mirrors. Per-row globe toggle button (admin-only on server); 🌐 badge next to the name when set.
+
 ### M13 docs — Phase 4 roadmap brainstorm — 2026-05-15
 **Source:** Closes the "Phase 4 brainstorm needed" note from the Phase 3 roadmap. PR `<TBD>`.
 
