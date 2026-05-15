@@ -2,30 +2,80 @@
 
 ## M13 — feat: hash operator tokens at rest (2026-05-15)
 
-Closes the "Token hashing deferred — plain bearer is fine until
-rotation tooling exists" note from #61. SQLite snapshot leaks would
-have exposed every active bearer.
+Closes the "Token hashing deferred" note from #61.
 
-- Migration 0009 recreates the `operators` table with a nullable
-  `token` column + new `token_hash TEXT` column + index on the hash.
-  The CREATE-and-copy dance is necessary because SQLite doesn't
-  support `DROP NOT NULL` directly.
-- `auth::hash_operator_token` (SHA-256 hex). 128-bit random UUID
-  tokens don't need a slow KDF — rainbow-table attacks are
-  infeasible at that entropy.
-- `auth::validate_operator_token` looks up by `token_hash` first,
-  then falls back to the legacy plaintext path for pre-0009 rows.
-  A successful plaintext match rewrites the row in place (sets
-  `token_hash`, clears `token`) so each legacy row migrates lazily
-  on first use.
-- `operator_create` (cmd_console) stores only the hash; the
-  plaintext is returned in the response body exactly once and never
-  persisted.
-- Seeded `op_default` row (dev-token) keeps working via the legacy
-  fallback; first WS hello migrates it to hashed form.
+- Migration 0009 recreates `operators` (SQLite has no DROP NOT NULL)
+  with nullable `token` + new `token_hash TEXT`.
+- `auth::hash_operator_token` = SHA-256 hex.
+- `validate_operator_token` looks up by hash first, falls back to
+  plaintext for pre-0009 rows; successful plaintext match rewrites
+  in place (lazy migration).
+- `operator_create` stores only the hash; plaintext returned once.
 
-A future migration will drop the `token` column once the legacy
-fallback has stayed cold for a release cycle.
+## M13 — feat: world-side periodic execenv GC daemon (2026-05-15)
+
+Closes the "World-side periodic auto-GC deferred" note from the
+script PR.
+
+- New `execenv_gc` module with `run_pass` + `spawn`. Selection
+  mirrors `scripts/gc-execenv.sh`: terminal-state tasks past age
+  cutoff. Artifacts dir not touched.
+- Opt-in via `CLIPTOWN_EXECENV_GC_ENABLED=1`. Overrides:
+  `_AGE_DAYS` (7), `_INTERVAL_HOURS` (6), `CLIPTOWN_WORKSPACES_ROOT`.
+- 4 unit tests; DEPLOY.md updated.
+
+## M13 — feat: skill_revert (rollback to historical revision) (2026-05-15)
+
+Closes the "Rollback deferred" note from #67. Schema was ready;
+this PR ships the mutation path.
+
+- `skills::revert_to_revision` loads historical row, sets it live,
+  appends a NEW revision pointing at the same content. History
+  stays linear.
+- 26th MCP tool `skill_revert {skill_id, rev_seq}`. Same-startup
+  gate.
+- Emits `SkillChanged { kind: "revert" }`.
+- 4 new DAO tests.
+
+Operator-side ConsoleInbound + frontend UI deferred — MCP path is
+callable today.
+
+## M13 — feat: operator identity on hello reply + admin-only UI gate (2026-05-15)
+
+Closes a known limit on #69. OperatorsPanel + SkillsPanel global
+toggle were admin-only on the server but always visible client-side.
+
+- New ConsoleOutbound `HelloOk { operator_id, operator_name, role }`.
+  Emitted after token validation; token not echoed.
+- Frontend reducer populates `state.currentOperator`.
+- `OperatorsPanel` returns null when role ≠ admin (hooks run first
+  so React's hook-order invariant holds; also hides pre-hello to
+  avoid flash-in).
+
+## M13 — feat: is_global toggle + indicator in SkillsPanel (2026-05-15)
+
+Finishes the global-skills surface. #68 added the backend flag +
+`skill_set_global` ConsoleInbound; this PR adds the UI knob.
+
+- `SkillWithAttachments` carries `is_global`. `SkillVM` mirrors it.
+- Per-row globe toggle (admin-only on server). 🌐 badge appears
+  next to the name when set.
+
+## M13 — docs: Phase 4 roadmap brainstorm (2026-05-15)
+
+Closes the "Phase 4 brainstorm needed" note from the Phase 3
+roadmap. Catalogues candidate themes — peer review, time-bounded
+dependencies, work-stealing (the deferred Theme E), local-LLM
+polish, operator UX polish, and a sketched multi-cliptown
+federation theme — with sizing + recommended sequencing.
+
+Recommended first PR cycle: Theme F1 (local-LLM smoke) to validate
+the local-first narrative from #55 before stacking new
+coordination features.
+
+Each theme will get its own brainstorm spec when picked up; this
+doc is intentionally a strategic-direction sketch, not a binding
+plan.
 
 ## M13 — feat: operator management panel in the console (2026-05-15)
 

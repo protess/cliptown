@@ -255,6 +255,14 @@ Same image works on any Docker host. Quick notes:
 - **`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`** — override the CLI's
   upstream endpoint. Used for local-LLM routing (ollama, vLLM,
   LiteLLM proxy, etc.). See [Local LLM](#local-llm-ollama-etc).
+- **`CLIPTOWN_EXECENV_GC_ENABLED=1`** — opt in to the world-side
+  periodic execenv GC daemon. Same selection criteria as
+  `scripts/gc-execenv.sh` (terminal-state tasks past the age
+  cutoff) but runs unattended every
+  `CLIPTOWN_EXECENV_GC_INTERVAL_HOURS` (default 6h). Workspaces
+  root from `CLIPTOWN_WORKSPACES_ROOT` (default `./workspaces`).
+  Age cutoff `CLIPTOWN_EXECENV_GC_AGE_DAYS` (default 7d). Off by
+  default — dev / smoke envs stay quiet.
 - **`CLIPTOWN_PER_TASK_WORKERS=1`** — opt in to per-task worker
   spawn. The scheduler hands each `queued` task to the supervisor,
   which fires a one-shot `worker --real --task-id --prompt

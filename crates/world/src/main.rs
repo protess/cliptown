@@ -105,6 +105,21 @@ async fn main() -> Result<()> {
         });
     }
 
+    // P3 carry-forward: opt-in periodic execenv GC daemon. Reads its config
+    // from env vars; if `CLIPTOWN_EXECENV_GC_ENABLED` is unset, the daemon
+    // never starts and operators stay on the manual `scripts/gc-execenv.sh`
+    // path. See `crates/world/src/execenv_gc.rs` for the selection criteria.
+    if let Some(gc_cfg) = cliptown_world::execenv_gc::GcConfig::from_env() {
+        tracing::info!(
+            component = "world",
+            event = "execenv_gc_enabled",
+            workspaces_root = %gc_cfg.workspaces_root.display(),
+            age_secs = gc_cfg.max_age_secs,
+            interval_secs = gc_cfg.interval.as_secs(),
+        );
+        cliptown_world::execenv_gc::spawn(pool.clone(), gc_cfg);
+    }
+
     let max_review_rounds = cfg.task.max_review_rounds;
     let app = http::router(http::AppState {
         pool, handle, catalog, supervisor, max_review_rounds,

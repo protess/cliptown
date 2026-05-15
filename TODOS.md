@@ -9,9 +9,44 @@ _(empty)_
 ### M13 feat — hash operator tokens at rest — 2026-05-15
 **Source:** Closes the "Token hashing deferred" note from #61. PR `<TBD>`.
 
-Was: `operators.token` stored plaintext bearers. A SQLite snapshot leak would expose every active operator.
+Was: `operators.token` stored plaintext bearers — SQLite snapshot leak exposes every active token.
 
-Fixed: migration 0009 recreates the table with a nullable `token` (deprecated) + new `token_hash TEXT` column. `auth::hash_operator_token` (SHA-256 hex; 128-bit UUID entropy doesn't need a slow KDF). `validate_operator_token` looks up by `token_hash` first then falls back to legacy plaintext for pre-0009 rows — successful plaintext match rewrites the row in place (lazy migration). `operator_create` stores only the hash; plaintext returned once in response and never persisted. Seeded `op_default` keeps working via the fallback. Future migration drops the legacy column once unused.
+Fixed: migration 0009 recreates the table with nullable `token` + new `token_hash TEXT`. `auth::hash_operator_token` (SHA-256 hex; 128-bit UUID entropy doesn't need a slow KDF). `validate_operator_token` hashed lookup first, plaintext fallback for pre-0009 rows — successful plaintext match rewrites the row in place (lazy migration). `operator_create` stores only the hash. Seeded `op_default` keeps working via fallback.
+
+### M13 feat — world-side periodic execenv GC daemon — 2026-05-15
+**Source:** Closes the "World-side periodic auto-GC deferred" note. PR `<TBD>`.
+
+Was: `scripts/gc-execenv.sh` covered operator-driven cleanups; unattended deploys had no scheduled sweep.
+
+Fixed: new `execenv_gc` module (`run_pass` + `spawn`). Selection mirrors the script: terminal-state tasks past age cutoff. Opt-in via `CLIPTOWN_EXECENV_GC_ENABLED=1` with `_AGE_DAYS`, `_INTERVAL_HOURS`, `CLIPTOWN_WORKSPACES_ROOT` overrides. 4 unit tests; DEPLOY.md secrets section updated.
+
+### M13 feat — skill_revert (rollback to historical revision) — 2026-05-15
+**Source:** Closes the "Rollback deferred" note from #67. PR `<TBD>`.
+
+Was: #67 shipped revision history + list_revisions but deferred rollback ("schema supports it, needs UX surface").
+
+Fixed: `skills::revert_to_revision` loads historical row, sets it live, appends a NEW revision. History linear. 26th MCP tool `skill_revert {skill_id, rev_seq}`. Same-startup gate. `SkillChanged { kind: "revert" }`. 4 new DAO tests. Operator UI deferred — MCP callable today.
+
+### M13 feat — operator identity on hello reply + admin-only UI gate — 2026-05-15
+**Source:** Known limit flagged on #69. PR `<TBD>`.
+
+Was: `OperatorsPanel` + SkillsPanel global toggle gated admin on the server but always visible client-side. Non-admins got silent `forbidden` errors.
+
+Fixed: new `ConsoleOutbound::HelloOk { operator_id, operator_name, role }` emitted after token validation (token not echoed). Frontend reducer populates `state.currentOperator`. `OperatorsPanel` hides for non-admin (hooks called first to preserve React's hook-order invariant).
+
+### M13 feat — is_global toggle in SkillsPanel — 2026-05-15
+**Source:** Roadmap polish, finishes the global-skills surface (#68 backend-only). PR `<TBD>`.
+
+Was: #68 added `is_global` + admin-only `skill_set_global` but SkillsPanel had no UI knob.
+
+Fixed: `SkillWithAttachments` + JSON carry `is_global`; `SkillVM` mirrors. Per-row globe toggle button (admin-only on server); 🌐 badge next to the name when set.
+
+### M13 docs — Phase 4 roadmap brainstorm — 2026-05-15
+**Source:** Closes the "Phase 4 brainstorm needed" note from the Phase 3 roadmap. PR `<TBD>`.
+
+Was: Phase 3 done end-to-end, every carry-forward landed (including token hashing in #74), but Phase 4 had no spec. Theme E (multi-agent coordination) was deferred from Phase 3 with "needs its own brainstorm before committing."
+
+Fixed: `docs/superpowers/specs/2026-05-15-phase-4-roadmap.md`. Theme E split into E1 (peer review beyond manager), E2 (blocking dependencies + deadlines), E3 (work-stealing among idle peers). Plus F1 (local-LLM smoke), F2 (multi-cliptown federation — XL, may defer), G (operator UX polish bucket). Sequencing recommends F1 first to validate the local-first narrative from #55, then E1→E2→G→E3.
 
 ### M13 feat — operator management panel in the console — 2026-05-15
 **Source:** Theme B frontend follow-up. PR `<TBD>`.
