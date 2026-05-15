@@ -1,5 +1,21 @@
 # Changelog
 
+## M13 — docs: Phase 4 roadmap brainstorm (2026-05-15)
+
+Closes the "Phase 4 brainstorm needed" note from the Phase 3
+roadmap. Catalogues candidate themes — peer review, time-bounded
+dependencies, work-stealing (the deferred Theme E), local-LLM
+polish, operator UX polish, and a sketched multi-cliptown
+federation theme — with sizing + recommended sequencing.
+
+Recommended first PR cycle: Theme F1 (local-LLM smoke) to validate
+the local-first narrative from #55 before stacking new
+coordination features.
+
+Each theme will get its own brainstorm spec when picked up; this
+doc is intentionally a strategic-direction sketch, not a binding
+plan.
+
 ## M13 — feat: operator management panel in the console (2026-05-15)
 
 Final Phase 3 carry-forward — Theme B frontend surface.
