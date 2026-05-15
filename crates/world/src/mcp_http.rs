@@ -368,6 +368,18 @@ fn handle_tools_list() -> Value {
             }),
         ),
         tool(
+            "skill_list_revisions",
+            "List historical revisions of a skill, newest first. Caller must own the skill's startup.",
+            json!({
+                "type": "object",
+                "required": ["skill_id"],
+                "properties": {
+                    "skill_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                }
+            }),
+        ),
+        tool(
             "task_set_preference",
             "Set per-task model routing override (preferred_backend / preferred_model). Manager-or-assignee only; null clears.",
             json!({
