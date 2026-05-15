@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — hash operator tokens at rest — 2026-05-15
+**Source:** Closes the "Token hashing deferred" note from #61. PR `<TBD>`.
+
+Was: `operators.token` stored plaintext bearers — SQLite snapshot leak exposes every active token.
+
+Fixed: migration 0009 recreates the table with nullable `token` + new `token_hash TEXT`. `auth::hash_operator_token` (SHA-256 hex; 128-bit UUID entropy doesn't need a slow KDF). `validate_operator_token` hashed lookup first, plaintext fallback for pre-0009 rows — successful plaintext match rewrites the row in place (lazy migration). `operator_create` stores only the hash. Seeded `op_default` keeps working via fallback.
+
 ### M13 feat — world-side periodic execenv GC daemon — 2026-05-15
 **Source:** Closes the "World-side periodic auto-GC deferred" note. PR `<TBD>`.
 

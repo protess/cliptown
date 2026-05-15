@@ -1,5 +1,17 @@
 # Changelog
 
+## M13 — feat: hash operator tokens at rest (2026-05-15)
+
+Closes the "Token hashing deferred" note from #61.
+
+- Migration 0009 recreates `operators` (SQLite has no DROP NOT NULL)
+  with nullable `token` + new `token_hash TEXT`.
+- `auth::hash_operator_token` = SHA-256 hex.
+- `validate_operator_token` looks up by hash first, falls back to
+  plaintext for pre-0009 rows; successful plaintext match rewrites
+  in place (lazy migration).
+- `operator_create` stores only the hash; plaintext returned once.
+
 ## M13 — feat: world-side periodic execenv GC daemon (2026-05-15)
 
 Closes the "World-side periodic auto-GC deferred" note from the
