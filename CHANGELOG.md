@@ -2,24 +2,46 @@
 
 ## M13 — feat: skills content authoring in the operator console (2026-05-15)
 
-Roadmap carry-forward — skills authoring UI. Operators previously
-had to use MCP tools or SQL to create/edit/delete skills; the
-console only supported attach/detach.
+Roadmap carry-forward. SkillsPanel only supported attach/detach;
+operators had to use MCP tools or SQL for content authoring.
 
-- Two new ConsoleInbound variants gated manager-or-above:
-  `skill_upsert_operator` and `skill_delete_operator`. Routes
-  through the same `skills::upsert` / `skills::delete` paths the
-  MCP tools use. `skill_id` on upsert is wire-compat-only — server
-  resolves by `(startup_id, name)`.
-- `SkillsPanel.tsx` gets a `+ New skill` button + inline editor
-  (name + markdown content textarea). Each row gains ✎ (edit) and
-  ✕ (delete) controls. Delete prompts for confirm.
-- Editor starts blank for both create + edit. The WS snapshot ships
-  metadata only (`len`/`updated_at`) — re-fetching `content_md` per
-  skill would inflate every snapshot. Operators re-paste / re-type
-  on edit; upsert by name updates in place. Documented inline.
+- 2 new manager-gated ConsoleInbound variants:
+  `skill_upsert_operator` + `skill_delete_operator`. Routes through
+  the same `skills::upsert`/`skills::delete` paths as the MCP tools.
+  `skill_id` on upsert is wire-compat-only — server resolves by
+  `(startup_id, name)`.
+- `SkillsPanel.tsx` gets `+ New skill` button + per-row ✎ edit /
+  ✕ delete with confirm. Inline editor for both create + edit.
+- Editor starts blank for edit too — the WS snapshot ships skill
+  metadata only (`len`/`updated_at`); re-fetching `content_md` per
+  skill would inflate every snapshot. Operators paste/re-type;
+  upsert resolves by `(startup_id, name)` so the existing row
+  updates in place.
 - 4 new integration tests cover upsert (create + update-in-place),
   delete, and viewer-forbidden on both.
+
+## M13 — feat: cost variance telemetry (2026-05-15)
+
+Final Theme C deferred bit. Tasks can carry a `cost_estimate_usd`
+hint; when actual spend lands via `report_budget`, the world emits a
+`task_cost_variance` system_event when |actual−estimate|/estimate ≥
+50%. Operators get an early warning when a routing decision (model
+choice, prompt complexity) blew the estimate.
+
+- Migration 0005 adds nullable `cost_estimate_usd REAL` to `tasks`.
+  NULL = no estimate, variance comparison skipped.
+- `POST /api/admin/tasks` accepts the field. Validated as finite +
+  non-negative at the boundary; bad inputs return 400 with
+  `bad_cost_estimate`.
+- `cmd_worker::ReportBudget` joins on the task row after a
+  successful budget apply; when both estimate and cost are present
+  and crossed the ±50% threshold, emits the system_event. Overrun
+  ⇒ `severity = "warn"`; underrun ⇒ `severity = "info"`. Within
+  threshold = silent. Multi-spawn / resumed runs may emit twice for
+  the same task — the operator console dedupes by `task_id` (no
+  cliptown-side dedup state).
+- 4 new integration tests cover overrun + underrun + within +
+  no-estimate paths.
 
 ## M13 — feat: smoke against remote world targets (2026-05-15)
 

@@ -13,6 +13,13 @@ Was: SkillsPanel only handled attach/detach. Operators had to use MCP tools or r
 
 Fixed: 2 new ConsoleInbound variants (`skill_upsert_operator` / `skill_delete_operator`), both manager-gated, routing through the same `skills::upsert`/`skills::delete` paths as the agent-side MCP tools. SkillsPanel gains `+ New skill` + per-row ✎ edit / ✕ delete with confirm. The editor starts blank for edit too because the WS snapshot ships skill metadata only — re-fetching content per skill would inflate every snapshot. Operators paste/re-type; upsert resolves by `(startup_id, name)` so the existing row is updated in place. 4 new integration tests.
 
+### M13 feat — cost variance telemetry — 2026-05-15
+**Source:** Final Theme C deferred bit (estimate-vs-actual emit). PR `<TBD>`.
+
+Was: Theme C (#53) added `preferred_backend` / `preferred_model` per task but had no closed-loop signal on whether a routing choice was actually saving (or burning) money. CHANGELOG flagged it as deferred pending "estimate inputs first."
+
+Fixed: migration 0005 adds nullable `cost_estimate_usd REAL` to `tasks`. `POST /api/admin/tasks` accepts it (validated finite + non-negative). `cmd_worker::ReportBudget` joins the task row after a successful budget apply; when both estimate and cost are present and the delta crosses ±50%, emits `task_cost_variance` system_event — overrun=warn, underrun=info. 4 new tests cover overrun, underrun, within-threshold (silent), no-estimate (silent). Multi-spawn dedup deferred to the operator console (cliptown-side state is overkill).
+
 ### M13 feat — smoke against remote world targets — 2026-05-15
 **Source:** Phase 3 Theme A carry-forward (remote-smoke parameterization). PR `<TBD>`.
 

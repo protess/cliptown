@@ -58,6 +58,46 @@ pub async fn dispatch(
             .await
             {
                 Ok((new_spent, cap, threshold)) => {
+                    // P3 Theme C follow-up: cost variance telemetry. When the
+                    // task has a `cost_estimate_usd` and this report has a
+                    // concrete `cost_usd`, compare actual vs estimate and
+                    // emit `task_cost_variance` if delta crosses ±50%. The
+                    // 50% threshold is a heuristic — at typical haiku cost
+                    // ranges ($0.001–$0.05) anything tighter would flap. We
+                    // emit on every crossing rather than only the first
+                    // because a task may span multiple report_budget calls
+                    // (multi-spawn / resumed runs); the operator console can
+                    // dedupe by task_id.
+                    if let (Some(tid), Some(actual)) = (task_id.as_deref(), cost_usd) {
+                        let est_row: Result<Option<(Option<f64>,)>, _> =
+                            sqlx::query_as("SELECT cost_estimate_usd FROM tasks WHERE id = ?")
+                                .bind(tid)
+                                .fetch_optional(pool)
+                                .await;
+                        if let Ok(Some((Some(estimate),))) = est_row {
+                            if estimate > 0.0 && actual.is_finite() {
+                                let delta_pct = (actual - estimate) / estimate * 100.0;
+                                if delta_pct.abs() >= 50.0 {
+                                    let severity = if delta_pct > 0.0 { "warn" } else { "info" };
+                                    let _ = crate::emit::emit_system_event(
+                                        pool,
+                                        event_tx,
+                                        Some(&startup_id),
+                                        "task_cost_variance",
+                                        &json!({
+                                            "task_id": tid,
+                                            "estimate_usd": estimate,
+                                            "actual_usd": actual,
+                                            "delta_pct": (delta_pct * 100.0).round() / 100.0,
+                                        })
+                                        .to_string(),
+                                        severity,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                    }
                     if let Some(t) = threshold {
                         crate::budget::record_threshold_event(
                             pool,
