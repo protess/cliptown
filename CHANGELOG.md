@@ -2,18 +2,28 @@
 
 ## M13 — feat: is_global toggle + indicator in SkillsPanel (2026-05-15)
 
-Roadmap polish — finishes the global-skills surface. #68 added the
-backend flag + `skill_set_global` ConsoleInbound; this PR adds the
-UI knob.
+Finishes the global-skills surface. #68 added the backend flag +
+`skill_set_global` ConsoleInbound; this PR adds the UI knob.
 
-- `SkillWithAttachments` carries `is_global`; the SkillsPanel
-  snapshot + broadcast already shipped the rest of the row.
-- `SkillVM` gains `is_global: boolean`; the WS reducer coerces it.
-- Per-row globe button toggles the flag (admin-only on the server;
-  non-admins see the `forbidden` reply silently). When set, the
-  skill name displays a 🌐 badge.
-- Tooltips spell out "admin" on the toggle so non-admins know why
-  it might not work for them.
+- `SkillWithAttachments` carries `is_global`. `SkillVM` mirrors it.
+- Per-row globe toggle (admin-only on server). 🌐 badge appears
+  next to the name when set.
+
+## M13 — docs: Phase 4 roadmap brainstorm (2026-05-15)
+
+Closes the "Phase 4 brainstorm needed" note from the Phase 3
+roadmap. Catalogues candidate themes — peer review, time-bounded
+dependencies, work-stealing (the deferred Theme E), local-LLM
+polish, operator UX polish, and a sketched multi-cliptown
+federation theme — with sizing + recommended sequencing.
+
+Recommended first PR cycle: Theme F1 (local-LLM smoke) to validate
+the local-first narrative from #55 before stacking new
+coordination features.
+
+Each theme will get its own brainstorm spec when picked up; this
+doc is intentionally a strategic-direction sketch, not a binding
+plan.
 
 ## M13 — feat: operator management panel in the console (2026-05-15)
 

@@ -7,11 +7,18 @@ _(empty)_
 ## Completed
 
 ### M13 feat — is_global toggle in SkillsPanel — 2026-05-15
-**Source:** Roadmap polish, finishes the global-skills surface (#68 was backend-only). PR `<TBD>`.
+**Source:** Roadmap polish, finishes the global-skills surface (#68 backend-only). PR `<TBD>`.
 
-Was: #68 added the `is_global` flag + admin-only `skill_set_global` ConsoleInbound, but `SkillsPanel` had no UI knob to set it — operators had to send raw WS.
+Was: #68 added `is_global` + admin-only `skill_set_global` but SkillsPanel had no UI knob.
 
-Fixed: `SkillWithAttachments` carries `is_global`; broadcast + snapshot include it. `SkillVM` gains the field. Per-row globe button toggles the flag; the skill name shows a 🌐 badge when set. Non-admins get a silent `forbidden`; tooltip spells out "admin" so they know why.
+Fixed: `SkillWithAttachments` + JSON carry `is_global`; `SkillVM` mirrors. Per-row globe toggle button (admin-only on server); 🌐 badge next to the name when set.
+
+### M13 docs — Phase 4 roadmap brainstorm — 2026-05-15
+**Source:** Closes the "Phase 4 brainstorm needed" note from the Phase 3 roadmap. PR `<TBD>`.
+
+Was: Phase 3 done end-to-end, every carry-forward landed (including token hashing in #74), but Phase 4 had no spec. Theme E (multi-agent coordination) was deferred from Phase 3 with "needs its own brainstorm before committing."
+
+Fixed: `docs/superpowers/specs/2026-05-15-phase-4-roadmap.md`. Theme E split into E1 (peer review beyond manager), E2 (blocking dependencies + deadlines), E3 (work-stealing among idle peers). Plus F1 (local-LLM smoke), F2 (multi-cliptown federation — XL, may defer), G (operator UX polish bucket). Sequencing recommends F1 first to validate the local-first narrative from #55, then E1→E2→G→E3.
 
 ### M13 feat — operator management panel in the console — 2026-05-15
 **Source:** Theme B frontend follow-up. PR `<TBD>`.
