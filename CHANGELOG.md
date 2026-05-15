@@ -1,5 +1,32 @@
 # Changelog
 
+## M13 — feat: hash operator tokens at rest (2026-05-15)
+
+Closes the "Token hashing deferred — plain bearer is fine until
+rotation tooling exists" note from #61. SQLite snapshot leaks would
+have exposed every active bearer.
+
+- Migration 0009 recreates the `operators` table with a nullable
+  `token` column + new `token_hash TEXT` column + index on the hash.
+  The CREATE-and-copy dance is necessary because SQLite doesn't
+  support `DROP NOT NULL` directly.
+- `auth::hash_operator_token` (SHA-256 hex). 128-bit random UUID
+  tokens don't need a slow KDF — rainbow-table attacks are
+  infeasible at that entropy.
+- `auth::validate_operator_token` looks up by `token_hash` first,
+  then falls back to the legacy plaintext path for pre-0009 rows.
+  A successful plaintext match rewrites the row in place (sets
+  `token_hash`, clears `token`) so each legacy row migrates lazily
+  on first use.
+- `operator_create` (cmd_console) stores only the hash; the
+  plaintext is returned in the response body exactly once and never
+  persisted.
+- Seeded `op_default` row (dev-token) keeps working via the legacy
+  fallback; first WS hello migrates it to hashed form.
+
+A future migration will drop the `token` column once the legacy
+fallback has stayed cold for a release cycle.
+
 ## M13 — feat: operator management panel in the console (2026-05-15)
 
 Final Phase 3 carry-forward — Theme B frontend surface.

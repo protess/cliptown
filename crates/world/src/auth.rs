@@ -57,10 +57,28 @@ impl OperatorIdentity {
     }
 }
 
+/// P3 carry-forward: SHA-256 hex of a token, used as `operators.token_hash`.
+/// Server-minted tokens are 128-bit random UUIDs so no slow KDF needed.
+pub fn hash_operator_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(token.as_bytes());
+    let mut out = String::with_capacity(64);
+    for b in digest.iter() {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
 /// P3 Theme B: validate a console bearer token against the `operators`
 /// table; fall back to `CLIPTOWN_OPERATOR_TOKEN` env var for backward
 /// compatibility with deployments that haven't migrated to the table-
 /// only model. The env-var path returns a synthetic admin identity.
+///
+/// P3 carry-forward (migration 0009): tokens are stored as SHA-256 hex in
+/// `token_hash`. Legacy plaintext `token` rows (anything provisioned before
+/// 0009) are matched lazily — a successful plaintext compare rewrites the
+/// row to set `token_hash` and clear `token`.
 pub async fn validate_operator_token(
     pool: &SqlitePool,
     token: &str,
@@ -68,15 +86,40 @@ pub async fn validate_operator_token(
     if token.is_empty() {
         return Err(anyhow!("invalid_operator_token"));
     }
-    // 1. Table lookup.
-    let row: Option<(String, String, String)> =
-        sqlx::query_as("SELECT id, name, role FROM operators WHERE token = ?")
-            .bind(token)
-            .fetch_optional(pool)
-            .await?;
+    let token_hash = hash_operator_token(token);
+    // 1. Modern path: lookup by token_hash.
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT id, name, role FROM operators WHERE token_hash = ?",
+    )
+    .bind(&token_hash)
+    .fetch_optional(pool)
+    .await?;
     if let Some((id, name, role_str)) = row {
         let role = OperatorRole::from_str(&role_str)
             .ok_or_else(|| anyhow!("unknown_operator_role: {role_str}"))?;
+        return Ok(OperatorIdentity { id, name, role });
+    }
+    // 2. Legacy plaintext path: pre-0009 rows still have `token` populated
+    //    and `token_hash` NULL. Match by plaintext and rewrite in place.
+    let legacy_row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT id, name, role FROM operators WHERE token = ? AND token_hash IS NULL",
+    )
+    .bind(token)
+    .fetch_optional(pool)
+    .await?;
+    if let Some((id, name, role_str)) = legacy_row {
+        let role = OperatorRole::from_str(&role_str)
+            .ok_or_else(|| anyhow!("unknown_operator_role: {role_str}"))?;
+        // Best-effort rewrite. If this fails (lock contention etc.) the
+        // legacy path still succeeds for the current call; the next call
+        // retries the migration.
+        let _ = sqlx::query(
+            "UPDATE operators SET token_hash = ?, token = NULL WHERE id = ?",
+        )
+        .bind(&token_hash)
+        .bind(&id)
+        .execute(pool)
+        .await;
         return Ok(OperatorIdentity { id, name, role });
     }
     // 2. Env-var fallback (legacy path; retired once operators table is

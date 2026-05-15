@@ -462,12 +462,16 @@ pub async fn dispatch(
             // Mint a token. UUID v4 is plenty random for bearer tokens; the
             // operator copies it from the response, plain text on the wire is
             // fine because the WS itself should be TLS in prod.
+            // P3 carry-forward: store only the SHA-256 hex in `token_hash`,
+            // never the plaintext. The minted value below is returned ONCE
+            // in the response body and never persisted.
             let new_id = format!("op_{}", uuid::Uuid::new_v4().simple());
             let new_token = format!("opt_{}", uuid::Uuid::new_v4().simple());
+            let token_hash = crate::auth::hash_operator_token(&new_token);
             let r = sqlx::query(
-                "INSERT INTO operators (id, name, token, role, created_at) VALUES (?, ?, ?, ?, unixepoch())"
+                "INSERT INTO operators (id, name, token_hash, role, created_at) VALUES (?, ?, ?, ?, unixepoch())"
             )
-                .bind(&new_id).bind(&name).bind(&new_token).bind(&role)
+                .bind(&new_id).bind(&name).bind(&token_hash).bind(&role)
                 .execute(pool).await;
             match r {
                 Ok(_) => json!({

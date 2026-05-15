@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — hash operator tokens at rest — 2026-05-15
+**Source:** Closes the "Token hashing deferred" note from #61. PR `<TBD>`.
+
+Was: `operators.token` stored plaintext bearers. A SQLite snapshot leak would expose every active operator.
+
+Fixed: migration 0009 recreates the table with a nullable `token` (deprecated) + new `token_hash TEXT` column. `auth::hash_operator_token` (SHA-256 hex; 128-bit UUID entropy doesn't need a slow KDF). `validate_operator_token` looks up by `token_hash` first then falls back to legacy plaintext for pre-0009 rows — successful plaintext match rewrites the row in place (lazy migration). `operator_create` stores only the hash; plaintext returned once in response and never persisted. Seeded `op_default` keeps working via the fallback. Future migration drops the legacy column once unused.
+
 ### M13 feat — operator management panel in the console — 2026-05-15
 **Source:** Theme B frontend follow-up. PR `<TBD>`.
 
