@@ -1,5 +1,26 @@
 # Changelog
 
+## M13 — chore: claude-code adapter honors CLAUDE_CODE_MODEL (2026-05-15)
+
+Closes the last Theme C known-limit from #58 / #59. claude-code
+adapter now reads `CLAUDE_CODE_MODEL` from `opts.env` and forwards
+it to the CLI as `--model <id>`. Combined with worker's
+`modelEnvForBackend("claude_code") = "CLAUDE_CODE_MODEL"`, a per-
+task `preferred_model` now reaches the claude CLI on equal footing
+with codex (`CODEX_MODEL_ID`) and opencode (`OPENCODE_MODEL`).
+
+- `packages/adapters/claude-code/src/index.ts` — append `--model
+  <id>` to the CLI args when `env.CLAUDE_CODE_MODEL` is set. Gated
+  on `useJsonOutput` so the fixture-cli used by contract tests
+  (which doesn't speak `--model`) never sees the flag.
+- `packages/worker/src/main.ts::modelEnvForBackend` returns
+  `"CLAUDE_CODE_MODEL"` for `claude_code` instead of null. Worker
+  spawn now plumbs `--preferred-model` into the env var for all
+  three adapters.
+- Test updated to assert the new mapping (`main_args.test.ts`).
+
+Theme C wire is fully closed across all three adapters.
+
 ## M13 — feat: per-task worker spawn (Theme C Option B) (2026-05-13)
 
 Phase 3 Theme C follow-up #2 — the supervisor side. Completes the

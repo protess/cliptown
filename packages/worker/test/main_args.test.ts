@@ -104,8 +104,8 @@ describe("modelEnvForBackend", () => {
   it("maps opencode to OPENCODE_MODEL", () => {
     expect(modelEnvForBackend("opencode")).toBe("OPENCODE_MODEL");
   });
-  it("returns null for claude_code (no model env knob today)", () => {
-    expect(modelEnvForBackend("claude_code")).toBeNull();
+  it("maps claude_code to CLAUDE_CODE_MODEL", () => {
+    expect(modelEnvForBackend("claude_code")).toBe("CLAUDE_CODE_MODEL");
   });
   it("returns null for unknown backends", () => {
     expect(modelEnvForBackend("future_backend")).toBeNull();
