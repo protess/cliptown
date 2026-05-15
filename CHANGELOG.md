@@ -1,5 +1,25 @@
 # Changelog
 
+## M13 — feat: operator identity on hello reply + admin-only UI gate (2026-05-15)
+
+Closes a known limitation flagged on #69. Operator console
+surfaces (`OperatorsPanel`, the SkillsPanel global toggle from #70)
+were admin-only on the server but always visible client-side —
+non-admin operators saw an empty `OperatorsPanel` and got silent
+`forbidden` replies.
+
+- New ConsoleOutbound variant `HelloOk { operator_id, operator_name, role }`.
+  Emitted by `http.rs::handle_console` immediately after token
+  validation, before the WorldViewSnapshot. Token is NOT echoed —
+  identity-only.
+- Frontend reducer captures the frame into `state.currentOperator`
+  (`{id, name, role}` or `null` pre-hello).
+- `OperatorsPanel` returns `null` when role ≠ admin. Hides for
+  viewer / manager + briefly for everyone during the post-connect
+  pre-hello window (avoids a flash-in).
+- `currentOperator` available via context for any future panels
+  that want to gate themselves.
+
 ## M13 — feat: operator management panel in the console (2026-05-15)
 
 Final Phase 3 carry-forward — Theme B frontend surface.

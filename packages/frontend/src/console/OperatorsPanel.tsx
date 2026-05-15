@@ -19,6 +19,14 @@ export function OperatorsPanel() {
   const [newName, setNewName] = useState("");
   const [newRole, setNewRole] = useState<(typeof ROLES)[number]>("viewer");
 
+  // P3 carry-forward: hide the panel entirely for non-admin operators
+  // once we know the identity. Pre-hello (`currentOperator === null`) we
+  // also hide — admin/non-admin both see nothing until the hello frame
+  // arrives, which avoids the panel briefly flashing in for everyone.
+  if (state.currentOperator?.role !== "admin") {
+    return null;
+  }
+
   // Hydrate operator list when the panel is first expanded.
   useEffect(() => {
     if (open && state.operators === null) {

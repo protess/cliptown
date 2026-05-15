@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — operator identity on hello reply + admin-only UI gate — 2026-05-15
+**Source:** Known limit flagged on #69 (frontend always-visible admin panel). PR `<TBD>`.
+
+Was: `OperatorsPanel` (#69) and the SkillsPanel global toggle (#70) gated admin-only on the server but were visible to every operator client-side. Non-admins saw an empty panel + got silent `forbidden` errors.
+
+Fixed: new `ConsoleOutbound::HelloOk { operator_id, operator_name, role }` emitted by `http.rs::handle_console` after token validation (token not echoed). Frontend reducer captures into `state.currentOperator`. `OperatorsPanel` returns `null` when role ≠ admin (also hides pre-hello to avoid the brief flash-in). `currentOperator` available via context for future panels.
+
 ### M13 feat — operator management panel in the console — 2026-05-15
 **Source:** Theme B frontend follow-up. PR `<TBD>`.
 
