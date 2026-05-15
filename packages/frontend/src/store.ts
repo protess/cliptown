@@ -132,6 +132,13 @@ export interface WorldState {
    */
   operators: OperatorRow[] | null;
   mintedOperatorToken: { id: string; name: string; token: string } | null;
+  /**
+   * P3 carry-forward: identity of the currently-authenticated operator,
+   * populated from the `hello_ok` ConsoleOutbound frame after WS connect.
+   * `null` until the frame arrives. Admin-only UI surfaces gate on
+   * `currentOperator?.role === "admin"`.
+   */
+  currentOperator: { id: string; name: string; role: string } | null;
 }
 
 export interface OperatorRow {
@@ -154,6 +161,7 @@ const INITIAL: WorldState = {
   skills: {},
   operators: null,
   mintedOperatorToken: null,
+  currentOperator: null,
 };
 
 const MAX_SYSTEM_EVENTS = 200;
@@ -360,6 +368,16 @@ function reducer(state: WorldState, action: Action): WorldState {
   }
   const m = action.msg;
   switch (m.type) {
+    case "hello_ok": {
+      return {
+        ...state,
+        currentOperator: {
+          id: typeof m.operator_id === "string" ? m.operator_id : "",
+          name: typeof m.operator_name === "string" ? m.operator_name : "",
+          role: typeof m.role === "string" ? m.role : "viewer",
+        },
+      };
+    }
     case "world_view_snapshot": {
       // ConsoleOutbound::WorldViewSnapshot.snapshot is a JsonValue containing
       // a serialized WorldView. We unwrap defensively rather than assuming

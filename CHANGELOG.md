@@ -1,5 +1,17 @@
 # Changelog
 
+## M13 — feat: operator identity on hello reply + admin-only UI gate (2026-05-15)
+
+Closes a known limit on #69. OperatorsPanel + SkillsPanel global
+toggle were admin-only on the server but always visible client-side.
+
+- New ConsoleOutbound `HelloOk { operator_id, operator_name, role }`.
+  Emitted after token validation; token not echoed.
+- Frontend reducer populates `state.currentOperator`.
+- `OperatorsPanel` returns null when role ≠ admin (hooks run first
+  so React's hook-order invariant holds; also hides pre-hello to
+  avoid flash-in).
+
 ## M13 — feat: is_global toggle + indicator in SkillsPanel (2026-05-15)
 
 Finishes the global-skills surface. #68 added the backend flag +
