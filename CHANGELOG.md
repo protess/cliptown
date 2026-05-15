@@ -1,5 +1,33 @@
 # Changelog
 
+## M13 — feat: skills file attachments (2026-05-15)
+
+Roadmap carry-forward. Skills could only carry a single `content_md`
+blob; bundles often need supporting files (templates, JSON configs,
+examples). Adds a `skill_files` sibling table + 2 MCP tools +
+worker-side materialization into the execenv.
+
+- Migration 0006 adds `skill_files (id, skill_id FK, name, content,
+  created_at, updated_at)` with `UNIQUE (skill_id, name)` and
+  `ON DELETE CASCADE` from `skills`.
+- `skills` crate gains `upsert_file` / `delete_file` / `list_files`
+  / `file_name_is_valid`. File names: alphanumeric + `- _ .`; `..`,
+  slashes, empty strings rejected. Content reuses the existing 32
+  KiB cap. Cross-startup ownership enforced.
+- `AttachedSkill` gains `files`; `/api/agents/:id/skills` returns a
+  `files` array per skill. Worker's `prepareWorkdir` writes each at
+  `<workdir>/skills/<skill-name>/<file-name>` alongside the main
+  `.md`. Names validated at upload → path traversal impossible.
+- 2 new MCP tools: `skill_file_upsert` + `skill_file_delete`.
+  Tools/list grows 22 → 24. Mutations emit `SkillChanged` events
+  with new kinds `file_upsert` / `file_delete`.
+- 8 new DAO tests: upsert roundtrip, in-place update, cross-startup
+  reject, delete + missing, cascade-from-skill-delete, bad/good
+  names, for_agent includes-files.
+
+Operator-console UI deferred — the MCP path is agent-callable; a
+dedicated operator file editor can come when there's pressure.
+
 ## M13 — feat: cost variance telemetry (2026-05-15)
 
 Final Theme C deferred bit. Tasks can carry a `cost_estimate_usd`

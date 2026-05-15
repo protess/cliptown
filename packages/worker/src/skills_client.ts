@@ -1,12 +1,21 @@
 /**
  * P2.2 worker-side skills fetcher. Single GET against the world's
  * /api/agents/:id/skills endpoint with bearer auth. The shape is the
- * one prepareWorkdir consumes — { name, content_md }[] — verbatim.
+ * one prepareWorkdir consumes — { name, content_md, files? }[] — verbatim.
+ *
+ * P3 carry-forward: `files` is an optional array of associated text files
+ * the worker materializes into `<workdir>/skills/<skill-name>/<file>`.
  */
+
+export interface SkillFile {
+  name: string;
+  content: string;
+}
 
 export interface SkillContent {
   name: string;
   content_md: string;
+  files?: SkillFile[];
 }
 
 export async function fetchSkillsForAgent(

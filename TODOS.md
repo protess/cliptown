@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — skills file attachments — 2026-05-15
+**Source:** Roadmap carry-forward (Skills file attachments, M-sized). PR `<TBD>`.
+
+Was: skills could only carry a single `content_md` blob — supporting files (templates, JSON configs, examples) had no home. Roadmap listed it as a follow-up.
+
+Fixed: migration 0006 adds `skill_files (id, skill_id FK, name, content, ...)` with `UNIQUE (skill_id, name)` and FK cascade. skills crate gains `upsert_file` / `delete_file` / `list_files` / `file_name_is_valid` (alnum + `- _ .` only — no `..`, no `/`). AttachedSkill gains `files`; `/api/agents/:id/skills` returns the array. Worker materializes each file at `<workdir>/skills/<skill-name>/<file-name>` alongside the main `.md`. 2 new MCP tools (`skill_file_upsert` / `skill_file_delete`) — tools/list 22 → 24. SkillChanged broadcasts emit new kinds `file_upsert` / `file_delete`. 8 new DAO tests. Operator-console UI deferred — agents have MCP path; an operator file editor lands when there's pressure.
+
 ### M13 feat — cost variance telemetry — 2026-05-15
 **Source:** Final Theme C deferred bit (estimate-vs-actual emit). PR `<TBD>`.
 

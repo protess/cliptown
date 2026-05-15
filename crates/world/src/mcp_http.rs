@@ -368,6 +368,31 @@ fn handle_tools_list() -> Value {
             }),
         ),
         tool(
+            "skill_file_upsert",
+            "Upsert a text file attached to a skill. Materializes at `<workdir>/skills/<skill-name>/<name>`.",
+            json!({
+                "type": "object",
+                "required": ["skill_id", "name", "content"],
+                "properties": {
+                    "skill_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "content": {"type": "string"}
+                }
+            }),
+        ),
+        tool(
+            "skill_file_delete",
+            "Delete a single file attached to a skill (by file name). Idempotent.",
+            json!({
+                "type": "object",
+                "required": ["skill_id", "name"],
+                "properties": {
+                    "skill_id": {"type": "string"},
+                    "name": {"type": "string"}
+                }
+            }),
+        ),
+        tool(
             "task_set_preference",
             "Set per-task model routing override (preferred_backend / preferred_model). Manager-or-assignee only; null clears.",
             json!({

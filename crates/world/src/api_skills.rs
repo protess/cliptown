@@ -64,7 +64,14 @@ pub async fn get_agent_skills(
     };
     let json_items: Vec<serde_json::Value> = items
         .into_iter()
-        .map(|s| json!({"name": s.name, "content_md": s.content_md}))
+        .map(|s| {
+            let files: Vec<serde_json::Value> = s
+                .files
+                .into_iter()
+                .map(|f| json!({"name": f.name, "content": f.content}))
+                .collect();
+            json!({"name": s.name, "content_md": s.content_md, "files": files})
+        })
         .collect();
     (StatusCode::OK, Json(json!({"skills": json_items}))).into_response()
 }
