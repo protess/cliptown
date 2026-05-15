@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — smoke against remote world targets — 2026-05-15
+**Source:** Phase 3 Theme A carry-forward (remote-smoke parameterization). PR `<TBD>`.
+
+Was: `scripts/smoke-real-llm.sh` always built + booted its own world and seeded tasks via direct SQL. Remote operators (Fly.io / staging) had no scripted health-check path. The roadmap noted "smoke parameterization for remote targets deferred (manual verification path documented)."
+
+Fixed: new `POST /api/admin/tasks` endpoint (operator-token + manager-role gated) lets clients seed tasks over HTTP — validates startup + assignee, returns the created task. 7 integration tests. Smoke gains `WORLD_REMOTE_URL=https://...` mode: skips cargo build + world boot, derives http+ws bases from the URL, posts to the new admin endpoint instead of SQL. FS-bound + SQL-row checks are skipped in remote mode (no client access to either) — clean adapter exit + responsive `/health` is the remote success signal. `DEPLOY.md` rewritten. Local mode unchanged.
+
 ### M13 chore — structured tracing events across hot paths — 2026-05-15
 **Source:** Phase 3 Theme D follow-up. `/metrics` (#51) covered the metrics endpoint; the spec's "structured tracing spans through hot paths" stayed deferred. PR `<TBD>`.
 

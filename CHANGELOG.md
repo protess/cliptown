@@ -1,5 +1,29 @@
 # Changelog
 
+## M13 — feat: smoke against remote world targets (2026-05-15)
+
+Phase 3 Theme A carry-forward. The smoke harness was local-only —
+remote operators (Fly.io / staging) had no scripted way to verify a
+deploy was healthy.
+
+- **`POST /api/admin/tasks`** (new): operator-token + manager-role
+  gated task creation. Mirrors the SQL `INSERT INTO tasks` the
+  smoke previously did directly. Validates startup + assignee (same
+  startup) before insert. Returns `{id, status, startup_id}`. 7
+  integration tests cover auth, role gate, queued/proposed paths,
+  unknown-startup, cross-startup.
+- **`scripts/smoke-real-llm.sh`** gains `WORLD_REMOTE_URL=https://...`
+  mode: skips cargo build + world boot, derives http+ws bases from
+  the URL, posts to the new admin endpoint instead of raw SQL. The
+  worker spawns locally and talks to the remote `/ws/worker`. FS +
+  SQL checks (artifact-on-disk, execenv layout, skill files, budget
+  row) are skipped in remote mode — no client-side access to either.
+  A clean adapter exit + responsive `/health` is the success signal.
+- `DEPLOY.md` "Smoke against a deployed instance" section rewritten
+  with both modes documented.
+
+Local mode (no env var) is unchanged.
+
 ## M13 — chore: structured tracing events across hot paths (2026-05-15)
 
 Phase 3 Theme D follow-up. `/metrics` (#51) covered the metrics
