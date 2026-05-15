@@ -405,6 +405,18 @@ fn handle_tools_list() -> Value {
             }),
         ),
         tool(
+            "skill_revert",
+            "Revert a skill's content_md to a previous revision (by rev_seq). Appends a new revision pointing at the historical content; history stays linear.",
+            json!({
+                "type": "object",
+                "required": ["skill_id", "rev_seq"],
+                "properties": {
+                    "skill_id": {"type": "string"},
+                    "rev_seq": {"type": "integer", "minimum": 1}
+                }
+            }),
+        ),
+        tool(
             "task_set_preference",
             "Set per-task model routing override (preferred_backend / preferred_model). Manager-or-assignee only; null clears.",
             json!({

@@ -99,3 +99,49 @@ async fn skill_delete_cascades_revisions() {
         .bind(&id).fetch_one(&pool).await.unwrap();
     assert_eq!(count.0, 0);
 }
+
+// ── revert ────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn revert_replaces_live_content_with_historical_revision() {
+    let (pool, _dir) = fixture().await;
+    let (id, _) = skills::upsert(&pool, "s1", "k", "v1").await.unwrap();
+    skills::upsert(&pool, "s1", "k", "v2").await.unwrap();
+    skills::upsert(&pool, "s1", "k", "v3").await.unwrap();
+    skills::revert_to_revision(&pool, "s1", &id, 1, skills::Author::Unknown).await.unwrap();
+    let live: (String,) = sqlx::query_as("SELECT content_md FROM skills WHERE id = ?")
+        .bind(&id).fetch_one(&pool).await.unwrap();
+    assert_eq!(live.0, "v1");
+}
+
+#[tokio::test]
+async fn revert_appends_new_revision_does_not_truncate_history() {
+    let (pool, _dir) = fixture().await;
+    let (id, _) = skills::upsert(&pool, "s1", "k", "v1").await.unwrap();
+    skills::upsert(&pool, "s1", "k", "v2").await.unwrap();
+    skills::revert_to_revision(&pool, "s1", &id, 1, skills::Author::Unknown).await.unwrap();
+    let revs = skills::list_revisions(&pool, "s1", &id).await.unwrap();
+    assert_eq!(revs.len(), 3, "v1 + v2 + revert-from-v1 = 3 rows");
+    assert_eq!(revs[0].rev_seq, 3);
+    assert_eq!(revs[0].content_md, "v1");
+}
+
+#[tokio::test]
+async fn revert_unknown_rev_returns_not_found() {
+    let (pool, _dir) = fixture().await;
+    let (id, _) = skills::upsert(&pool, "s1", "k", "v1").await.unwrap();
+    let r = skills::revert_to_revision(&pool, "s1", &id, 99, skills::Author::Unknown).await;
+    assert!(matches!(r, Err(skills::SkillError::NotFound)));
+}
+
+#[tokio::test]
+async fn revert_cross_startup_rejected() {
+    let (pool, _dir) = fixture().await;
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s2', 'b', 'g', 10.0, 'town_default', '/tmp/s2', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    let (id, _) = skills::upsert(&pool, "s1", "k", "v1").await.unwrap();
+    let r = skills::revert_to_revision(&pool, "s2", &id, 1, skills::Author::Unknown).await;
+    assert!(matches!(r, Err(skills::SkillError::CrossStartup)));
+}

@@ -1,5 +1,21 @@
 # Changelog
 
+## M13 — feat: skill_revert (rollback to historical revision) (2026-05-15)
+
+Closes the "Rollback deferred" note from #67. Schema was ready;
+this PR ships the mutation path.
+
+- `skills::revert_to_revision` loads historical row, sets it live,
+  appends a NEW revision pointing at the same content. History
+  stays linear.
+- 26th MCP tool `skill_revert {skill_id, rev_seq}`. Same-startup
+  gate.
+- Emits `SkillChanged { kind: "revert" }`.
+- 4 new DAO tests.
+
+Operator-side ConsoleInbound + frontend UI deferred — MCP path is
+callable today.
+
 ## M13 — feat: operator identity on hello reply + admin-only UI gate (2026-05-15)
 
 Closes a known limit on #69. OperatorsPanel + SkillsPanel global

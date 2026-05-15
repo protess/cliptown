@@ -196,6 +196,58 @@ pub struct SkillRevision {
     pub created_by_operator_id: Option<String>,
 }
 
+/// P3 carry-forward: revert a skill to a prior revision. Loads the row at
+/// `rev_seq`, sets it as the live content, and appends a NEW revision
+/// (rather than truncating history) so the timeline reads "v1 → v2 → v3 →
+/// reverted-from-v1". Author identity propagates to the new row.
+pub async fn revert_to_revision<'a>(
+    pool: &SqlitePool,
+    startup_id: &str,
+    skill_id: &str,
+    rev_seq: i64,
+    author: Author<'a>,
+) -> Result<String, SkillError> {
+    // Ownership check first — bail before any side effect on a foreign
+    // startup's skill.
+    let owner: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_optional(pool)
+            .await?;
+    match owner {
+        None => return Err(SkillError::NotFound),
+        Some((sid,)) if sid != startup_id => return Err(SkillError::CrossStartup),
+        _ => {}
+    }
+    let rev: Option<(String,)> = sqlx::query_as(
+        "SELECT content_md FROM skill_revisions WHERE skill_id = ? AND rev_seq = ?",
+    )
+    .bind(skill_id)
+    .bind(rev_seq)
+    .fetch_optional(pool)
+    .await?;
+    let content_md = match rev {
+        Some((c,)) => c,
+        None => return Err(SkillError::NotFound),
+    };
+    sqlx::query(
+        "UPDATE skills SET content_md = ?, updated_at = unixepoch() WHERE id = ?",
+    )
+    .bind(&content_md)
+    .bind(skill_id)
+    .execute(pool)
+    .await?;
+    if let Err(e) = append_revision(pool, skill_id, &content_md, author).await {
+        tracing::warn!(
+            component = "skills",
+            skill_id = %skill_id,
+            err = ?e,
+            "failed to append skill_revisions row for revert; live update kept"
+        );
+    }
+    Ok(content_md)
+}
+
 pub async fn list_revisions(
     pool: &SqlitePool,
     startup_id: &str,

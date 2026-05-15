@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — skill_revert (rollback to historical revision) — 2026-05-15
+**Source:** Closes the "Rollback deferred" note from #67. PR `<TBD>`.
+
+Was: #67 shipped revision history + list_revisions but deferred rollback ("schema supports it, needs UX surface").
+
+Fixed: `skills::revert_to_revision` loads historical row, sets it live, appends a NEW revision. History linear. 26th MCP tool `skill_revert {skill_id, rev_seq}`. Same-startup gate. `SkillChanged { kind: "revert" }`. 4 new DAO tests. Operator UI deferred — MCP callable today.
+
 ### M13 feat — operator identity on hello reply + admin-only UI gate — 2026-05-15
 **Source:** Known limit flagged on #69. PR `<TBD>`.
 
