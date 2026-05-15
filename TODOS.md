@@ -9,9 +9,23 @@ _(empty)_
 ### M13 feat — globally-visible skills — 2026-05-15
 **Source:** Roadmap carry-forward (Skills global / non-workspace, M-sized). PR `<TBD>`.
 
-Was: skills were strictly startup-scoped — style guides / debugging primers had to be duplicated per startup. Roadmap listed the gap.
+Was: skills strictly startup-scoped — style guides / debug primers had to be duplicated.
 
-Fixed: migration 0008 adds `is_global INTEGER NOT NULL DEFAULT 0` to skills with a partial index. `skills::for_agent` UNIONs attached rows with `is_global = 1` rows; DISTINCT-by-id prevents double-listing. New `skills::set_global` DAO. New admin-only ConsoleInbound `skill_set_global {skill_id, is_global}` — manager has no business with world-wide visibility, so it's `at_least(Admin)`. Broadcasts `SkillChanged { kind: "set_global" | "clear_global" }`. 4 new DAO tests. Agents cannot mark their own skills global by design. Frontend UI deferred — single boolean knob, easy to wire later.
+Fixed: migration 0008 adds `is_global INTEGER NOT NULL DEFAULT 0` + partial index. `skills::for_agent` UNIONs attached rows with `is_global = 1`; DISTINCT-by-id prevents double-listing. `skills::set_global` DAO. New admin-only ConsoleInbound `skill_set_global {skill_id, is_global}` — manager has no business with world-wide visibility, so `at_least(Admin)`. SkillChanged broadcasts emit `set_global` / `clear_global` kinds. 4 new DAO tests. Agents cannot flag global by design. Frontend UI deferred.
+
+### M13 feat — skills file attachments — 2026-05-15
+**Source:** Roadmap carry-forward (Skills file attachments, M-sized). PR `<TBD>`.
+
+Was: skills could only carry a single `content_md` blob — supporting files (templates, JSON configs, examples) had no home. Roadmap listed it as a follow-up.
+
+Fixed: migration 0006 adds `skill_files (id, skill_id FK, name, content, ...)` with `UNIQUE (skill_id, name)` and FK cascade. skills crate gains `upsert_file` / `delete_file` / `list_files` / `file_name_is_valid` (alnum + `- _ .` only — no `..`, no `/`). AttachedSkill gains `files`; `/api/agents/:id/skills` returns the array. Worker materializes each file at `<workdir>/skills/<skill-name>/<file-name>` alongside the main `.md`. 2 new MCP tools (`skill_file_upsert` / `skill_file_delete`). SkillChanged broadcasts emit new kinds `file_upsert` / `file_delete`. 8 new DAO tests. Operator-console UI deferred — agents have MCP path; an operator file editor lands when there's pressure.
+
+### M13 feat — skills revision history — 2026-05-15
+**Source:** Roadmap carry-forward (Skills versioning, M-sized). PR `<TBD>`.
+
+Was: every `skills::upsert` overwrote `content_md` in place — no audit, no rollback target. Roadmap listed it.
+
+Fixed: migration 0007 adds append-only `skill_revisions (id, skill_id FK, rev_seq, content_md, created_at, created_by_agent_id?, created_by_operator_id?)` with `UNIQUE (skill_id, rev_seq)` + FK cascade. `skills::Author` enum + `upsert_with_author` record who wrote each version. mcp_dispatch passes `Author::Agent`; cmd_console passes `Author::Operator`. `list_revisions` ownership-gated. New MCP tool `skill_list_revisions {skill_id, limit?}`. 7 new tests. Revision append is best-effort after the live update (history loss < content loss). Rollback deferred — schema supports it but needs UX surface.
 
 ### M13 feat — skills content authoring in operator console — 2026-05-15
 **Source:** Roadmap carry-forward (Skills content authoring UI, M-sized). PR `<TBD>`.

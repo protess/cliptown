@@ -2,29 +2,77 @@
 
 ## M13 — feat: globally-visible skills (2026-05-15)
 
-Roadmap carry-forward. Skills were strictly startup-scoped — style
-guides, MCP usage primers, debugging templates that apply
-everywhere had to be duplicated per startup. This PR adds an
-admin-only `is_global` flag that auto-surfaces the skill in every
-agent's execenv regardless of `agent_skills` attachment.
+Roadmap carry-forward. Skills were strictly startup-scoped; style
+guides / debug primers had to be duplicated. Adds an admin-only
+`is_global` flag that auto-surfaces a skill in every agent's
+execenv regardless of `agent_skills` attachment.
 
-- Migration 0008: `ALTER TABLE skills ADD COLUMN is_global INTEGER
-  NOT NULL DEFAULT 0`. Partial index on `is_global = 1` for the
-  union join below.
-- `skills::for_agent` now UNIONs the agent's attached rows with all
-  `is_global = 1` rows; DISTINCT-by-id prevents double-listing a
-  skill that's both attached + global.
-- `skills::set_global(skill_id, bool)` toggles the flag.
-- New admin-only ConsoleInbound variant `skill_set_global
-  {skill_id, is_global}`. Manager has no business changing world-
-  wide visibility; the gate is `at_least(Admin)`. Emits
-  `SkillChanged { kind: "set_global" | "clear_global" }`.
-- 4 new DAO tests cover global+no-attachment, no-double-list,
-  clear-global-hides, not-found.
+- Migration 0008 adds `is_global INTEGER NOT NULL DEFAULT 0` +
+  partial index. `skills::for_agent` UNIONs attached rows with
+  `is_global = 1`; DISTINCT-by-id prevents double-listing.
+- `skills::set_global` DAO. New admin-only ConsoleInbound
+  `skill_set_global {skill_id, is_global}`.
+- SkillChanged broadcasts emit `set_global` / `clear_global` kinds.
+- 4 new DAO tests.
 
-Agents cannot mark their own skills global — operator-only by
-design. Frontend UI for the flag is deferred (single ConsoleInbound
-boolean; trivial to wire when needed).
+Agents cannot flag their own skills global by design. Frontend UI
+deferred (single boolean wire).
+
+## M13 — feat: skills file attachments (2026-05-15)
+
+Roadmap carry-forward. Skills could only carry a single `content_md`
+blob; bundles often need supporting files (templates, JSON configs,
+examples). Adds a `skill_files` sibling table + 2 MCP tools +
+worker-side materialization into the execenv.
+
+- Migration 0006 adds `skill_files (id, skill_id FK, name, content,
+  created_at, updated_at)` with `UNIQUE (skill_id, name)` and
+  `ON DELETE CASCADE` from `skills`.
+- `skills` crate gains `upsert_file` / `delete_file` / `list_files`
+  / `file_name_is_valid`. File names: alphanumeric + `- _ .`; `..`,
+  slashes, empty strings rejected. Content reuses the existing 32
+  KiB cap. Cross-startup ownership enforced.
+- `AttachedSkill` gains `files`; `/api/agents/:id/skills` returns a
+  `files` array per skill. Worker's `prepareWorkdir` writes each at
+  `<workdir>/skills/<skill-name>/<file-name>` alongside the main
+  `.md`. Names validated at upload → path traversal impossible.
+- 2 new MCP tools: `skill_file_upsert` + `skill_file_delete`.
+  Tools/list grows 22 → 24. Mutations emit `SkillChanged` events
+  with new kinds `file_upsert` / `file_delete`.
+- 8 new DAO tests: upsert roundtrip, in-place update, cross-startup
+  reject, delete + missing, cascade-from-skill-delete, bad/good
+  names, for_agent includes-files.
+
+Operator-console UI deferred — the MCP path is agent-callable; a
+dedicated operator file editor can come when there's pressure.
+
+## M13 — feat: skills revision history (2026-05-15)
+
+Roadmap carry-forward — final skills item. `skills.content_md` was
+overwritten in place on every upsert; no audit, no rollback target.
+
+- Migration 0007 adds `skill_revisions (id, skill_id FK, rev_seq,
+  content_md, created_at, created_by_agent_id?, created_by_operator_id?)`
+  with `UNIQUE (skill_id, rev_seq)` and FK cascade. Index on
+  `(skill_id, rev_seq DESC)` for newest-first reads.
+- New `skills::Author { Agent(&str) | Operator(&str) | Unknown }`
+  enum + `upsert_with_author` that records who wrote each revision.
+  The legacy `upsert()` stays for unit tests; it routes to
+  `upsert_with_author(.., Unknown)`. Production call sites updated:
+  `mcp_dispatch::handle_skill_upsert` passes `Author::Agent`,
+  `cmd_console::SkillUpsertOperator` passes `Author::Operator`.
+- Revision append is best-effort after the live update succeeds —
+  losing history is preferable to losing user-authored content;
+  failure logs `tracing::warn!`.
+- `skills::list_revisions(pool, startup_id, skill_id)` returns the
+  full revision history, ownership-gated (cross-startup peek → error).
+- New 23rd MCP tool: `skill_list_revisions {skill_id, limit?}`.
+- 7 new tests: first-upsert rev_seq=1, increment, author agent,
+  author operator, cross-startup reject, not-found, FK cascade on
+  skill delete.
+
+Rollback (revert-to-revision) deferred — schema supports it but
+needs a UX surface before shipping.
 
 ## M13 — feat: skills content authoring in the operator console (2026-05-15)
 

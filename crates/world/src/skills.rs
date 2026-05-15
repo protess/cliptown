@@ -44,6 +44,16 @@ pub struct SkillListing {
 pub struct AttachedSkill {
     pub name: String,
     pub content_md: String,
+    /// P3 carry-forward: associated text files. Worker writes each to
+    /// `<workdir>/skills/<skill-name>/<file-name>` alongside the main `.md`.
+    /// Empty when the skill has no attached files (default).
+    pub files: Vec<SkillFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillFile {
+    pub name: String,
+    pub content: String,
 }
 
 #[derive(Debug)]
@@ -67,6 +77,27 @@ pub async fn upsert(
     name: &str,
     content_md: &str,
 ) -> Result<(String, bool), SkillError> {
+    upsert_with_author(pool, startup_id, name, content_md, Author::Unknown).await
+}
+
+/// P3 carry-forward: identity of the caller for the revision-history log.
+/// Most call paths know whether they're agent-side (MCP tool) or operator-
+/// side (Console). The `Unknown` variant exists for test fixtures + the
+/// legacy `upsert` shim above so callers can migrate incrementally.
+#[derive(Debug, Clone)]
+pub enum Author<'a> {
+    Agent(&'a str),
+    Operator(&'a str),
+    Unknown,
+}
+
+pub async fn upsert_with_author<'a>(
+    pool: &SqlitePool,
+    startup_id: &str,
+    name: &str,
+    content_md: &str,
+    author: Author<'a>,
+) -> Result<(String, bool), SkillError> {
     if !name_is_valid(name) {
         return Err(SkillError::BadName);
     }
@@ -79,7 +110,7 @@ pub async fn upsert(
             .bind(name)
             .fetch_optional(pool)
             .await?;
-    match existing {
+    let (id, is_new) = match existing {
         Some((id,)) => {
             sqlx::query(
                 "UPDATE skills SET content_md = ?, updated_at = unixepoch() WHERE id = ?",
@@ -88,7 +119,7 @@ pub async fn upsert(
             .bind(&id)
             .execute(pool)
             .await?;
-            Ok((id, false))
+            (id, false)
         }
         None => {
             let id = uuid::Uuid::new_v4().to_string();
@@ -102,9 +133,105 @@ pub async fn upsert(
             .bind(content_md)
             .execute(pool)
             .await?;
-            Ok((id, true))
+            (id, true)
         }
+    };
+    // P3 carry-forward: write the revision row AFTER the live update so the
+    // sequence count includes the new version. Failure here logs but doesn't
+    // unwind the live update — losing history is preferable to losing the
+    // user's authored content.
+    if let Err(e) = append_revision(pool, &id, content_md, author).await {
+        tracing::warn!(
+            component = "skills",
+            skill_id = %id,
+            err = ?e,
+            "failed to append skill_revisions row; live skill update kept"
+        );
     }
+    Ok((id, is_new))
+}
+
+async fn append_revision<'a>(
+    pool: &SqlitePool,
+    skill_id: &str,
+    content_md: &str,
+    author: Author<'a>,
+) -> Result<(), SkillError> {
+    let next_seq: (i64,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(rev_seq), 0) + 1 FROM skill_revisions WHERE skill_id = ?",
+    )
+    .bind(skill_id)
+    .fetch_one(pool)
+    .await?;
+    let (agent, operator) = match author {
+        Author::Agent(id) => (Some(id), None),
+        Author::Operator(id) => (None, Some(id)),
+        Author::Unknown => (None, None),
+    };
+    let rev_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO skill_revisions (id, skill_id, rev_seq, content_md, created_at, \
+                                       created_by_agent_id, created_by_operator_id) \
+         VALUES (?, ?, ?, ?, unixepoch(), ?, ?)",
+    )
+    .bind(&rev_id)
+    .bind(skill_id)
+    .bind(next_seq.0)
+    .bind(content_md)
+    .bind(agent)
+    .bind(operator)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRevision {
+    pub id: String,
+    pub skill_id: String,
+    pub rev_seq: i64,
+    pub content_md: String,
+    pub created_at: i64,
+    pub created_by_agent_id: Option<String>,
+    pub created_by_operator_id: Option<String>,
+}
+
+pub async fn list_revisions(
+    pool: &SqlitePool,
+    startup_id: &str,
+    skill_id: &str,
+) -> Result<Vec<SkillRevision>, SkillError> {
+    // Ownership gate so a cross-startup caller can't peek at content history.
+    let owner: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_optional(pool)
+            .await?;
+    match owner {
+        None => return Err(SkillError::NotFound),
+        Some((sid,)) if sid != startup_id => return Err(SkillError::CrossStartup),
+        _ => {}
+    }
+    let rows: Vec<(String, String, i64, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, skill_id, rev_seq, content_md, created_at, \
+                created_by_agent_id, created_by_operator_id \
+         FROM skill_revisions WHERE skill_id = ? ORDER BY rev_seq DESC",
+    )
+    .bind(skill_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, skill_id, rev_seq, content_md, created_at, agent, operator)| SkillRevision {
+            id,
+            skill_id,
+            rev_seq,
+            content_md,
+            created_at,
+            created_by_agent_id: agent,
+            created_by_operator_id: operator,
+        })
+        .collect())
 }
 
 pub async fn list(pool: &SqlitePool, startup_id: &str) -> Result<Vec<SkillListing>, SkillError> {
@@ -247,15 +374,12 @@ pub async fn for_agent(
     pool: &SqlitePool,
     agent_id: &str,
 ) -> Result<Vec<AttachedSkill>, SkillError> {
-    // P3 carry-forward: union explicitly-attached skills with any
-    // `is_global = 1` rows. Agents in any startup see global skills without
-    // needing an `agent_skills` row. UNION ALL is safe — the WHERE clauses
-    // are disjoint (a globally-marked skill is attached OR global OR both,
-    // and the LEFT JOIN below isn't needed because de-dup is via the inner
-    // SELECT DISTINCT). We DISTINCT-by-id to avoid double-listing a global
-    // skill that's also explicitly attached.
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT name, content_md FROM ( \
+    // P3 carry-forward (file attachments + global): union explicitly-
+    // attached skills with `is_global = 1` rows, surfacing skill_id so we
+    // can fetch attached files per row. DISTINCT-by-id de-dups skills that
+    // are both attached AND global.
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, name, content_md FROM ( \
             SELECT DISTINCT s.id, s.name, s.content_md FROM skills s \
             LEFT JOIN agent_skills ags ON ags.skill_id = s.id AND ags.agent_id = ? \
             WHERE ags.agent_id IS NOT NULL OR s.is_global = 1 \
@@ -264,9 +388,28 @@ pub async fn for_agent(
     .bind(agent_id)
     .fetch_all(pool)
     .await?;
+    let mut out: Vec<AttachedSkill> = Vec::with_capacity(rows.len());
+    for (id, name, content_md) in rows {
+        let files = list_files(pool, &id).await.unwrap_or_default();
+        out.push(AttachedSkill { name, content_md, files });
+    }
+    Ok(out)
+}
+
+/// P3 carry-forward: file CRUD on `skill_files`.
+pub async fn list_files(
+    pool: &SqlitePool,
+    skill_id: &str,
+) -> Result<Vec<SkillFile>, SkillError> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT name, content FROM skill_files WHERE skill_id = ? ORDER BY name",
+    )
+    .bind(skill_id)
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
-        .map(|(name, content_md)| AttachedSkill { name, content_md })
+        .map(|(name, content)| SkillFile { name, content })
         .collect())
 }
 
@@ -284,6 +427,107 @@ pub async fn set_global(
     .bind(skill_id)
     .execute(pool)
     .await?;
+    if r.rows_affected() == 0 {
+        return Err(SkillError::NotFound);
+    }
+    Ok(())
+}
+
+/// File-name validator: same character set as skill names — lowercase alpha-
+/// numeric + dash + dot + underscore. Forbids slashes and `..` segments to
+/// keep the worker-side writer trivially path-safe.
+pub fn file_name_is_valid(name: &str) -> bool {
+    if name.is_empty() || name.len() > 128 { return false; }
+    if name == "." || name == ".." || name.starts_with('/') || name.contains("..") || name.contains('/') {
+        return false;
+    }
+    name.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')
+    })
+}
+
+pub async fn upsert_file(
+    pool: &SqlitePool,
+    startup_id: &str,
+    skill_id: &str,
+    name: &str,
+    content: &str,
+) -> Result<String, SkillError> {
+    if !file_name_is_valid(name) {
+        return Err(SkillError::BadName);
+    }
+    if content.len() > MAX_CONTENT_LEN {
+        return Err(SkillError::OversizeContent);
+    }
+    // Ownership check: the caller's `startup_id` must own this skill row.
+    // Without this an operator could overwrite files on someone else's skill
+    // if they could guess a UUID.
+    let owner: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_optional(pool)
+            .await?;
+    match owner {
+        None => return Err(SkillError::NotFound),
+        Some((sid,)) if sid != startup_id => return Err(SkillError::CrossStartup),
+        _ => {}
+    }
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM skill_files WHERE skill_id = ? AND name = ?",
+    )
+    .bind(skill_id)
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
+    match existing {
+        Some((id,)) => {
+            sqlx::query(
+                "UPDATE skill_files SET content = ?, updated_at = unixepoch() WHERE id = ?",
+            )
+            .bind(content)
+            .bind(&id)
+            .execute(pool)
+            .await?;
+            Ok(id)
+        }
+        None => {
+            let id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO skill_files (id, skill_id, name, content, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, unixepoch(), unixepoch())",
+            )
+            .bind(&id)
+            .bind(skill_id)
+            .bind(name)
+            .bind(content)
+            .execute(pool)
+            .await?;
+            Ok(id)
+        }
+    }
+}
+
+pub async fn delete_file(
+    pool: &SqlitePool,
+    startup_id: &str,
+    skill_id: &str,
+    file_name: &str,
+) -> Result<(), SkillError> {
+    let owner: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_optional(pool)
+            .await?;
+    match owner {
+        None => return Err(SkillError::NotFound),
+        Some((sid,)) if sid != startup_id => return Err(SkillError::CrossStartup),
+        _ => {}
+    }
+    let r = sqlx::query("DELETE FROM skill_files WHERE skill_id = ? AND name = ?")
+        .bind(skill_id)
+        .bind(file_name)
+        .execute(pool)
+        .await?;
     if r.rows_affected() == 0 {
         return Err(SkillError::NotFound);
     }
