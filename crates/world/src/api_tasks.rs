@@ -33,6 +33,10 @@ pub struct CreateTaskBody {
     pub required_room: Option<String>,
     pub preferred_backend: Option<String>,
     pub preferred_model: Option<String>,
+    /// P3 Theme C follow-up: optional up-front cost estimate. When set, the
+    /// world emits `task_cost_variance` system_event if actual spend (from
+    /// the worker's `report_budget`) diverges by more than ±50%.
+    pub cost_estimate_usd: Option<f64>,
 }
 
 pub async fn create_task(
@@ -57,6 +61,11 @@ pub async fn create_task(
     }
     if body.title.trim().is_empty() || body.description.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({"error":"title and description required"}))).into_response();
+    }
+    if let Some(c) = body.cost_estimate_usd {
+        if !c.is_finite() || c < 0.0 {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error":"bad_cost_estimate"}))).into_response();
+        }
     }
 
     // Verify the startup exists.
@@ -105,8 +114,8 @@ pub async fn create_task(
     let r = sqlx::query(
         "INSERT INTO tasks (id, startup_id, parent_id, title, description, status, \
                             assignee_agent_id, required_room, preferred_backend, preferred_model, \
-                            created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())",
+                            cost_estimate_usd, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())",
     )
     .bind(&task_id)
     .bind(&body.startup_id)
@@ -118,6 +127,7 @@ pub async fn create_task(
     .bind(&body.required_room)
     .bind(&body.preferred_backend)
     .bind(&body.preferred_model)
+    .bind(body.cost_estimate_usd)
     .execute(&s.pool)
     .await;
     match r {
