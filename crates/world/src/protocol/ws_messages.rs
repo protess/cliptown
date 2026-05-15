@@ -75,6 +75,10 @@ pub enum ConsoleInbound {
     /// scoped by the operator's possessed startup.
     SkillUpsertOperator { v: u8, startup_id: String, skill_id: Option<String>, name: String, content_md: String },
     SkillDeleteOperator { v: u8, startup_id: String, skill_id: String },
+    /// P3 carry-forward: admin-only flag flip. When set, the skill auto-
+    /// surfaces in every agent's execenv regardless of `agent_skills`
+    /// attachment.
+    SkillSetGlobal { v: u8, skill_id: String, is_global: bool },
     /// P3 Theme B follow-up: admin-only operator-management commands. The
     /// `operators` table has been in place since #52 with role gating wired
     /// through dispatch; these complete the surface so an admin can

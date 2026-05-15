@@ -70,6 +70,7 @@ pub async fn dispatch(
         ConsoleInbound::OperatorSetRole { .. } => "operator_set_role",
         ConsoleInbound::SkillUpsertOperator { .. } => "skill_upsert_operator",
         ConsoleInbound::SkillDeleteOperator { .. } => "skill_delete_operator",
+        ConsoleInbound::SkillSetGlobal { .. } => "skill_set_global",
     };
     tracing::debug!(
         component = "cmd_console",
@@ -382,6 +383,34 @@ pub async fn dispatch(
                 Err(crate::skills::SkillError::BadName) => json!({"type":"error","reason":"bad_name"}),
                 Err(crate::skills::SkillError::OversizeContent) => json!({"type":"error","reason":"oversize_content"}),
                 Err(crate::skills::SkillError::CrossStartup) => json!({"type":"error","reason":"cross_startup"}),
+                Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
+            }
+        }
+        ConsoleInbound::SkillSetGlobal { skill_id, is_global, .. } => {
+            // Admin-only — flipping a skill global affects every startup
+            // in the world. Manager has no business changing world-wide
+            // visibility for content they may not own.
+            if !identity.role.at_least(OperatorRole::Admin) { return forbidden(); }
+            match crate::skills::set_global(pool, &skill_id, is_global).await {
+                Ok(()) => {
+                    // Re-fetch the owning startup so the broadcast carries
+                    // it; consoles in any startup fan an update because
+                    // global skills are visible everywhere.
+                    let owner: Result<Option<(String,)>, _> = sqlx::query_as(
+                        "SELECT startup_id FROM skills WHERE id = ?"
+                    ).bind(&skill_id).fetch_optional(pool).await;
+                    let startup_id = owner.ok().flatten().map(|(s,)| s).unwrap_or_default();
+                    let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                        v: 1,
+                        startup_id,
+                        kind: if is_global { "set_global".to_string() } else { "clear_global".to_string() },
+                        skill_id: skill_id.clone(),
+                        agent_id: None,
+                        skill: None,
+                    });
+                    json!({"type":"ok","kind":"skill_set_global","skill_id":skill_id,"is_global":is_global})
+                }
+                Err(crate::skills::SkillError::NotFound) => json!({"type":"error","reason":"not_found"}),
                 Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
             }
         }

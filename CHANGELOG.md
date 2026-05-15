@@ -1,5 +1,31 @@
 # Changelog
 
+## M13 — feat: globally-visible skills (2026-05-15)
+
+Roadmap carry-forward. Skills were strictly startup-scoped — style
+guides, MCP usage primers, debugging templates that apply
+everywhere had to be duplicated per startup. This PR adds an
+admin-only `is_global` flag that auto-surfaces the skill in every
+agent's execenv regardless of `agent_skills` attachment.
+
+- Migration 0008: `ALTER TABLE skills ADD COLUMN is_global INTEGER
+  NOT NULL DEFAULT 0`. Partial index on `is_global = 1` for the
+  union join below.
+- `skills::for_agent` now UNIONs the agent's attached rows with all
+  `is_global = 1` rows; DISTINCT-by-id prevents double-listing a
+  skill that's both attached + global.
+- `skills::set_global(skill_id, bool)` toggles the flag.
+- New admin-only ConsoleInbound variant `skill_set_global
+  {skill_id, is_global}`. Manager has no business changing world-
+  wide visibility; the gate is `at_least(Admin)`. Emits
+  `SkillChanged { kind: "set_global" | "clear_global" }`.
+- 4 new DAO tests cover global+no-attachment, no-double-list,
+  clear-global-hides, not-found.
+
+Agents cannot mark their own skills global — operator-only by
+design. Frontend UI for the flag is deferred (single ConsoleInbound
+boolean; trivial to wire when needed).
+
 ## M13 — feat: skills content authoring in the operator console (2026-05-15)
 
 Roadmap carry-forward. SkillsPanel only supported attach/detach;

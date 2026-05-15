@@ -247,11 +247,19 @@ pub async fn for_agent(
     pool: &SqlitePool,
     agent_id: &str,
 ) -> Result<Vec<AttachedSkill>, SkillError> {
+    // P3 carry-forward: union explicitly-attached skills with any
+    // `is_global = 1` rows. Agents in any startup see global skills without
+    // needing an `agent_skills` row. UNION ALL is safe — the WHERE clauses
+    // are disjoint (a globally-marked skill is attached OR global OR both,
+    // and the LEFT JOIN below isn't needed because de-dup is via the inner
+    // SELECT DISTINCT). We DISTINCT-by-id to avoid double-listing a global
+    // skill that's also explicitly attached.
     let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT s.name, s.content_md FROM skills s \
-         INNER JOIN agent_skills ags ON ags.skill_id = s.id \
-         WHERE ags.agent_id = ? \
-         ORDER BY s.name",
+        "SELECT name, content_md FROM ( \
+            SELECT DISTINCT s.id, s.name, s.content_md FROM skills s \
+            LEFT JOIN agent_skills ags ON ags.skill_id = s.id AND ags.agent_id = ? \
+            WHERE ags.agent_id IS NOT NULL OR s.is_global = 1 \
+         ) ORDER BY name",
     )
     .bind(agent_id)
     .fetch_all(pool)
@@ -260,6 +268,26 @@ pub async fn for_agent(
         .into_iter()
         .map(|(name, content_md)| AttachedSkill { name, content_md })
         .collect())
+}
+
+/// P3 carry-forward: set or clear the `is_global` flag on a skill.
+/// Caller (operator) must be admin; enforced at the dispatch layer.
+pub async fn set_global(
+    pool: &SqlitePool,
+    skill_id: &str,
+    is_global: bool,
+) -> Result<(), SkillError> {
+    let r = sqlx::query(
+        "UPDATE skills SET is_global = ?, updated_at = unixepoch() WHERE id = ?",
+    )
+    .bind(if is_global { 1i64 } else { 0i64 })
+    .bind(skill_id)
+    .execute(pool)
+    .await?;
+    if r.rows_affected() == 0 {
+        return Err(SkillError::NotFound);
+    }
+    Ok(())
 }
 
 /// SkillsSnapshot row shape: listing metadata + the list of agent_ids

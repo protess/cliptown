@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — globally-visible skills — 2026-05-15
+**Source:** Roadmap carry-forward (Skills global / non-workspace, M-sized). PR `<TBD>`.
+
+Was: skills were strictly startup-scoped — style guides / debugging primers had to be duplicated per startup. Roadmap listed the gap.
+
+Fixed: migration 0008 adds `is_global INTEGER NOT NULL DEFAULT 0` to skills with a partial index. `skills::for_agent` UNIONs attached rows with `is_global = 1` rows; DISTINCT-by-id prevents double-listing. New `skills::set_global` DAO. New admin-only ConsoleInbound `skill_set_global {skill_id, is_global}` — manager has no business with world-wide visibility, so it's `at_least(Admin)`. Broadcasts `SkillChanged { kind: "set_global" | "clear_global" }`. 4 new DAO tests. Agents cannot mark their own skills global by design. Frontend UI deferred — single boolean knob, easy to wire later.
+
 ### M13 feat — skills content authoring in operator console — 2026-05-15
 **Source:** Roadmap carry-forward (Skills content authoring UI, M-sized). PR `<TBD>`.
 
