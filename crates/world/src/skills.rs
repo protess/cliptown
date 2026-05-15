@@ -595,6 +595,9 @@ pub struct SkillWithAttachments {
     pub len: i64,
     pub updated_at: i64,
     pub attachments: Vec<String>,
+    /// P3 carry-forward: surfaced so the operator console can render a globe
+    /// indicator + the admin-only set-global toggle without a second fetch.
+    pub is_global: bool,
 }
 
 /// List all skills in a startup with their attachments. Used by the console
@@ -603,15 +606,15 @@ pub async fn list_with_attachments(
     pool: &SqlitePool,
     startup_id: &str,
 ) -> Result<Vec<SkillWithAttachments>, SkillError> {
-    let skills: Vec<(String, String, i64, i64)> = sqlx::query_as(
-        "SELECT id, name, length(content_md), updated_at FROM skills \
+    let skills: Vec<(String, String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT id, name, length(content_md), updated_at, is_global FROM skills \
          WHERE startup_id = ? ORDER BY name",
     )
     .bind(startup_id)
     .fetch_all(pool)
     .await?;
     let mut out: Vec<SkillWithAttachments> = Vec::with_capacity(skills.len());
-    for (id, name, len, updated_at) in skills {
+    for (id, name, len, updated_at, is_global) in skills {
         let attachments: Vec<(String,)> =
             sqlx::query_as("SELECT agent_id FROM agent_skills WHERE skill_id = ? ORDER BY agent_id")
                 .bind(&id)
@@ -623,6 +626,7 @@ pub async fn list_with_attachments(
             len,
             updated_at,
             attachments: attachments.into_iter().map(|(a,)| a).collect(),
+            is_global: is_global != 0,
         });
     }
     Ok(out)
@@ -652,6 +656,7 @@ pub fn skill_with_attachments_to_json(s: &SkillWithAttachments) -> serde_json::V
         "len": s.len,
         "updated_at": s.updated_at,
         "attachments": s.attachments,
+        "is_global": s.is_global,
     })
 }
 

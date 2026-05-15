@@ -143,4 +143,9 @@ pub enum ConsoleOutbound {
     /// WorldViewSnapshot. `startups` is `{sid: [{id, name, len, updated_at,
     /// attachments: [agent_id]}]}` for every startup the operator can see.
     SkillsSnapshot { v: u8, startups: serde_json::Value },
+    /// P3 carry-forward: identity of the authenticated operator. Emitted
+    /// once after a successful WS hello — lets the frontend hide admin-only
+    /// surfaces (OperatorsPanel, the SkillsPanel global toggle) for
+    /// viewer / manager operators. The wire never echoes the bearer token.
+    HelloOk { v: u8, operator_id: String, operator_name: String, role: String },
 }

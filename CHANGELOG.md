@@ -2,26 +2,56 @@
 
 ## M13 — feat: skill_revert (rollback to historical revision) (2026-05-15)
 
-Closes the `Rollback deferred — schema supports it but needs a UX
-surface` note from #67. Schema was ready; this PR ships the
-mutation path so an agent or operator can revert a skill to a
-prior revision without going through SQL.
+Closes the "Rollback deferred" note from #67. Schema was ready;
+this PR ships the mutation path.
 
-- `skills::revert_to_revision(pool, startup_id, skill_id, rev_seq,
-  author)` reads the historical row, sets it as live content, and
-  appends a NEW revision row pointing at the same content. History
-  stays linear (no truncation) — the timeline reads "v1 → v2 → v3
-  → reverted-from-v1".
-- 26th MCP tool `skill_revert {skill_id, rev_seq}` (agent path).
-  Author flows through to the revision row.
-- Same-startup gate + not-found on unknown skill_id or rev_seq.
-- Emits `SkillChanged { kind: "revert" }` so listeners can refresh.
-- 4 new DAO tests: live-content replaced, history not truncated,
-  unknown rev → not_found, cross-startup → cross_startup.
+- `skills::revert_to_revision` loads historical row, sets it live,
+  appends a NEW revision pointing at the same content. History
+  stays linear.
+- 26th MCP tool `skill_revert {skill_id, rev_seq}`. Same-startup
+  gate.
+- Emits `SkillChanged { kind: "revert" }`.
+- 4 new DAO tests.
 
-Operator-side ConsoleInbound + frontend UI deferred — the MCP path
-is callable today; the panel hook lands in the consolidated UI
-follow-up.
+Operator-side ConsoleInbound + frontend UI deferred — MCP path is
+callable today.
+
+## M13 — feat: operator identity on hello reply + admin-only UI gate (2026-05-15)
+
+Closes a known limit on #69. OperatorsPanel + SkillsPanel global
+toggle were admin-only on the server but always visible client-side.
+
+- New ConsoleOutbound `HelloOk { operator_id, operator_name, role }`.
+  Emitted after token validation; token not echoed.
+- Frontend reducer populates `state.currentOperator`.
+- `OperatorsPanel` returns null when role ≠ admin (hooks run first
+  so React's hook-order invariant holds; also hides pre-hello to
+  avoid flash-in).
+
+## M13 — feat: is_global toggle + indicator in SkillsPanel (2026-05-15)
+
+Finishes the global-skills surface. #68 added the backend flag +
+`skill_set_global` ConsoleInbound; this PR adds the UI knob.
+
+- `SkillWithAttachments` carries `is_global`. `SkillVM` mirrors it.
+- Per-row globe toggle (admin-only on server). 🌐 badge appears
+  next to the name when set.
+
+## M13 — docs: Phase 4 roadmap brainstorm (2026-05-15)
+
+Closes the "Phase 4 brainstorm needed" note from the Phase 3
+roadmap. Catalogues candidate themes — peer review, time-bounded
+dependencies, work-stealing (the deferred Theme E), local-LLM
+polish, operator UX polish, and a sketched multi-cliptown
+federation theme — with sizing + recommended sequencing.
+
+Recommended first PR cycle: Theme F1 (local-LLM smoke) to validate
+the local-first narrative from #55 before stacking new
+coordination features.
+
+Each theme will get its own brainstorm spec when picked up; this
+doc is intentionally a strategic-direction sketch, not a binding
+plan.
 
 ## M13 — feat: operator management panel in the console (2026-05-15)
 
