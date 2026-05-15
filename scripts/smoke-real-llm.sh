@@ -34,6 +34,12 @@ WORLD_BIND="${WORLD_BIND:-127.0.0.1:8080}"
 OPERATOR_TOKEN="${CLIPTOWN_OPERATOR_TOKEN:-dev-token}"
 AGENT_SECRET="${AGENT_SECRET:-dev-secret}"
 TASK_ID="smoke-haiku"
+# P3 carry-forward: when set (e.g. WORLD_REMOTE_URL=https://cliptown.fly.dev),
+# the script targets a deployed world instead of building+booting locally.
+# Limitation: artifact verification needs the world's filesystem, which we
+# don't have remote access to — remote mode treats clean adapter exit + task
+# status flip as success.
+WORLD_REMOTE_URL="${WORLD_REMOTE_URL:-}"
 # Default to claude_code; override with BACKEND=codex|opencode to exercise
 # the other adapters' --real paths. The expected MCP tool prefix varies
 # per CLI — claude exposes tools as `mcp__cliptown__<name>`, codex/opencode
@@ -52,8 +58,19 @@ fail() { printf "\033[1;31m[smoke FAIL]\033[0m %s\n" "$*" >&2; exit 1; }
 # wrong, the `claude` CLI itself emits a clear auth error during the worker
 # step, which is more informative than our preflight could be (it can speak
 # to whether the key is unset vs invalid vs rate-limited).
-say "pre-flight (backend=$BACKEND)"
-for tool in cargo pnpm sqlite3 jq curl "$BACKEND"; do
+if [[ -n "$WORLD_REMOTE_URL" ]]; then
+  say "pre-flight (backend=$BACKEND, mode=remote target=$WORLD_REMOTE_URL)"
+else
+  say "pre-flight (backend=$BACKEND, mode=local)"
+fi
+# In remote mode we don't need cargo / sqlite3 — the world is already running
+# somewhere else. The worker still spawns locally so pnpm + the CLI itself
+# remain required.
+preflight_tools=(pnpm jq curl "$BACKEND")
+if [[ -z "$WORLD_REMOTE_URL" ]]; then
+  preflight_tools+=(cargo sqlite3)
+fi
+for tool in "${preflight_tools[@]}"; do
   # `$BACKEND` is the CLI binary name (claude_code maps to `claude`).
   local_bin="$tool"
   if [[ "$tool" == "claude_code" ]]; then local_bin="claude"; fi
@@ -86,46 +103,61 @@ cleanup() {
 trap cleanup EXIT INT TERM
 say "tmpdir: $SMOKE_DIR"
 
-# ── 3. build + boot world ──────────────────────────────────────────────────
-say "building cliptown-world (release)"
-(cd "$REPO_ROOT" && cargo build --release -p cliptown-world >/dev/null 2>&1) \
-  || fail "cargo build failed; rerun manually to see errors"
+# ── 3. world setup — build+boot locally, OR point at a remote target ───────
+if [[ -n "$WORLD_REMOTE_URL" ]]; then
+  # Remote mode: derive http/ws bases from WORLD_REMOTE_URL, skip build+boot.
+  WORLD_HTTP="${WORLD_REMOTE_URL%/}"
+  case "$WORLD_HTTP" in
+    https://*) WORLD_WS="wss://${WORLD_HTTP#https://}/ws/worker" ;;
+    http://*)  WORLD_WS="ws://${WORLD_HTTP#http://}/ws/worker" ;;
+    *) fail "WORLD_REMOTE_URL must start with http:// or https:// (got: $WORLD_HTTP)" ;;
+  esac
+  say "remote world: HTTP=$WORLD_HTTP WS=$WORLD_WS"
+  curl -sf "$WORLD_HTTP/health" >/dev/null \
+    || fail "remote /health failed; check WORLD_REMOTE_URL + network"
+else
+  WORLD_HTTP="http://$WORLD_BIND"
+  WORLD_WS="ws://$WORLD_BIND/ws/worker"
+  say "building cliptown-world (release)"
+  (cd "$REPO_ROOT" && cargo build --release -p cliptown-world >/dev/null 2>&1) \
+    || fail "cargo build failed; rerun manually to see errors"
 
-# world needs cliptown.toml in CWD + writes workspaces/<sid>/ in CWD
-cp "$REPO_ROOT/cliptown.toml" "$SMOKE_DIR/cliptown.toml"
+  # world needs cliptown.toml in CWD + writes workspaces/<sid>/ in CWD
+  cp "$REPO_ROOT/cliptown.toml" "$SMOKE_DIR/cliptown.toml"
 
-say "booting world at $WORLD_BIND (db=$SMOKE_DIR/cliptown.db)"
-(
-  cd "$SMOKE_DIR"
-  CLIPTOWN_DB="$SMOKE_DIR/cliptown.db" \
-  CLIPTOWN_ADDR="$WORLD_BIND" \
-  CLIPTOWN_TEST_FIXED_AGENT_SECRET="$AGENT_SECRET" \
-  CLIPTOWN_TEST_DISABLE_SUPERVISOR=1 \
-  "$REPO_ROOT/target/release/cliptown-world" \
-    >"$SMOKE_DIR/world.log" 2>&1 &
-  echo $! >"$SMOKE_DIR/world.pid"
-)
-WORLD_PID="$(cat "$SMOKE_DIR/world.pid")"
+  say "booting world at $WORLD_BIND (db=$SMOKE_DIR/cliptown.db)"
+  (
+    cd "$SMOKE_DIR"
+    CLIPTOWN_DB="$SMOKE_DIR/cliptown.db" \
+    CLIPTOWN_ADDR="$WORLD_BIND" \
+    CLIPTOWN_TEST_FIXED_AGENT_SECRET="$AGENT_SECRET" \
+    CLIPTOWN_TEST_DISABLE_SUPERVISOR=1 \
+    "$REPO_ROOT/target/release/cliptown-world" \
+      >"$SMOKE_DIR/world.log" 2>&1 &
+    echo $! >"$SMOKE_DIR/world.pid"
+  )
+  WORLD_PID="$(cat "$SMOKE_DIR/world.pid")"
 
-# poll /health until ready (max 30s — release-build cold-start is ~1s in practice)
-say "waiting for world /health"
-for i in $(seq 1 60); do
-  if curl -sf "http://$WORLD_BIND/health" >/dev/null 2>&1; then
-    say "world ready after ${i}*0.5s"
-    break
-  fi
-  sleep 0.5
-  if ! kill -0 "$WORLD_PID" 2>/dev/null; then
-    cat "$SMOKE_DIR/world.log" >&2
-    fail "world exited before /health responded"
-  fi
-done
-curl -sf "http://$WORLD_BIND/health" >/dev/null \
-  || fail "world /health never responded; see $SMOKE_DIR/world.log"
+  # poll /health until ready (max 30s — release cold-start is ~1s in practice)
+  say "waiting for world /health"
+  for i in $(seq 1 60); do
+    if curl -sf "$WORLD_HTTP/health" >/dev/null 2>&1; then
+      say "world ready after ${i}*0.5s"
+      break
+    fi
+    sleep 0.5
+    if ! kill -0 "$WORLD_PID" 2>/dev/null; then
+      cat "$SMOKE_DIR/world.log" >&2
+      fail "world exited before /health responded"
+    fi
+  done
+  curl -sf "$WORLD_HTTP/health" >/dev/null \
+    || fail "world /health never responded; see $SMOKE_DIR/world.log"
+fi
 
 # ── 4. create startup via /api/startups ────────────────────────────────────
 say "creating startup via /api/startups"
-CREATE_RESP="$(curl -sf -X POST "http://$WORLD_BIND/api/startups" \
+CREATE_RESP="$(curl -sf -X POST "$WORLD_HTTP/api/startups" \
   -H "Authorization: Bearer $OPERATOR_TOKEN" \
   -H "content-type: application/json" \
   -d "{\"name\":\"smoke\",\"goal_text\":\"haiku\",\"budget_cap_usd\":$BUDGET_CAP_USD,\"backends\":{\"founder\":\"claude_code\",\"engineer\":\"claude_code\",\"designer\":\"claude_code\"}}")" \
@@ -138,33 +170,49 @@ FOUNDER_ID="$(jq -r '.agents[] | select(.role=="founder") | .id' <<<"$CREATE_RES
 [[ -n "$ENGINEER_ID" && "$ENGINEER_ID" != "null" ]] || fail "could not parse engineer_id"
 say "startup=$STARTUP_ID engineer=$ENGINEER_ID founder=$FOUNDER_ID"
 
-# ── 5. seed parent + engineer task via SQL ─────────────────────────────────
+# ── 5. seed parent + engineer task ─────────────────────────────────────────
 # mcp_dispatch::handle_task_done's subtask_done fanout expects the engineer's
-# task to have a parent assigned to a manager. Create both rows in one go.
-say "seeding parent task T-parent and engineer task $TASK_ID"
-sqlite3 "$SMOKE_DIR/cliptown.db" <<SQL
+# task to have a parent assigned to a manager. Local mode uses SQL for fixed
+# IDs (cleanup + inspection ergonomics); remote mode goes through
+# `/api/admin/tasks` (added in P3 carry-forward) since SQL is unreachable.
+if [[ -z "$WORLD_REMOTE_URL" ]]; then
+  say "seeding parent task T-parent and engineer task $TASK_ID via SQL"
+  sqlite3 "$SMOKE_DIR/cliptown.db" <<SQL
 INSERT INTO tasks (id, startup_id, parent_id, title, description, status, assignee_agent_id, created_at, updated_at)
 VALUES ('T-parent', '$STARTUP_ID', NULL, 'parent', 'd', 'in_progress', '$FOUNDER_ID', unixepoch(), unixepoch());
 INSERT INTO tasks (id, startup_id, parent_id, title, description, status, assignee_agent_id, created_at, updated_at)
 VALUES ('$TASK_ID', '$STARTUP_ID', 'T-parent', 'Write a haiku', 'd', 'in_progress', '$ENGINEER_ID', unixepoch(), unixepoch());
 SQL
+  mkdir -p "$SMOKE_DIR/workspaces/$STARTUP_ID/artifacts"
 
-# pre-create the workspace so claude's Write tool + world's sandbox::resolve
-# agree on the directory layout.
-mkdir -p "$SMOKE_DIR/workspaces/$STARTUP_ID/artifacts"
-
-# ── 5.5. seed a skill + attach to engineer (P2.2 verification) ─────────────
-say "seeding skill 'smoke-skill-deploy' and attaching to engineer"
-# uuidgen on macOS prints uppercase; sqlite-stored uuids in cliptown are
-# lowercased by convention (matches what api_startups produces).
-SKILL_ID="$(uuidgen | tr 'A-Z' 'a-z' 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
-SKILL_CONTENT="Smoke test skill content. The agent should see this file in its execenv."
-sqlite3 "$SMOKE_DIR/cliptown.db" <<SQL
+  say "seeding skill 'smoke-skill-deploy' and attaching to engineer"
+  SKILL_ID="$(uuidgen | tr 'A-Z' 'a-z' 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
+  SKILL_CONTENT="Smoke test skill content. The agent should see this file in its execenv."
+  sqlite3 "$SMOKE_DIR/cliptown.db" <<SQL
 INSERT INTO skills (id, startup_id, name, content_md, created_at, updated_at)
   VALUES ('$SKILL_ID', '$STARTUP_ID', 'smoke-skill-deploy', '$SKILL_CONTENT', unixepoch(), unixepoch());
 INSERT INTO agent_skills (agent_id, skill_id, attached_at)
   VALUES ('$ENGINEER_ID', '$SKILL_ID', unixepoch());
 SQL
+else
+  say "seeding parent + engineer task via /api/admin/tasks (remote)"
+  PARENT_RESP="$(curl -sf -X POST "$WORLD_HTTP/api/admin/tasks" \
+    -H "Authorization: Bearer $OPERATOR_TOKEN" \
+    -H "content-type: application/json" \
+    -d "{\"startup_id\":\"$STARTUP_ID\",\"title\":\"parent\",\"description\":\"smoke parent\",\"assignee_agent_id\":\"$FOUNDER_ID\"}")" \
+    || fail "/api/admin/tasks (parent) failed"
+  PARENT_ID="$(jq -r '.id' <<<"$PARENT_RESP")"
+  [[ -n "$PARENT_ID" && "$PARENT_ID" != "null" ]] || fail "no parent id: $PARENT_RESP"
+  CHILD_RESP="$(curl -sf -X POST "$WORLD_HTTP/api/admin/tasks" \
+    -H "Authorization: Bearer $OPERATOR_TOKEN" \
+    -H "content-type: application/json" \
+    -d "{\"startup_id\":\"$STARTUP_ID\",\"parent_id\":\"$PARENT_ID\",\"title\":\"Write a haiku\",\"description\":\"smoke child\",\"assignee_agent_id\":\"$ENGINEER_ID\"}")" \
+    || fail "/api/admin/tasks (child) failed"
+  TASK_ID="$(jq -r '.id' <<<"$CHILD_RESP")"
+  [[ -n "$TASK_ID" && "$TASK_ID" != "null" ]] || fail "no child id: $CHILD_RESP"
+  say "remote task ids: parent=$PARENT_ID child=$TASK_ID"
+  warn "remote mode: skill seeding skipped (operator must pre-seed if needed)"
+fi
 
 # ── 6. spawn worker in --real mode ─────────────────────────────────────────
 ARTIFACT_REL="workspaces/$STARTUP_ID/artifacts/$TASK_ID.md"
@@ -215,7 +263,7 @@ set +e
   # node_modules (where tsx is a devDep). Plain `pnpm exec` looks in the
   # workspace root, where tsx isn't installed.
   pnpm -F @cliptown/worker exec tsx ./src/main.ts \
-    --world-url "ws://$WORLD_BIND/ws/worker" \
+    --world-url "$WORLD_WS" \
     --agent-id "$ENGINEER_ID" \
     --startup-id "$STARTUP_ID" \
     --task-id "$TASK_ID" \
@@ -232,6 +280,18 @@ say "worker exited rc=$WORKER_RC (log: $WORKER_LOG)"
 [[ "$WORKER_RC" -eq 0 ]] || { cat "$WORKER_LOG" >&2; fail "worker exited non-zero"; }
 
 # ── 7. verifications ───────────────────────────────────────────────────────
+# Remote mode: skip FS + SQL checks (we have neither). The world's task_done
+# handler already validated the artifact path server-side as part of the MCP
+# call, so a clean worker exit is a real signal. Local mode keeps the full
+# verification suite.
+if [[ -n "$WORLD_REMOTE_URL" ]]; then
+  say "verify (remote): clean adapter exit + world /health responsive"
+  curl -sf "$WORLD_HTTP/health" >/dev/null || fail "remote /health lost after worker run"
+  warn "remote mode: skipping artifact-on-disk + SQL-row + execenv + skill + budget checks (no local FS / SQL access)"
+  say "PASS — remote smoke complete"
+  exit 0
+fi
+
 say "verify: artifact on disk at $ARTIFACT_REL"
 [[ -s "$ARTIFACT_ABS" ]] || fail "artifact missing or empty: $ARTIFACT_ABS"
 say "artifact bytes=$(wc -c <"$ARTIFACT_ABS")"

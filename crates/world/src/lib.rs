@@ -1,6 +1,7 @@
 pub mod agent_supervisor;
 pub mod api_skills;
 pub mod api_startups;
+pub mod api_tasks;
 pub mod auth;
 pub mod backend_catalog;
 pub mod budget;

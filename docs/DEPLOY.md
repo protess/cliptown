@@ -279,12 +279,33 @@ encrypted at rest.
 
 ## Smoke against a deployed instance
 
-`scripts/smoke-real-llm.sh` currently boots its own world server in a
-tmpdir. Targeting a remote deploy needs a parameterization pass —
-track in the carry-forward list in
-`docs/superpowers/specs/2026-05-13-phase-3-roadmap.md`.
+`scripts/smoke-real-llm.sh` supports both local and remote targets.
 
-For now, verify a remote deploy manually:
+**Local mode (default):** builds + boots its own world in a tmpdir,
+seeds via SQL, runs the worker locally, verifies artifact + SQL row
++ execenv + skill + budget end-to-end.
+
+**Remote mode** (`WORLD_REMOTE_URL=https://...`): skips build + boot,
+seeds the task via `POST /api/admin/tasks` (operator-token gated,
+manager-or-above), runs the worker locally against the remote
+`/ws/worker`. The world's `task_done` MCP handler still validates
+the artifact path on its (remote) filesystem; a clean adapter exit
+is treated as success. FS-bound checks (artifact-on-disk, execenv
+layout, skill files) and SQL-row inspection are skipped — no
+client-side path to either.
+
+```bash
+# Local — the existing path.
+ANTHROPIC_API_KEY=sk-ant-... bash scripts/smoke-real-llm.sh
+
+# Remote against a Fly.io deploy.
+WORLD_REMOTE_URL=https://cliptown-<unique>.fly.dev \
+CLIPTOWN_OPERATOR_TOKEN=... \
+ANTHROPIC_API_KEY=sk-ant-... \
+  bash scripts/smoke-real-llm.sh
+```
+
+For ad-hoc manual checks against a remote deploy:
 
 ```bash
 # Health.
@@ -296,4 +317,11 @@ curl -X POST https://cliptown-<unique>.fly.dev/api/startups \
   -H "Content-Type: application/json" \
   -d '{"name":"smoke","goal_text":"test","budget_cap_usd":1.0,
        "backends":{"founder":"claude_code","engineer":"claude_code","designer":"claude_code"}}'
+
+# Seed a task manually (admin/manager role).
+curl -X POST https://cliptown-<unique>.fly.dev/api/admin/tasks \
+  -H "Authorization: Bearer <CLIPTOWN_OPERATOR_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"startup_id":"<sid>","title":"t","description":"d",
+       "assignee_agent_id":"<aid>"}'
 ```
