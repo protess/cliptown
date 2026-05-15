@@ -1,5 +1,32 @@
 # Changelog
 
+## M13 — feat: operator management panel in the console (2026-05-15)
+
+Final Phase 3 carry-forward — Theme B frontend surface.
+`operator_list` / `_create` / `_revoke` / `_set_role` ConsoleInbound
+variants have been there since #61; this PR adds the operator UI
+so admins no longer need raw WS to use them.
+
+- New `OperatorsPanel.tsx`, mounted below SkillsPanel. Collapsed
+  by default. On expand, sends `operator_list` to hydrate.
+- Per-row: name, role select (viewer / manager / admin), Revoke
+  button (confirm-prompted).
+- Footer: name input + role select + Create button. On success
+  the server returns the minted `opt_*` token inline — the panel
+  shows it in a `MintedTokenBanner` with a copy-now warning that's
+  dismissed by the operator after copying. Cliptown never displays
+  the token again.
+- Store reducer handles the four `{type:"ok", kind:"operator_*"}`
+  reply envelopes — populates `state.operators` on list, appends
+  on create + stashes `mintedOperatorToken`, filters on revoke,
+  updates role in-place on set_role.
+- Non-admin callers see an empty list (server returns `forbidden`,
+  silently caught client-side). No role-detect on the hello reply
+  yet; the panel just gracefully handles empty.
+
+Closes the M13 roadmap — every Phase 3 theme + every carry-forward
+follow-up has landed.
+
 ## M13 — feat: globally-visible skills (2026-05-15)
 
 Roadmap carry-forward. Skills were strictly startup-scoped; style

@@ -17,6 +17,7 @@ import { MainHeader } from "./MainHeader.js";
 import { Kanban } from "./Kanban.js";
 import { ChatPanel } from "./ChatPanel.js";
 import { SkillsPanel } from "./SkillsPanel.js";
+import { OperatorsPanel } from "./OperatorsPanel.js";
 
 const OPERATOR_AVATAR_ID = "__operator__";
 
@@ -109,6 +110,7 @@ export function Console() {
             onUpsert={onSkillUpsert}
             onDelete={onSkillDelete}
           />
+          <OperatorsPanel />
         </main>
       </div>
       <ChatPanel />
