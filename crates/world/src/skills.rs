@@ -77,6 +77,27 @@ pub async fn upsert(
     name: &str,
     content_md: &str,
 ) -> Result<(String, bool), SkillError> {
+    upsert_with_author(pool, startup_id, name, content_md, Author::Unknown).await
+}
+
+/// P3 carry-forward: identity of the caller for the revision-history log.
+/// Most call paths know whether they're agent-side (MCP tool) or operator-
+/// side (Console). The `Unknown` variant exists for test fixtures + the
+/// legacy `upsert` shim above so callers can migrate incrementally.
+#[derive(Debug, Clone)]
+pub enum Author<'a> {
+    Agent(&'a str),
+    Operator(&'a str),
+    Unknown,
+}
+
+pub async fn upsert_with_author<'a>(
+    pool: &SqlitePool,
+    startup_id: &str,
+    name: &str,
+    content_md: &str,
+    author: Author<'a>,
+) -> Result<(String, bool), SkillError> {
     if !name_is_valid(name) {
         return Err(SkillError::BadName);
     }
@@ -89,7 +110,7 @@ pub async fn upsert(
             .bind(name)
             .fetch_optional(pool)
             .await?;
-    match existing {
+    let (id, is_new) = match existing {
         Some((id,)) => {
             sqlx::query(
                 "UPDATE skills SET content_md = ?, updated_at = unixepoch() WHERE id = ?",
@@ -98,7 +119,7 @@ pub async fn upsert(
             .bind(&id)
             .execute(pool)
             .await?;
-            Ok((id, false))
+            (id, false)
         }
         None => {
             let id = uuid::Uuid::new_v4().to_string();
@@ -112,9 +133,105 @@ pub async fn upsert(
             .bind(content_md)
             .execute(pool)
             .await?;
-            Ok((id, true))
+            (id, true)
         }
+    };
+    // P3 carry-forward: write the revision row AFTER the live update so the
+    // sequence count includes the new version. Failure here logs but doesn't
+    // unwind the live update — losing history is preferable to losing the
+    // user's authored content.
+    if let Err(e) = append_revision(pool, &id, content_md, author).await {
+        tracing::warn!(
+            component = "skills",
+            skill_id = %id,
+            err = ?e,
+            "failed to append skill_revisions row; live skill update kept"
+        );
     }
+    Ok((id, is_new))
+}
+
+async fn append_revision<'a>(
+    pool: &SqlitePool,
+    skill_id: &str,
+    content_md: &str,
+    author: Author<'a>,
+) -> Result<(), SkillError> {
+    let next_seq: (i64,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(rev_seq), 0) + 1 FROM skill_revisions WHERE skill_id = ?",
+    )
+    .bind(skill_id)
+    .fetch_one(pool)
+    .await?;
+    let (agent, operator) = match author {
+        Author::Agent(id) => (Some(id), None),
+        Author::Operator(id) => (None, Some(id)),
+        Author::Unknown => (None, None),
+    };
+    let rev_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO skill_revisions (id, skill_id, rev_seq, content_md, created_at, \
+                                       created_by_agent_id, created_by_operator_id) \
+         VALUES (?, ?, ?, ?, unixepoch(), ?, ?)",
+    )
+    .bind(&rev_id)
+    .bind(skill_id)
+    .bind(next_seq.0)
+    .bind(content_md)
+    .bind(agent)
+    .bind(operator)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRevision {
+    pub id: String,
+    pub skill_id: String,
+    pub rev_seq: i64,
+    pub content_md: String,
+    pub created_at: i64,
+    pub created_by_agent_id: Option<String>,
+    pub created_by_operator_id: Option<String>,
+}
+
+pub async fn list_revisions(
+    pool: &SqlitePool,
+    startup_id: &str,
+    skill_id: &str,
+) -> Result<Vec<SkillRevision>, SkillError> {
+    // Ownership gate so a cross-startup caller can't peek at content history.
+    let owner: Option<(String,)> =
+        sqlx::query_as("SELECT startup_id FROM skills WHERE id = ?")
+            .bind(skill_id)
+            .fetch_optional(pool)
+            .await?;
+    match owner {
+        None => return Err(SkillError::NotFound),
+        Some((sid,)) if sid != startup_id => return Err(SkillError::CrossStartup),
+        _ => {}
+    }
+    let rows: Vec<(String, String, i64, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, skill_id, rev_seq, content_md, created_at, \
+                created_by_agent_id, created_by_operator_id \
+         FROM skill_revisions WHERE skill_id = ? ORDER BY rev_seq DESC",
+    )
+    .bind(skill_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, skill_id, rev_seq, content_md, created_at, agent, operator)| SkillRevision {
+            id,
+            skill_id,
+            rev_seq,
+            content_md,
+            created_at,
+            created_by_agent_id: agent,
+            created_by_operator_id: operator,
+        })
+        .collect())
 }
 
 pub async fn list(pool: &SqlitePool, startup_id: &str) -> Result<Vec<SkillListing>, SkillError> {

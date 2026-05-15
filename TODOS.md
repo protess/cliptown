@@ -11,7 +11,21 @@ _(empty)_
 
 Was: skills could only carry a single `content_md` blob — supporting files (templates, JSON configs, examples) had no home. Roadmap listed it as a follow-up.
 
-Fixed: migration 0006 adds `skill_files (id, skill_id FK, name, content, ...)` with `UNIQUE (skill_id, name)` and FK cascade. skills crate gains `upsert_file` / `delete_file` / `list_files` / `file_name_is_valid` (alnum + `- _ .` only — no `..`, no `/`). AttachedSkill gains `files`; `/api/agents/:id/skills` returns the array. Worker materializes each file at `<workdir>/skills/<skill-name>/<file-name>` alongside the main `.md`. 2 new MCP tools (`skill_file_upsert` / `skill_file_delete`) — tools/list 22 → 24. SkillChanged broadcasts emit new kinds `file_upsert` / `file_delete`. 8 new DAO tests. Operator-console UI deferred — agents have MCP path; an operator file editor lands when there's pressure.
+Fixed: migration 0006 adds `skill_files (id, skill_id FK, name, content, ...)` with `UNIQUE (skill_id, name)` and FK cascade. skills crate gains `upsert_file` / `delete_file` / `list_files` / `file_name_is_valid` (alnum + `- _ .` only — no `..`, no `/`). AttachedSkill gains `files`; `/api/agents/:id/skills` returns the array. Worker materializes each file at `<workdir>/skills/<skill-name>/<file-name>` alongside the main `.md`. 2 new MCP tools (`skill_file_upsert` / `skill_file_delete`). SkillChanged broadcasts emit new kinds `file_upsert` / `file_delete`. 8 new DAO tests. Operator-console UI deferred — agents have MCP path; an operator file editor lands when there's pressure.
+
+### M13 feat — skills revision history — 2026-05-15
+**Source:** Roadmap carry-forward (Skills versioning, M-sized). PR `<TBD>`.
+
+Was: every `skills::upsert` overwrote `content_md` in place — no audit, no rollback target. Roadmap listed it.
+
+Fixed: migration 0007 adds append-only `skill_revisions (id, skill_id FK, rev_seq, content_md, created_at, created_by_agent_id?, created_by_operator_id?)` with `UNIQUE (skill_id, rev_seq)` + FK cascade. `skills::Author` enum + `upsert_with_author` record who wrote each version. mcp_dispatch passes `Author::Agent`; cmd_console passes `Author::Operator`. `list_revisions` ownership-gated. New MCP tool `skill_list_revisions {skill_id, limit?}`. 7 new tests. Revision append is best-effort after the live update (history loss < content loss). Rollback deferred — schema supports it but needs UX surface.
+
+### M13 feat — skills content authoring in operator console — 2026-05-15
+**Source:** Roadmap carry-forward (Skills content authoring UI, M-sized). PR `<TBD>`.
+
+Was: SkillsPanel only handled attach/detach. Operators had to use MCP tools or raw SQL to create / edit / delete skill content.
+
+Fixed: 2 new ConsoleInbound variants (`skill_upsert_operator` / `skill_delete_operator`), both manager-gated, routing through the same `skills::upsert`/`skills::delete` paths as the agent-side MCP tools. SkillsPanel gains `+ New skill` + per-row ✎ edit / ✕ delete with confirm. The editor starts blank for edit too because the WS snapshot ships skill metadata only — re-fetching content per skill would inflate every snapshot. Operators paste/re-type; upsert resolves by `(startup_id, name)` so the existing row is updated in place. 4 new integration tests.
 
 ### M13 feat — cost variance telemetry — 2026-05-15
 **Source:** Final Theme C deferred bit (estimate-vs-actual emit). PR `<TBD>`.

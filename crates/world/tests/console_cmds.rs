@@ -472,6 +472,99 @@ async fn operator_set_role_changes_row() {
     assert_eq!(id.role, cliptown_world::auth::OperatorRole::Manager);
 }
 
+// ── P3 Theme F follow-up: operator-side skill authoring ───────────────────
+
+#[tokio::test]
+async fn skill_upsert_operator_creates_then_updates() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    // Seed startup so cross-startup check passes.
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"skill_upsert_operator","v":1,"startup_id":"s1","skill_id":null,
+        "name":"my-skill","content_md":"first content"
+    })).await;
+    assert_eq!(r["type"], "ok");
+    let id = r["skill_id"].as_str().unwrap().to_string();
+    // Re-submit with same name — should update in place, not duplicate.
+    let r2 = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"skill_upsert_operator","v":1,"startup_id":"s1","skill_id":null,
+        "name":"my-skill","content_md":"second content"
+    })).await;
+    assert_eq!(r2["type"], "ok");
+    assert_eq!(r2["skill_id"].as_str().unwrap(), id);
+    let row: (String, String) = sqlx::query_as("SELECT id, content_md FROM skills WHERE name='my-skill' AND startup_id='s1'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(row.0, id);
+    assert_eq!(row.1, "second content");
+}
+
+#[tokio::test]
+async fn skill_upsert_operator_viewer_forbidden() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &viewer(), json!({
+        "type":"skill_upsert_operator","v":1,"startup_id":"s1","skill_id":null,
+        "name":"my-skill","content_md":"x"
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "forbidden");
+}
+
+#[tokio::test]
+async fn skill_delete_operator_removes_row() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO skills (id, startup_id, name, content_md, created_at, updated_at) \
+         VALUES ('sk_a','s1','a','c',unixepoch(),unixepoch())"
+    ).execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"skill_delete_operator","v":1,"startup_id":"s1","skill_id":"sk_a"
+    })).await;
+    assert_eq!(r["type"], "ok");
+    let count: (i64,) = sqlx::query_as("SELECT count(*) FROM skills WHERE id='sk_a'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(count.0, 0);
+}
+
+#[tokio::test]
+async fn skill_delete_operator_viewer_forbidden() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO skills (id, startup_id, name, content_md, created_at, updated_at) \
+         VALUES ('sk_b','s1','b','c',unixepoch(),unixepoch())"
+    ).execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &viewer(), json!({
+        "type":"skill_delete_operator","v":1,"startup_id":"s1","skill_id":"sk_b"
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "forbidden");
+    let count: (i64,) = sqlx::query_as("SELECT count(*) FROM skills WHERE id='sk_b'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(count.0, 1, "viewer attempt must not touch SQL");
+}
+
 #[tokio::test]
 async fn operator_set_role_refuses_self_demotion() {
     let (mut w, pool) = fresh().await;

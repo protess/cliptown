@@ -28,6 +28,54 @@ worker-side materialization into the execenv.
 Operator-console UI deferred — the MCP path is agent-callable; a
 dedicated operator file editor can come when there's pressure.
 
+## M13 — feat: skills revision history (2026-05-15)
+
+Roadmap carry-forward — final skills item. `skills.content_md` was
+overwritten in place on every upsert; no audit, no rollback target.
+
+- Migration 0007 adds `skill_revisions (id, skill_id FK, rev_seq,
+  content_md, created_at, created_by_agent_id?, created_by_operator_id?)`
+  with `UNIQUE (skill_id, rev_seq)` and FK cascade. Index on
+  `(skill_id, rev_seq DESC)` for newest-first reads.
+- New `skills::Author { Agent(&str) | Operator(&str) | Unknown }`
+  enum + `upsert_with_author` that records who wrote each revision.
+  The legacy `upsert()` stays for unit tests; it routes to
+  `upsert_with_author(.., Unknown)`. Production call sites updated:
+  `mcp_dispatch::handle_skill_upsert` passes `Author::Agent`,
+  `cmd_console::SkillUpsertOperator` passes `Author::Operator`.
+- Revision append is best-effort after the live update succeeds —
+  losing history is preferable to losing user-authored content;
+  failure logs `tracing::warn!`.
+- `skills::list_revisions(pool, startup_id, skill_id)` returns the
+  full revision history, ownership-gated (cross-startup peek → error).
+- New 23rd MCP tool: `skill_list_revisions {skill_id, limit?}`.
+- 7 new tests: first-upsert rev_seq=1, increment, author agent,
+  author operator, cross-startup reject, not-found, FK cascade on
+  skill delete.
+
+Rollback (revert-to-revision) deferred — schema supports it but
+needs a UX surface before shipping.
+
+## M13 — feat: skills content authoring in the operator console (2026-05-15)
+
+Roadmap carry-forward. SkillsPanel only supported attach/detach;
+operators had to use MCP tools or SQL for content authoring.
+
+- 2 new manager-gated ConsoleInbound variants:
+  `skill_upsert_operator` + `skill_delete_operator`. Routes through
+  the same `skills::upsert`/`skills::delete` paths as the MCP tools.
+  `skill_id` on upsert is wire-compat-only — server resolves by
+  `(startup_id, name)`.
+- `SkillsPanel.tsx` gets `+ New skill` button + per-row ✎ edit /
+  ✕ delete with confirm. Inline editor for both create + edit.
+- Editor starts blank for edit too — the WS snapshot ships skill
+  metadata only (`len`/`updated_at`); re-fetching `content_md` per
+  skill would inflate every snapshot. Operators paste/re-type;
+  upsert resolves by `(startup_id, name)` so the existing row
+  updates in place.
+- 4 new integration tests cover upsert (create + update-in-place),
+  delete, and viewer-forbidden on both.
+
 ## M13 — feat: cost variance telemetry (2026-05-15)
 
 Final Theme C deferred bit. Tasks can carry a `cost_estimate_usd`

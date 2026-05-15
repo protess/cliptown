@@ -142,6 +142,7 @@ pub async fn dispatch(
         "task_set_preference" => handle_task_set_preference(pool, event_tx, &caller, args).await,
         "skill_file_upsert" => handle_skill_file_upsert(pool, event_tx, &caller, args).await,
         "skill_file_delete" => handle_skill_file_delete(pool, event_tx, &caller, args).await,
+        "skill_list_revisions" => handle_skill_list_revisions(pool, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
             format!("no handler for tool: {}", tool),
@@ -1252,7 +1253,15 @@ async fn handle_skill_upsert(
 ) -> HandlerResult {
     let name = require_str(&args, "name")?.to_string();
     let content_md = require_str(&args, "content_md")?.to_string();
-    match crate::skills::upsert(pool, &caller.startup_id, &name, &content_md).await {
+    match crate::skills::upsert_with_author(
+        pool,
+        &caller.startup_id,
+        &name,
+        &content_md,
+        crate::skills::Author::Agent(&caller.agent_id),
+    )
+    .await
+    {
         Ok((id, created)) => {
             // P2.2 broadcast: re-fetch the listing row so frontend can apply
             // in place without a follow-up snapshot.
@@ -1596,6 +1605,45 @@ async fn handle_skill_file_delete(
             Ok(json!({"ok": true, "skill_id": skill_id, "name": name}))
         }
         Err(crate::skills::SkillError::NotFound) => Err(("not_found".into(), "skill or file not found".into())),
+        Err(crate::skills::SkillError::CrossStartup) => Err(("cross_startup".into(), "skill belongs to another startup".into())),
+        Err(e) => Err(("sql".into(), format!("{e:?}"))),
+    }
+}
+
+/// P3 carry-forward: skill revision history. Returns up to the most recent
+/// N revisions of a skill, newest first. Ownership-gated so a cross-startup
+/// caller can't peek at content history.
+async fn handle_skill_list_revisions(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let skill_id = require_str(&args, "skill_id")?.to_string();
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(20)
+        .min(100) as usize;
+    match crate::skills::list_revisions(pool, &caller.startup_id, &skill_id).await {
+        Ok(rows) => {
+            let arr: Vec<serde_json::Value> = rows
+                .into_iter()
+                .take(limit)
+                .map(|r| {
+                    json!({
+                        "id": r.id,
+                        "skill_id": r.skill_id,
+                        "rev_seq": r.rev_seq,
+                        "content_md": r.content_md,
+                        "created_at": r.created_at,
+                        "created_by_agent_id": r.created_by_agent_id,
+                        "created_by_operator_id": r.created_by_operator_id,
+                    })
+                })
+                .collect();
+            Ok(json!({"skill_id": skill_id, "revisions": arr}))
+        }
+        Err(crate::skills::SkillError::NotFound) => Err(("not_found".into(), "skill not found".into())),
         Err(crate::skills::SkillError::CrossStartup) => Err(("cross_startup".into(), "skill belongs to another startup".into())),
         Err(e) => Err(("sql".into(), format!("{e:?}"))),
     }

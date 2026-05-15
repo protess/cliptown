@@ -68,6 +68,8 @@ pub async fn dispatch(
         ConsoleInbound::OperatorCreate { .. } => "operator_create",
         ConsoleInbound::OperatorRevoke { .. } => "operator_revoke",
         ConsoleInbound::OperatorSetRole { .. } => "operator_set_role",
+        ConsoleInbound::SkillUpsertOperator { .. } => "skill_upsert_operator",
+        ConsoleInbound::SkillDeleteOperator { .. } => "skill_delete_operator",
     };
     tracing::debug!(
         component = "cmd_console",
@@ -358,6 +360,50 @@ pub async fn dispatch(
                 Err(crate::skills::SkillError::CrossStartup) => {
                     json!({"type":"error","reason":"cross_startup"})
                 }
+                Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
+            }
+        }
+        ConsoleInbound::SkillUpsertOperator { startup_id, skill_id: _, name, content_md, .. } => {
+            // skill_id is ignored — `skills::upsert` resolves by (startup_id, name).
+            // Kept on the wire for forward-compat with a future id-keyed UPDATE.
+            if !is_manager { return forbidden(); }
+            match crate::skills::upsert_with_author(
+                pool, &startup_id, &name, &content_md,
+                crate::skills::Author::Operator(&identity.id),
+            ).await {
+                Ok((id, _is_new)) => {
+                    let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                        v: 1,
+                        startup_id: startup_id.clone(),
+                        kind: "upsert".to_string(),
+                        skill_id: id.clone(),
+                        agent_id: None,
+                        skill: None,
+                    });
+                    json!({"type":"ok","kind":"skill_upsert","skill_id": id})
+                }
+                Err(crate::skills::SkillError::BadName) => json!({"type":"error","reason":"bad_name"}),
+                Err(crate::skills::SkillError::OversizeContent) => json!({"type":"error","reason":"oversize_content"}),
+                Err(crate::skills::SkillError::CrossStartup) => json!({"type":"error","reason":"cross_startup"}),
+                Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
+            }
+        }
+        ConsoleInbound::SkillDeleteOperator { startup_id, skill_id, .. } => {
+            if !is_manager { return forbidden(); }
+            match crate::skills::delete(pool, &startup_id, &skill_id).await {
+                Ok(()) => {
+                    let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                        v: 1,
+                        startup_id: startup_id.clone(),
+                        kind: "delete".to_string(),
+                        skill_id: skill_id.clone(),
+                        agent_id: None,
+                        skill: None,
+                    });
+                    json!({"type":"ok","kind":"skill_delete"})
+                }
+                Err(crate::skills::SkillError::NotFound) => json!({"type":"error","reason":"not_found"}),
+                Err(crate::skills::SkillError::CrossStartup) => json!({"type":"error","reason":"cross_startup"}),
                 Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
             }
         }
