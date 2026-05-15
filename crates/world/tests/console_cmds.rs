@@ -340,3 +340,148 @@ async fn manager_role_can_force_accept_task() {
         .fetch_one(&pool).await.unwrap();
     assert_eq!(row.0, "done");
 }
+
+// ── P3 Theme B follow-up: operator management commands (admin-only) ────────
+
+fn admin() -> cliptown_world::auth::OperatorIdentity {
+    cliptown_world::auth::OperatorIdentity::admin_for_tests()
+}
+
+fn viewer() -> cliptown_world::auth::OperatorIdentity {
+    cliptown_world::auth::OperatorIdentity {
+        id: "op_v".into(),
+        name: "viewer".into(),
+        role: cliptown_world::auth::OperatorRole::Viewer,
+    }
+}
+
+#[tokio::test]
+async fn operator_list_returns_seeded_admin_for_admin_caller() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"operator_list","v":1
+    })).await;
+    assert_eq!(r["type"], "ok");
+    let ops = r["operators"].as_array().expect("operators array");
+    // Migration 0003 seeds op_default. Any extra rows from prior tests in the
+    // same in-memory db are fine; we just assert the seeded row is present.
+    assert!(ops.iter().any(|o| o["id"] == "op_default" && o["role"] == "admin"));
+}
+
+#[tokio::test]
+async fn operator_list_rejected_for_viewer() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &viewer(), json!({
+        "type":"operator_list","v":1
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "forbidden");
+}
+
+#[tokio::test]
+async fn operator_create_mints_token_and_inserts_row() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"operator_create","v":1,"name":"alice","role":"manager"
+    })).await;
+    assert_eq!(r["type"], "ok");
+    assert_eq!(r["name"], "alice");
+    assert_eq!(r["role"], "manager");
+    let token = r["token"].as_str().expect("token").to_string();
+    assert!(token.starts_with("opt_"));
+    // Round-trip: the minted token validates via the auth path.
+    let id = cliptown_world::auth::validate_operator_token(&pool, &token).await.unwrap();
+    assert_eq!(id.name, "alice");
+    assert_eq!(id.role, cliptown_world::auth::OperatorRole::Manager);
+}
+
+#[tokio::test]
+async fn operator_create_rejects_bad_role() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"operator_create","v":1,"name":"bob","role":"king"
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "bad_role");
+}
+
+#[tokio::test]
+async fn operator_create_rejects_duplicate_name() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    // Migration 0003 already seeds 'default-admin'.
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"operator_create","v":1,"name":"default-admin","role":"viewer"
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "name_taken");
+}
+
+#[tokio::test]
+async fn operator_revoke_removes_row() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query("INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_x','x','tok_x','viewer',unixepoch())")
+        .execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"operator_revoke","v":1,"operator_id":"op_x"
+    })).await;
+    assert_eq!(r["type"], "ok");
+    // Token no longer validates.
+    assert!(cliptown_world::auth::validate_operator_token(&pool, "tok_x").await.is_err());
+}
+
+#[tokio::test]
+async fn operator_revoke_refuses_self() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    // The admin_for_tests identity has id = "op_test" — insert that row so
+    // the self-revoke path is meaningful.
+    sqlx::query("INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_test','self','tok_self','admin',unixepoch())")
+        .execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"operator_revoke","v":1,"operator_id":"op_test"
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "cannot_revoke_self");
+}
+
+#[tokio::test]
+async fn operator_set_role_changes_row() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query("INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_y','y','tok_y','viewer',unixepoch())")
+        .execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"operator_set_role","v":1,"operator_id":"op_y","role":"manager"
+    })).await;
+    assert_eq!(r["type"], "ok");
+    let id = cliptown_world::auth::validate_operator_token(&pool, "tok_y").await.unwrap();
+    assert_eq!(id.role, cliptown_world::auth::OperatorRole::Manager);
+}
+
+#[tokio::test]
+async fn operator_set_role_refuses_self_demotion() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query("INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_test','self','tok_self','admin',unixepoch())")
+        .execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"operator_set_role","v":1,"operator_id":"op_test","role":"viewer"
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "cannot_demote_self");
+}

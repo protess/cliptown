@@ -69,6 +69,14 @@ pub enum ConsoleInbound {
     /// operator can manage skills across startups without re-possessing.
     SkillAttach { v: u8, startup_id: String, agent_id: String, skill_id: String },
     SkillDetach { v: u8, startup_id: String, agent_id: String, skill_id: String },
+    /// P3 Theme B follow-up: admin-only operator-management commands. The
+    /// `operators` table has been in place since #52 with role gating wired
+    /// through dispatch; these complete the surface so an admin can
+    /// provision additional operators without touching SQL.
+    OperatorList { v: u8 },
+    OperatorCreate { v: u8, name: String, role: String },
+    OperatorRevoke { v: u8, operator_id: String },
+    OperatorSetRole { v: u8, operator_id: String, role: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, TS, Clone)]

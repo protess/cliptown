@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — admin-only operator management commands — 2026-05-15
+**Source:** Phase 3 Theme B follow-up. #52 landed the schema; this PR adds the surface so admins can provision operators without touching SQL. PR `<TBD>`.
+
+Was: Theme B (#52) added the `operators` table + role-aware token validation. The commit message + CHANGELOG explicitly deferred "operator-management commands (provision/revoke/role changes) until multi-operator deploys arrive". TODOS listed it as a Theme B follow-up.
+
+Fixed: 4 new admin-only `ConsoleInbound` variants — `operator_list`, `operator_create`, `operator_revoke`, `operator_set_role`. All gated `identity.role.at_least(Admin)`. `operator_create` mints `opt_<uuid>` token server-side and returns it inline (admin copies once from the response). Self-revoke + self-demotion refused to prevent admins locking themselves out mid-session. Duplicate names → `name_taken`. 8 integration tests cover happy + viewer-rejected + edge cases. TS bindings re-exported. Token hashing deferred — plain bearer is fine until rotation tooling exists. Frontend UI for operator management is a separate task (operator console doesn't yet have a settings panel).
+
 ### M13 chore — claude-code adapter honors CLAUDE_CODE_MODEL — 2026-05-15
 **Source:** Theme C known-limit follow-up from #58 / #59. PR `<TBD>`.
 
