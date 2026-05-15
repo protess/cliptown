@@ -330,6 +330,87 @@ pub async fn dispatch(
                 Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
             }
         }
+        ConsoleInbound::OperatorList { .. } => {
+            if !identity.role.at_least(OperatorRole::Admin) { return forbidden(); }
+            let rows: Result<Vec<(String, String, String, i64)>, _> = sqlx::query_as(
+                "SELECT id, name, role, created_at FROM operators ORDER BY created_at"
+            ).fetch_all(pool).await;
+            match rows {
+                Ok(rows) => {
+                    let arr: Vec<serde_json::Value> = rows.into_iter().map(|(id, name, role, created_at)| {
+                        json!({"id": id, "name": name, "role": role, "created_at": created_at})
+                    }).collect();
+                    json!({"type":"ok","kind":"operator_list","operators": arr})
+                }
+                Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
+            }
+        }
+        ConsoleInbound::OperatorCreate { name, role, .. } => {
+            if !identity.role.at_least(OperatorRole::Admin) { return forbidden(); }
+            if OperatorRole::from_str(&role).is_none() {
+                return json!({"type":"error","reason":"bad_role","detail":role});
+            }
+            if name.trim().is_empty() {
+                return json!({"type":"error","reason":"bad_name"});
+            }
+            // Mint a token. UUID v4 is plenty random for bearer tokens; the
+            // operator copies it from the response, plain text on the wire is
+            // fine because the WS itself should be TLS in prod.
+            let new_id = format!("op_{}", uuid::Uuid::new_v4().simple());
+            let new_token = format!("opt_{}", uuid::Uuid::new_v4().simple());
+            let r = sqlx::query(
+                "INSERT INTO operators (id, name, token, role, created_at) VALUES (?, ?, ?, ?, unixepoch())"
+            )
+                .bind(&new_id).bind(&name).bind(&new_token).bind(&role)
+                .execute(pool).await;
+            match r {
+                Ok(_) => json!({
+                    "type":"ok","kind":"operator_create",
+                    "id": new_id, "name": name, "role": role, "token": new_token,
+                }),
+                Err(sqlx::Error::Database(e)) if e.message().contains("UNIQUE") => {
+                    json!({"type":"error","reason":"name_taken"})
+                }
+                Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
+            }
+        }
+        ConsoleInbound::OperatorRevoke { operator_id, .. } => {
+            if !identity.role.at_least(OperatorRole::Admin) { return forbidden(); }
+            if operator_id == identity.id {
+                // Self-revoke would lock the admin out mid-session — refuse.
+                return json!({"type":"error","reason":"cannot_revoke_self"});
+            }
+            let r = sqlx::query("DELETE FROM operators WHERE id = ?")
+                .bind(&operator_id)
+                .execute(pool).await;
+            match r {
+                Ok(res) if res.rows_affected() == 0 => {
+                    json!({"type":"error","reason":"not_found"})
+                }
+                Ok(_) => json!({"type":"ok","kind":"operator_revoke","id": operator_id}),
+                Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
+            }
+        }
+        ConsoleInbound::OperatorSetRole { operator_id, role, .. } => {
+            if !identity.role.at_least(OperatorRole::Admin) { return forbidden(); }
+            if OperatorRole::from_str(&role).is_none() {
+                return json!({"type":"error","reason":"bad_role","detail":role});
+            }
+            if operator_id == identity.id && role != identity.role.as_str() {
+                // Self-demotion to non-admin would lock out admin mid-session.
+                return json!({"type":"error","reason":"cannot_demote_self"});
+            }
+            let r = sqlx::query("UPDATE operators SET role = ? WHERE id = ?")
+                .bind(&role).bind(&operator_id)
+                .execute(pool).await;
+            match r {
+                Ok(res) if res.rows_affected() == 0 => {
+                    json!({"type":"error","reason":"not_found"})
+                }
+                Ok(_) => json!({"type":"ok","kind":"operator_set_role","id": operator_id, "role": role}),
+                Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
+            }
+        }
     }
 }
 

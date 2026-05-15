@@ -1,5 +1,40 @@
 # Changelog
 
+## M13 — feat: admin-only operator management commands (2026-05-15)
+
+Phase 3 Theme B follow-up. #52 landed the `operators` table + role-
+aware token validation but stopped at "schema only; surface comes
+when multi-operator deploys arrive." This PR adds the surface:
+admins can now provision additional operators without touching SQL.
+
+Four new `ConsoleInbound` variants, all gated `at_least(Admin)`:
+
+- **`operator_list`** — `{operators: [{id, name, role, created_at}]}`.
+  Read-only. The cheapest gate to verify before any mutation.
+- **`operator_create`** — `{name, role}` → mints a fresh
+  `opt_<uuid>` token + returns it inline. Token is generated server-
+  side (not provided by the admin) so it lands in the response body
+  exactly once; the admin copies it. Duplicate names → `name_taken`,
+  unknown role → `bad_role`.
+- **`operator_revoke`** — `{operator_id}` → DELETE on row. Self-
+  revoke refused (`cannot_revoke_self`) — would lock the calling
+  admin mid-session.
+- **`operator_set_role`** — `{operator_id, role}` → UPDATE on row.
+  Self-demotion to non-admin refused (`cannot_demote_self`).
+
+Tokens are plain UUID v4s prefixed `opt_`. No hashing today —
+deferred until the deployment story actually has more than one
+operator (with proper rotation tooling).
+
+8 new integration tests in `console_cmds.rs` cover list/create/
+revoke/set_role × admin-allowed + viewer-rejected + edge cases
+(bad role, dup name, self-revoke, self-demote). TS bindings
+auto-regenerated.
+
+Theme B is now functionally closed: schema (#52) + surface (this
+PR). Frontend UI for operator management remains a separate task
+(operator console doesn't yet ship a settings panel).
+
 ## M13 — chore: claude-code adapter honors CLAUDE_CODE_MODEL (2026-05-15)
 
 Closes the last Theme C known-limit from #58 / #59. claude-code
