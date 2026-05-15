@@ -1,5 +1,33 @@
 # Changelog
 
+## M13 — feat: skills revision history (2026-05-15)
+
+Roadmap carry-forward — final skills item. `skills.content_md` was
+overwritten in place on every upsert; no audit, no rollback target.
+
+- Migration 0007 adds `skill_revisions (id, skill_id FK, rev_seq,
+  content_md, created_at, created_by_agent_id?, created_by_operator_id?)`
+  with `UNIQUE (skill_id, rev_seq)` and FK cascade. Index on
+  `(skill_id, rev_seq DESC)` for newest-first reads.
+- New `skills::Author { Agent(&str) | Operator(&str) | Unknown }`
+  enum + `upsert_with_author` that records who wrote each revision.
+  The legacy `upsert()` stays for unit tests; it routes to
+  `upsert_with_author(.., Unknown)`. Production call sites updated:
+  `mcp_dispatch::handle_skill_upsert` passes `Author::Agent`,
+  `cmd_console::SkillUpsertOperator` passes `Author::Operator`.
+- Revision append is best-effort after the live update succeeds —
+  losing history is preferable to losing user-authored content;
+  failure logs `tracing::warn!`.
+- `skills::list_revisions(pool, startup_id, skill_id)` returns the
+  full revision history, ownership-gated (cross-startup peek → error).
+- New 23rd MCP tool: `skill_list_revisions {skill_id, limit?}`.
+- 7 new tests: first-upsert rev_seq=1, increment, author agent,
+  author operator, cross-startup reject, not-found, FK cascade on
+  skill delete.
+
+Rollback (revert-to-revision) deferred — schema supports it but
+needs a UX surface before shipping.
+
 ## M13 — feat: skills content authoring in the operator console (2026-05-15)
 
 Roadmap carry-forward. SkillsPanel only supported attach/detach;

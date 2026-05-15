@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M13 feat — skills revision history — 2026-05-15
+**Source:** Roadmap carry-forward (Skills versioning, M-sized). PR `<TBD>`.
+
+Was: every `skills::upsert` overwrote `content_md` in place — no audit, no rollback target. Roadmap listed it.
+
+Fixed: migration 0007 adds append-only `skill_revisions (id, skill_id FK, rev_seq, content_md, created_at, created_by_agent_id?, created_by_operator_id?)` with `UNIQUE (skill_id, rev_seq)` + FK cascade. `skills::Author` enum + `upsert_with_author` record who wrote each version. mcp_dispatch passes `Author::Agent`; cmd_console passes `Author::Operator`. `list_revisions` ownership-gated. New 23rd MCP tool `skill_list_revisions {skill_id, limit?}`. 7 new tests. Revision append is best-effort after the live update (history loss < content loss). Rollback (revert-to-revision) deferred — schema supports it but needs UX surface.
+
 ### M13 feat — skills content authoring in operator console — 2026-05-15
 **Source:** Roadmap carry-forward (Skills content authoring UI, M-sized). PR `<TBD>`.
 
