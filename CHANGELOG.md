@@ -1,5 +1,26 @@
 # Changelog
 
+## M13 — feat: skills content authoring in the operator console (2026-05-15)
+
+Roadmap carry-forward — skills authoring UI. Operators previously
+had to use MCP tools or SQL to create/edit/delete skills; the
+console only supported attach/detach.
+
+- Two new ConsoleInbound variants gated manager-or-above:
+  `skill_upsert_operator` and `skill_delete_operator`. Routes
+  through the same `skills::upsert` / `skills::delete` paths the
+  MCP tools use. `skill_id` on upsert is wire-compat-only — server
+  resolves by `(startup_id, name)`.
+- `SkillsPanel.tsx` gets a `+ New skill` button + inline editor
+  (name + markdown content textarea). Each row gains ✎ (edit) and
+  ✕ (delete) controls. Delete prompts for confirm.
+- Editor starts blank for both create + edit. The WS snapshot ships
+  metadata only (`len`/`updated_at`) — re-fetching `content_md` per
+  skill would inflate every snapshot. Operators re-paste / re-type
+  on edit; upsert by name updates in place. Documented inline.
+- 4 new integration tests cover upsert (create + update-in-place),
+  delete, and viewer-forbidden on both.
+
 ## M13 — feat: smoke against remote world targets (2026-05-15)
 
 Phase 3 Theme A carry-forward. The smoke harness was local-only —

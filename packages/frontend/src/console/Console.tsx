@@ -43,6 +43,35 @@ export function Console() {
     [send, possessedStartupId],
   );
 
+  // P3 Theme F follow-up: operator-side skill authoring.
+  const onSkillUpsert = useCallback(
+    (name: string, contentMd: string, skillId: string | null) => {
+      if (!possessedStartupId) return;
+      send({
+        type: "skill_upsert_operator",
+        v: 1,
+        startup_id: possessedStartupId,
+        skill_id: skillId,
+        name,
+        content_md: contentMd,
+      });
+    },
+    [send, possessedStartupId],
+  );
+
+  const onSkillDelete = useCallback(
+    (skillId: string) => {
+      if (!possessedStartupId) return;
+      send({
+        type: "skill_delete_operator",
+        v: 1,
+        startup_id: possessedStartupId,
+        skill_id: skillId,
+      });
+    },
+    [send, possessedStartupId],
+  );
+
   return (
     <div
       style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
@@ -77,6 +106,8 @@ export function Console() {
             possessedStartupId={possessedStartupId}
             onAttach={onSkillAttach}
             onDetach={onSkillDetach}
+            onUpsert={onSkillUpsert}
+            onDelete={onSkillDelete}
           />
         </main>
       </div>
