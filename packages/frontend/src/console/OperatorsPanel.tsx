@@ -19,15 +19,10 @@ export function OperatorsPanel() {
   const [newName, setNewName] = useState("");
   const [newRole, setNewRole] = useState<(typeof ROLES)[number]>("viewer");
 
-  // P3 carry-forward: hide the panel entirely for non-admin operators
-  // once we know the identity. Pre-hello (`currentOperator === null`) we
-  // also hide — admin/non-admin both see nothing until the hello frame
-  // arrives, which avoids the panel briefly flashing in for everyone.
-  if (state.currentOperator?.role !== "admin") {
-    return null;
-  }
-
-  // Hydrate operator list when the panel is first expanded.
+  // Hydrate operator list when the panel is first expanded. Hooks must
+  // be called every render — keep this BEFORE the admin gate so React's
+  // hook-order invariant holds. (Returning early *before* useEffect
+  // crashes the app once the gate flips.)
   useEffect(() => {
     if (open && state.operators === null) {
       send({ type: "operator_list", v: 1 });
@@ -56,6 +51,15 @@ export function OperatorsPanel() {
     },
     [send],
   );
+
+  // P3 carry-forward: hide the panel entirely for non-admin operators
+  // once we know the identity. Pre-hello (`currentOperator === null`) we
+  // also hide — avoids the panel briefly flashing in for everyone before
+  // the role frame arrives. Render the entire body conditionally rather
+  // than returning early so hooks above always run.
+  if (state.currentOperator?.role !== "admin") {
+    return null;
+  }
 
   return (
     <div data-testid="operators-panel" style={panelStyle}>
