@@ -582,6 +582,111 @@ async fn task_request_changes_rejects_feedback_too_long() {
     fx.expect_no_broadcasts();
 }
 
+// ── P4 Theme E1: peer review beyond manager review ────────────────────────
+
+/// A non-manager peer in the same startup, flagged as peer reviewer, can
+/// request changes on a task they don't own. Audit logs `actor=peer`.
+#[tokio::test]
+async fn peer_reviewer_can_request_changes() {
+    let mut fx = fixture().await;
+    // Seed a third same-startup agent (designer d1) and mark them peer.
+    sqlx::query(
+        "INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status, is_peer_reviewer) \
+         VALUES ('d1', 's1', 'D1', 'designer', 'claude_code', 'm', '{}', 'suite_1', 'idle', 1)"
+    ).execute(&fx.pool).await.unwrap();
+    fx.world.avatars.insert(
+        "d1".to_string(),
+        AvatarView {
+            agent_id: "d1".into(),
+            startup_id: "s1".into(),
+            role: "designer".into(),
+            backend: "claude_code".into(),
+            current_pos: (5, 3),
+            target_pos: None,
+            room_id: "suite_1".into(),
+            status: "idle".into(),
+            last_seen_at: None,
+            health: cliptown_world::health::Health::Offline,
+        },
+    );
+    sqlx::query("UPDATE tasks SET status = 'awaiting_review' WHERE id = 'T1'")
+        .execute(&fx.pool).await.unwrap();
+    fx.make_rx("e1");
+    let r = fx.call("d1", "task_request_changes", json!({
+        "task_id":"T1","feedback":"the haiku needs a clearer kireji"
+    })).await;
+    assert_eq!(r["type"], "mcp_reply", "{r}");
+    let audit: (String,) = sqlx::query_as("SELECT audit_trail FROM tasks WHERE id='T1'")
+        .fetch_one(&fx.pool).await.unwrap();
+    assert!(audit.0.contains("\"actor\":\"peer\""), "audit missing peer actor: {}", audit.0);
+    assert!(audit.0.contains("\"agent_id\":\"d1\""), "audit missing peer agent_id: {}", audit.0);
+}
+
+/// A non-manager peer who's NOT flagged is still rejected. The flag is
+/// load-bearing; same-startup membership alone doesn't suffice.
+#[tokio::test]
+async fn unflagged_peer_rejected_with_no_permission() {
+    let mut fx = fixture().await;
+    sqlx::query(
+        "INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status, is_peer_reviewer) \
+         VALUES ('d1', 's1', 'D1', 'designer', 'claude_code', 'm', '{}', 'suite_1', 'idle', 0)"
+    ).execute(&fx.pool).await.unwrap();
+    fx.world.avatars.insert(
+        "d1".to_string(),
+        AvatarView {
+            agent_id: "d1".into(),
+            startup_id: "s1".into(),
+            role: "designer".into(),
+            backend: "claude_code".into(),
+            current_pos: (5, 3),
+            target_pos: None,
+            room_id: "suite_1".into(),
+            status: "idle".into(),
+            last_seen_at: None,
+            health: cliptown_world::health::Health::Offline,
+        },
+    );
+    sqlx::query("UPDATE tasks SET status = 'awaiting_review' WHERE id = 'T1'")
+        .execute(&fx.pool).await.unwrap();
+    let r = fx.call("d1", "task_request_changes", json!({
+        "task_id":"T1","feedback":"x"
+    })).await;
+    assert_eq!(r["type"], "mcp_error");
+    assert_eq!(r["code"], "no_permission");
+}
+
+/// A peer-reviewer who's also the assignee of the task can't self-review.
+#[tokio::test]
+async fn peer_reviewer_cannot_self_review() {
+    let mut fx = fixture().await;
+    // Flag e1 (the assignee of T1) as peer reviewer.
+    sqlx::query("UPDATE agents SET is_peer_reviewer = 1 WHERE id = 'e1'")
+        .execute(&fx.pool).await.unwrap();
+    sqlx::query("UPDATE tasks SET status = 'awaiting_review' WHERE id = 'T1'")
+        .execute(&fx.pool).await.unwrap();
+    let r = fx.call("e1", "task_request_changes", json!({
+        "task_id":"T1","feedback":"x"
+    })).await;
+    assert_eq!(r["type"], "mcp_error", "{r}");
+    assert_eq!(r["code"], "no_permission");
+}
+
+/// Manager review path still works — the flag is additive, not a replacement.
+#[tokio::test]
+async fn manager_still_writes_audit_with_actor_manager() {
+    let mut fx = fixture().await;
+    sqlx::query("UPDATE tasks SET status = 'awaiting_review' WHERE id = 'T1'")
+        .execute(&fx.pool).await.unwrap();
+    fx.make_rx("e1");
+    let r = fx.call("m1", "task_request_changes", json!({
+        "task_id":"T1","feedback":"please retry"
+    })).await;
+    assert_eq!(r["type"], "mcp_reply");
+    let audit: (String,) = sqlx::query_as("SELECT audit_trail FROM tasks WHERE id='T1'")
+        .fetch_one(&fx.pool).await.unwrap();
+    assert!(audit.0.contains("\"actor\":\"manager\""), "audit: {}", audit.0);
+}
+
 #[tokio::test]
 async fn accept_proposal_manager_only() {
     let mut fx = fixture().await;

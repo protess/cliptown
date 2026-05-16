@@ -87,6 +87,10 @@ pub enum ConsoleInbound {
     OperatorCreate { v: u8, name: String, role: String },
     OperatorRevoke { v: u8, operator_id: String },
     OperatorSetRole { v: u8, operator_id: String, role: String },
+    /// P4 Theme E1: admin-only flip on an agent's peer-reviewer flag.
+    /// When set, the agent can request changes on any same-startup task
+    /// (except their own) via `task_request_changes`.
+    AgentSetPeerReviewer { v: u8, agent_id: String, is_peer_reviewer: bool },
 }
 
 #[derive(Debug, Serialize, Deserialize, TS, Clone)]

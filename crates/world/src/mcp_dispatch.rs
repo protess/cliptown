@@ -885,9 +885,34 @@ async fn handle_task_request_changes(
     if task.startup_id != caller.startup_id {
         return Err(("cross_startup".into(), "task belongs to another startup".into()));
     }
-    if !caller_is_manager_of_task(pool, caller, &task).await? {
-        return Err(("no_permission".into(), "task_request_changes is manager-only".into()));
+    // P4 E1: peer-review path. Permission check is now an OR:
+    //   - caller is the manager-of-task (legacy path), OR
+    //   - caller is a peer reviewer (`agents.is_peer_reviewer = 1`) in the
+    //     same startup AND is NOT the assignee (no self-review).
+    // The audit_trail entry carries the discriminator so the org graph
+    // stays inferable post-hoc.
+    let is_manager = caller_is_manager_of_task(pool, caller, &task).await?;
+    let is_peer_review = if !is_manager {
+        let same_startup = task.startup_id == caller.startup_id; // re-affirm (already checked above)
+        let not_self = task.assignee_agent_id.as_deref() != Some(caller.agent_id.as_str());
+        let peer_row: Option<(i64,)> =
+            sqlx::query_as("SELECT is_peer_reviewer FROM agents WHERE id = ?")
+                .bind(&caller.agent_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| ("sql".into(), e.to_string()))?;
+        let is_peer = peer_row.map(|(v,)| v != 0).unwrap_or(false);
+        same_startup && not_self && is_peer
+    } else {
+        false
+    };
+    if !is_manager && !is_peer_review {
+        return Err((
+            "no_permission".into(),
+            "task_request_changes requires manager or peer-reviewer role".into(),
+        ));
     }
+    let actor_kind = if is_manager { "manager" } else { "peer" };
 
     // Guard: must run BEFORE any side effects.
     // A subtask whose parent.assignee = caller passes the manager check above,
@@ -965,7 +990,7 @@ async fn handle_task_request_changes(
 
     let _ = persist::append_audit(
         pool, &task_id,
-        &json!({"actor":"manager","kind":"task_request_changes","agent_id":caller.agent_id}).to_string(),
+        &json!({"actor":actor_kind,"kind":"task_request_changes","agent_id":caller.agent_id}).to_string(),
     ).await;
 
     // assignee is guaranteed non-None by the guard above.
