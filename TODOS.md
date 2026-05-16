@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M14 feat — local-LLM smoke (Theme F1) — 2026-05-16
+**Source:** First Phase 4 PR. Validates the local-first narrative from #55. PR `<TBD>`.
+
+Was: DEPLOY.md (#55) documented `OPENCODE_MODEL=ollama/...` and the codex+ollama path, but nothing actually smoke-tested it. Operators following the guide had no confidence the end-to-end loop worked.
+
+Fixed: `scripts/smoke-ollama.sh` wraps `smoke-real-llm.sh` with the ollama env preset (OPENAI_BASE_URL + provider-specific `*_MODEL`). Pre-flight checks both ollama serving + model pulled. codex default; `BACKEND=opencode` for the other path. claude-code rejected (needs translator proxy). 5 new unit tests on `splitProviderModel` pin the `provider/model` parsing contract — runs in CI even though the full smoke is laptop-only. DEPLOY.md gains a Verify subsection.
+
 ### M13 feat — hash operator tokens at rest — 2026-05-15
 **Source:** Closes the "Token hashing deferred" note from #61. PR `<TBD>`.
 

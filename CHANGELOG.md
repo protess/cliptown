@@ -1,5 +1,31 @@
 # Changelog
 
+## M14 — feat: local-LLM smoke (Theme F1) (2026-05-16)
+
+First Phase 4 PR. Validates the local-first deploy narrative from
+#55: cliptown should run end-to-end against a self-hosted ollama
+in ~30s on a developer laptop.
+
+- **`scripts/smoke-ollama.sh`** — wraps `smoke-real-llm.sh` with
+  the ollama-shaped env preset (`OPENAI_BASE_URL` = local ollama,
+  `OPENAI_API_KEY=ollama`, backend-specific `*_MODEL`). Pre-flight
+  checks: ollama serving + the requested model pulled (no surprise
+  multi-GB downloads). codex default; `BACKEND=opencode` to test
+  the other adapter path. claude-code rejected with a clear
+  message — needs a translator proxy.
+- **`packages/adapters/opencode/test/model_spec.test.ts`** — pins
+  the `provider/model` parsing contract documented in DEPLOY.md.
+  5 cases: bare model, ollama prefix, model with colon (e.g.
+  `qwen2.5:7b`), other providers, empty-modelID edge case.
+  `splitProviderModel` is now `export`ed for the test.
+- **`docs/DEPLOY.md`** Local LLM section gains a "Verify with
+  scripts/smoke-ollama.sh" subsection with both backends + the
+  zero-cost callout.
+
+CI does NOT run the smoke (requires GPU + a pulled model). It's a
+developer-laptop smoke. The opencode model-spec test runs in CI
+and catches a refactor that would silently break the local route.
+
 ## M13 — feat: hash operator tokens at rest (2026-05-15)
 
 Closes the "Token hashing deferred" note from #61.
