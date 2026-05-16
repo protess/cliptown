@@ -1,5 +1,34 @@
 # Changelog
 
+## M14 — feat: async work-stealing (Theme E3) (2026-05-16)
+
+Fourth Phase 4 PR. When one engineer's queue stays warm and a peer
+sits idle, the scheduler should rebalance. Two surfaces:
+
+- **Manual**: 28th MCP tool `task_steal {task_id}`. Caller must be
+  idle, same-startup, share the assignee's role, NOT be the current
+  assignee, and the task must be `queued`. Same-row WHERE clause
+  guards the UPDATE so a concurrent steal loses the race cleanly
+  (`lost_race`). Emits `task_stolen` system_event with `mode=manual`.
+- **Auto**: opt-in per-startup. Migration 0012 adds
+  `startups.auto_steal_enabled INTEGER NOT NULL DEFAULT 0` and
+  `startups.auto_steal_after_secs INTEGER NOT NULL DEFAULT 60`.
+  Scheduler post-dispatch pass walks every enabled startup, picks
+  queued tasks whose `updated_at` is older than the threshold AND
+  whose assignee isn't idle, reassigns to an idle same-role peer.
+  Skips when the current assignee is already idle (no churn).
+  Emits `task_stolen` with `mode=auto`.
+- Admin-only `StartupSetAutoSteal {startup_id, enabled, after_secs?}`
+  ConsoleInbound — flip the flag without touching SQL.
+- Audit trail captures both modes with `actor=stealer`.
+- 8 integration tests: happy path + not_idle / cross_startup / role
+  mismatch / self_steal / not_stealable / auto reassigns when stale +
+  busy / auto disabled when flag off / auto skips when assignee idle.
+
+Operator-side UI button + kanban swim-lane reshuffle on `task_stolen`
+deferred to Theme G (console). The wire/data path lands here so G
+has something to render.
+
 ## M14 — feat: blocking dependencies + deadlines (Theme E2) (2026-05-16)
 
 Third Phase 4 PR. Task graph captures `parent_id` but had no "this

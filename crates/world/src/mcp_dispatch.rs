@@ -145,6 +145,7 @@ pub async fn dispatch(
         "skill_list_revisions" => handle_skill_list_revisions(pool, &caller, args).await,
         "skill_revert" => handle_skill_revert(pool, event_tx, &caller, args).await,
         "task_set_blocking" => handle_task_set_blocking(pool, event_tx, &caller, args).await,
+        "task_steal" => handle_task_steal(pool, event_tx, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
             format!("no handler for tool: {}", tool),
@@ -1833,5 +1834,129 @@ async fn handle_task_set_blocking(
         "task_id": task_id,
         "blocked_on": blocked_change.flatten(),
         "deadline_at": deadline_change.flatten(),
+    }))
+}
+
+/// P4 Theme E3: manual work-stealing among idle peers.
+///
+/// An idle agent can claim a `queued` task currently assigned to another
+/// same-role peer in the same startup. Validation:
+///   - caller status must be `idle`
+///   - task must be in the caller's startup
+///   - task.status must be `queued`
+///   - task must have an assignee (we don't redirect manager-held tasks)
+///   - caller must NOT already be the assignee
+///   - the current assignee must share the caller's role
+///
+/// On success: `assignee_agent_id` is reassigned to the caller, `updated_at`
+/// is bumped (so the auto-steal post-dispatch pass doesn't immediately re-fire
+/// against the same row), an audit row is appended with `actor=stealer`, and
+/// a `task_stolen` system_event surfaces to the console. The next scheduler
+/// tick will pick the row up and dispatch it to the new assignee.
+async fn handle_task_steal(
+    pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let task_id = require_str(&args, "task_id")?.to_string();
+    if caller.status != "idle" {
+        return Err((
+            "not_idle".into(),
+            format!("caller must be idle to steal (status={})", caller.status),
+        ));
+    }
+    let task = load_task(pool, &task_id).await?;
+    if task.startup_id != caller.startup_id {
+        return Err(("cross_startup".into(), "task belongs to another startup".into()));
+    }
+    if task.status != TaskStatus::Queued {
+        return Err((
+            "not_stealable".into(),
+            format!("only queued tasks can be stolen (status={})", status_to_str(task.status)),
+        ));
+    }
+    let current_assignee = task
+        .assignee_agent_id
+        .as_deref()
+        .ok_or_else(|| ("not_stealable".into(), "task has no assignee".into()))?;
+    if current_assignee == caller.agent_id {
+        return Err(("self_steal".into(), "caller is already the assignee".into()));
+    }
+    // Same-role check: stealer must share the role of the current assignee
+    // so we don't, e.g., let a designer claim an engineering task.
+    let assignee_role: Option<String> =
+        sqlx::query_scalar("SELECT role FROM agents WHERE id = ?")
+            .bind(current_assignee)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| ("sql".into(), e.to_string()))?;
+    let assignee_role = assignee_role
+        .ok_or_else(|| ("unknown_assignee".into(), "assignee row missing".into()))?;
+    if assignee_role != caller.role {
+        return Err((
+            "role_mismatch".into(),
+            format!(
+                "assignee role {} != stealer role {}",
+                assignee_role, caller.role
+            ),
+        ));
+    }
+    // Same-row gate via WHERE clause: another concurrent steal/scheduler
+    // mutation between the load and the UPDATE would bump rows_affected to 0
+    // and we'd return `lost_race` rather than silently double-reassigning.
+    let res = sqlx::query(
+        "UPDATE tasks SET assignee_agent_id = ?, updated_at = unixepoch() \
+         WHERE id = ? AND status = 'queued' AND assignee_agent_id = ?",
+    )
+    .bind(&caller.agent_id)
+    .bind(&task_id)
+    .bind(current_assignee)
+    .execute(pool)
+    .await
+    .map_err(|e| ("sql".into(), e.to_string()))?;
+    if res.rows_affected() == 0 {
+        return Err(("lost_race".into(), "task state changed before steal landed".into()));
+    }
+
+    let _ = persist::append_audit(
+        pool,
+        &task_id,
+        &json!({
+            "actor": "stealer",
+            "kind": "task_steal",
+            "agent_id": caller.agent_id,
+            "previous_assignee": current_assignee,
+        })
+        .to_string(),
+    )
+    .await;
+
+    if let Err(e) = crate::emit::emit_system_event(
+        pool,
+        event_tx,
+        Some(&caller.startup_id),
+        "task_stolen",
+        &json!({
+            "task_id": task_id,
+            "new_assignee": caller.agent_id,
+            "previous_assignee": current_assignee,
+            "mode": "manual",
+        })
+        .to_string(),
+        "info",
+    )
+    .await
+    {
+        tracing::warn!(component = "mcp_dispatch",
+            task_id = %task_id, err = %e,
+            "task_steal: system_event emit failed after UPDATE"
+        );
+    }
+
+    Ok(json!({
+        "task_id": task_id,
+        "new_assignee": caller.agent_id,
+        "previous_assignee": current_assignee,
     }))
 }
