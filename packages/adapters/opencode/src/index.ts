@@ -75,7 +75,13 @@ async function writeOpencodeConfig(
   };
 }
 
-function splitProviderModel(spec: string): { providerID: string; modelID: string } {
+/**
+ * Parse an OPENCODE_MODEL spec into the provider/model pair opencode's
+ * config expects. Bare `gpt-5-mini` → `openai/gpt-5-mini`. Prefixed
+ * `ollama/llama3.1` → `ollama/llama3.1`. Exported for the local-LLM
+ * smoke + tests that verify the routing contract.
+ */
+export function splitProviderModel(spec: string): { providerID: string; modelID: string } {
   const ix = spec.indexOf("/");
   if (ix < 0) return { providerID: "openai", modelID: spec };
   return { providerID: spec.slice(0, ix), modelID: spec.slice(ix + 1) };

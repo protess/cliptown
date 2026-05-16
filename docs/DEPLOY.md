@@ -145,6 +145,35 @@ implementation, so you need a translator layer (e.g., a LiteLLM proxy
 that converts Anthropic Messages API → ollama). Out of scope for this
 guide; use codex or opencode for local-LLM workflows.
 
+### Verify with `scripts/smoke-ollama.sh`
+
+The local-LLM path has a dedicated smoke. With ollama serving and a
+model already pulled:
+
+```bash
+# Pre-flight (the script checks both).
+ollama serve &
+ollama pull llama3.1:8b
+
+# codex+ollama (default). ~30s on Apple Silicon with the 8B model.
+scripts/smoke-ollama.sh
+
+# opencode+ollama, larger model:
+BACKEND=opencode OLLAMA_MODEL=qwen2.5-coder:7b scripts/smoke-ollama.sh
+```
+
+The wrapper sets `OPENAI_BASE_URL=http://127.0.0.1:11434/v1` +
+`OPENAI_API_KEY=ollama` + the backend's MODEL env var, then hands
+off to `smoke-real-llm.sh` (local mode). A green `PASS — A3 smoke
+complete` means cliptown talked to ollama end-to-end through the
+adapter → MCP HTTP → world chain.
+
+Cost: zero. ollama is local-only.
+
+claude-code can NOT use this script — the Anthropic CLI has no
+OpenAI-compat translation. Run ollama through a LiteLLM proxy if
+you must use the claude adapter against a local backend.
+
 ### Docker compose notes
 
 If you're running cliptown in docker compose and ollama on the host,
