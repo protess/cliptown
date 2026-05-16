@@ -22,6 +22,7 @@ async fn fixture() -> (
     RoomGraph,
     HashMap<String, mpsc::Sender<serde_json::Value>>,
     sqlx::SqlitePool,
+    tokio::sync::broadcast::Sender<cliptown_world::protocol::ConsoleOutbound>,
     tempfile::TempDir,
 ) {
     let dir = tempfile::tempdir().unwrap();
@@ -64,12 +65,13 @@ async fn fixture() -> (
     );
     let paths: PathStore = HashMap::new();
     let out_bus: HashMap<String, mpsc::Sender<serde_json::Value>> = HashMap::new();
-    (w, paths, layout, graph, out_bus, pool, dir)
+    let (event_tx, _) = tokio::sync::broadcast::channel::<cliptown_world::protocol::ConsoleOutbound>(32);
+    (w, paths, layout, graph, out_bus, pool, event_tx, dir)
 }
 
 #[tokio::test]
 async fn queued_idle_transitions_to_in_progress() {
-    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, event_tx, _dir) = fixture().await;
     // Codex round-5 P1#1: scheduler now requires a live out_bus entry
     // before flipping a task to in_progress.
     let (tx, mut _rx) = mpsc::channel::<serde_json::Value>(8);
@@ -82,7 +84,7 @@ async fn queued_idle_transitions_to_in_progress() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 1);
 
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
@@ -96,7 +98,7 @@ async fn queued_idle_transitions_to_in_progress() {
 
 #[tokio::test]
 async fn queued_working_agent_does_not_dispatch() {
-    let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, out_bus, pool, event_tx, _dir) = fixture().await;
     if let Some(a) = w.avatars.get_mut("a1") {
         a.status = "working".to_string();
     }
@@ -108,7 +110,7 @@ async fn queued_working_agent_does_not_dispatch() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 0);
 
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
@@ -122,7 +124,7 @@ async fn queued_working_agent_does_not_dispatch() {
 async fn required_room_triggers_move_not_dispatch() {
     // Agent starts in suite_1; required_room is library (different room).
     // Scheduler should kick off a move and leave the task queued.
-    let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, out_bus, pool, event_tx, _dir) = fixture().await;
     sqlx::query(
         "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, required_room, created_at, updated_at) \
          VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', 'library', unixepoch(), unixepoch())",
@@ -131,7 +133,7 @@ async fn required_room_triggers_move_not_dispatch() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     // No dispatch yet — move was started instead.
     assert_eq!(n, 0);
     assert!(
@@ -152,7 +154,7 @@ async fn required_room_triggers_move_not_dispatch() {
 
 #[tokio::test]
 async fn required_room_already_satisfied_dispatches() {
-    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, event_tx, _dir) = fixture().await;
     let (tx, mut _rx) = mpsc::channel::<serde_json::Value>(8);
     out_bus.insert("a1".to_string(), tx);
     if let Some(a) = w.avatars.get_mut("a1") {
@@ -167,7 +169,7 @@ async fn required_room_already_satisfied_dispatches() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 1);
     // No move should have been kicked off since agent already in library.
     assert!(!paths.contains_key("a1"));
@@ -181,7 +183,7 @@ async fn required_room_already_satisfied_dispatches() {
 
 #[tokio::test]
 async fn dispatched_task_pushes_task_assigned_to_out_bus() {
-    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, event_tx, _dir) = fixture().await;
     let (tx, mut rx) = mpsc::channel::<serde_json::Value>(8);
     out_bus.insert("a1".to_string(), tx);
 
@@ -193,7 +195,7 @@ async fn dispatched_task_pushes_task_assigned_to_out_bus() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 1);
 
     let msg = rx
@@ -231,22 +233,21 @@ async fn dispatched_task_pushes_task_assigned_to_out_bus() {
 /// supplied — this confirms the env-var is the only gate.
 #[tokio::test]
 async fn per_task_mode_off_falls_back_to_out_bus_dispatch() {
-    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, event_tx, _dir) = fixture().await;
     let (tx, mut rx) = mpsc::channel::<serde_json::Value>(8);
     out_bus.insert("a1".to_string(), tx);
     sqlx::query(
         "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, created_at, updated_at) \
          VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', unixepoch(), unixepoch())",
     ).execute(&pool).await.unwrap();
-    let event_tx = tokio::sync::broadcast::channel::<cliptown_world::protocol::ConsoleOutbound>(8).0;
     let sup = std::sync::Arc::new(cliptown_world::agent_supervisor::AgentSupervisor::new(
         cliptown_world::agent_supervisor::SupervisorConfig::default(),
         pool.clone(),
-        event_tx,
+        event_tx.clone(),
     ));
     std::env::remove_var("CLIPTOWN_PER_TASK_WORKERS");
     let n = scheduler::tick(
-        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, Some(&sup),
+        &mut w, &mut paths, &layout, &graph, &out_bus, &pool, Some(&sup), &event_tx,
     ).await;
     assert_eq!(n, 1, "dispatch should fire via out_bus when env var unset");
     let msg = rx.try_recv().expect("legacy path pushes task_assigned via out_bus");
@@ -258,7 +259,7 @@ async fn per_task_mode_off_falls_back_to_out_bus_dispatch() {
 /// P3 Theme C: scheduler propagates per-task routing override.
 #[tokio::test]
 async fn dispatched_task_propagates_routing_preference() {
-    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, event_tx, _dir) = fixture().await;
     let (tx, mut rx) = mpsc::channel::<serde_json::Value>(8);
     out_bus.insert("a1".to_string(), tx);
 
@@ -271,7 +272,7 @@ async fn dispatched_task_propagates_routing_preference() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 1);
 
     let msg = rx.try_recv().expect("task_assigned should fire");
@@ -292,7 +293,7 @@ async fn dispatched_task_propagates_routing_preference() {
 
 #[tokio::test]
 async fn dispatched_task_writes_audit_trail() {
-    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, event_tx, _dir) = fixture().await;
     let (tx, mut _rx) = mpsc::channel::<serde_json::Value>(8);
     out_bus.insert("a1".to_string(), tx);
     sqlx::query(
@@ -302,7 +303,7 @@ async fn dispatched_task_writes_audit_trail() {
     .execute(&pool)
     .await
     .unwrap();
-    let _ = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let _ = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     let row: (String,) = sqlx::query_as("SELECT audit_trail FROM tasks WHERE id='T1'")
         .fetch_one(&pool)
         .await
@@ -317,7 +318,7 @@ async fn unreachable_required_room_logs_warn_and_skips_dispatch() {
     // we mark private to s2. `move_sys::start_move` returns PermissionDenied;
     // the scheduler logs a warn and skips dispatch. Task remains queued and
     // no path is created.
-    let (mut w, mut paths, mut layout, graph, out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, mut layout, graph, out_bus, pool, event_tx, _dir) = fixture().await;
     // Mark suite_2 as private to s2 in the in-memory layout. (default_town()
     // seeds private_to_startup_id = None for every room.)
     if let Some(r) = layout.rooms.iter_mut().find(|r| r.id == "suite_2") {
@@ -338,7 +339,7 @@ async fn unreachable_required_room_logs_warn_and_skips_dispatch() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 0);
     assert!(
         !paths.contains_key("a1"),
@@ -357,7 +358,7 @@ async fn unreachable_required_room_logs_warn_and_skips_dispatch() {
 /// wedges in `in_progress` while the worker never receives the assignment.
 #[tokio::test]
 async fn dispatch_skips_when_no_out_bus_entry() {
-    let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, out_bus, pool, event_tx, _dir) = fixture().await;
     sqlx::query(
         "INSERT INTO tasks (id, startup_id, title, description, status, assignee_agent_id, created_at, updated_at) \
          VALUES ('T1', 's1', 'task', 'desc', 'queued', 'a1', unixepoch(), unixepoch())",
@@ -366,7 +367,7 @@ async fn dispatch_skips_when_no_out_bus_entry() {
     .await
     .unwrap();
     // out_bus is empty — worker hasn't registered yet.
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 0);
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
         .fetch_one(&pool)
@@ -382,7 +383,7 @@ async fn dispatch_skips_when_no_out_bus_entry() {
 /// reset the avatar to `idle` so the next tick retries.
 #[tokio::test]
 async fn dispatch_rolls_back_when_out_bus_full() {
-    let (mut w, mut paths, layout, graph, mut out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, mut out_bus, pool, event_tx, _dir) = fixture().await;
     // Capacity 1, pre-fill it so try_send returns Full.
     let (tx, mut _rx) = mpsc::channel::<serde_json::Value>(1);
     tx.try_send(serde_json::json!({"filler": true})).unwrap();
@@ -395,7 +396,7 @@ async fn dispatch_rolls_back_when_out_bus_full() {
     .execute(&pool)
     .await
     .unwrap();
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 0);
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")
         .fetch_one(&pool)
@@ -408,7 +409,7 @@ async fn dispatch_rolls_back_when_out_bus_full() {
 #[tokio::test]
 async fn queued_without_assignee_is_ignored() {
     // Task is queued but has no assignee. Scheduler should not pick it up.
-    let (mut w, mut paths, layout, graph, out_bus, pool, _dir) = fixture().await;
+    let (mut w, mut paths, layout, graph, out_bus, pool, event_tx, _dir) = fixture().await;
     sqlx::query(
         "INSERT INTO tasks (id, startup_id, title, description, status, created_at, updated_at) \
          VALUES ('T1', 's1', 'task', 'desc', 'queued', unixepoch(), unixepoch())",
@@ -417,7 +418,7 @@ async fn queued_without_assignee_is_ignored() {
     .await
     .unwrap();
 
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 0);
 
     let s: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id='T1'")

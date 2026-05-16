@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M14 feat — blocking dependencies + deadlines (Theme E2) — 2026-05-16
+**Source:** Third Phase 4 PR (per #75 roadmap). PR `<TBD>`.
+
+Was: task graph had `parent_id` but no "this can't start until X finishes" relation, and no deadlines.
+
+Fixed: migration 0011 adds `tasks.blocked_on`, `deadline_at`, `deadline_notified_at` (dedup). Scheduler blocking gate holds queued tasks until dependency hits terminal state, then emits `task_unblocked`. Post-dispatch deadline scan emits one `task_overdue` per task per deadline-boundary (dedup via the stamp; editing the deadline clears the stamp so a new boundary fires fresh). New MCP tool `task_set_blocking {task_id, blocked_on?, deadline_at?}` (manager-or-assignee, self-blocking rejected). `POST /api/admin/tasks` accepts both fields. `scheduler::tick` signature gains `&event_tx`. 6 integration tests. Auto-directive to blocker's manager deferred to Theme E follow-up.
+
 ### M14 feat — peer review beyond manager review (Theme E1) — 2026-05-16
 **Source:** Second Phase 4 PR (per #75 roadmap). PR `<TBD>`.
 

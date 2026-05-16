@@ -1,5 +1,39 @@
 # Changelog
 
+## M14 — feat: blocking dependencies + deadlines (Theme E2) (2026-05-16)
+
+Third Phase 4 PR. Task graph captures `parent_id` but had no "this
+task can't start until X finishes" relation and no deadlines. Real
+coordination needs both.
+
+- Migration 0011 adds `tasks.blocked_on TEXT REFERENCES tasks(id)
+  ON DELETE SET NULL`, `tasks.deadline_at INTEGER`, and
+  `tasks.deadline_notified_at INTEGER` (dedup stamp). Two partial
+  indexes for the scheduler's scans.
+- **Scheduler blocking gate**: a queued task with `blocked_on` set
+  is held until the dependency reaches a terminal state. On the
+  unblocking tick: clear the column, emit
+  `task_unblocked` system_event, fall through to dispatch.
+- **Scheduler deadline scan** (post-dispatch): non-terminal tasks
+  with `deadline_at < now AND (notified_at IS NULL OR <
+  deadline_at)` get one `task_overdue` system_event each + the
+  stamp updates. Editing `deadline_at` clears the stamp so a new
+  boundary fires fresh.
+- New 27th MCP tool `task_set_blocking {task_id, blocked_on?,
+  deadline_at?}`. Manager-or-assignee (same gate as
+  `task_set_preference`). Null clears; self-blocking rejected.
+- `POST /api/admin/tasks` accepts the new fields on creation.
+- `scheduler::tick` signature gains `&event_tx`; legacy
+  out_bus-only tests pass the new arg.
+- 6 integration tests: blocked-non-terminal-held / unblock-clears-
+  and-emits / overdue-emits-once / dedup-on-second-tick /
+  no-deadline-quiet / terminal-bypassed / editing-deadline-
+  re-emits.
+
+Auto-directive to the blocker's manager on overdue deferred to
+Theme E follow-up — system_event surface is enough for the
+console kanban swimlane (Theme G).
+
 ## M14 — feat: peer review beyond manager review (Theme E1) (2026-05-16)
 
 Second Phase 4 PR (per #75). `task_request_changes` was

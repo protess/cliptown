@@ -405,6 +405,19 @@ fn handle_tools_list() -> Value {
             }),
         ),
         tool(
+            "task_set_blocking",
+            "Set per-task blocking dependency + deadline. Manager-or-assignee only; null clears either field. Editing deadline clears the overdue dedup so the new boundary fires fresh.",
+            json!({
+                "type": "object",
+                "required": ["task_id"],
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "blocked_on": {"type": ["string", "null"]},
+                    "deadline_at": {"type": ["integer", "null"]}
+                }
+            }),
+        ),
+        tool(
             "skill_revert",
             "Revert a skill's content_md to a previous revision (by rev_seq). Appends a new revision pointing at the historical content; history stays linear.",
             json!({

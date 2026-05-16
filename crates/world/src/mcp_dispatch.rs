@@ -144,6 +144,7 @@ pub async fn dispatch(
         "skill_file_delete" => handle_skill_file_delete(pool, event_tx, &caller, args).await,
         "skill_list_revisions" => handle_skill_list_revisions(pool, &caller, args).await,
         "skill_revert" => handle_skill_revert(pool, event_tx, &caller, args).await,
+        "task_set_blocking" => handle_task_set_blocking(pool, event_tx, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
             format!("no handler for tool: {}", tool),
@@ -1719,4 +1720,118 @@ async fn handle_skill_revert(
         )),
         Err(e) => Err(("sql".into(), format!("{e:?}"))),
     }
+}
+
+/// P4 Theme E2: set per-task blocking dependency + deadline. Manager-or-
+/// assignee may write either field. Passing `null` clears; absent leaves
+/// the existing value. Editing `deadline_at` also clears
+/// `deadline_notified_at` so the scheduler re-evaluates against the new
+/// deadline (a postponed task shouldn't keep firing overdue events for
+/// the old deadline).
+async fn handle_task_set_blocking(
+    pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let task_id = require_str(&args, "task_id")?.to_string();
+    let blocked_change = args.get("blocked_on").map(|v| {
+        if v.is_null() { None } else { v.as_str().map(|s| s.to_string()) }
+    });
+    let deadline_change = args.get("deadline_at").map(|v| {
+        if v.is_null() { None } else { v.as_i64() }
+    });
+    if blocked_change.is_none() && deadline_change.is_none() {
+        return Err((
+            "bad_args".into(),
+            "at least one of blocked_on or deadline_at required".into(),
+        ));
+    }
+    let task = load_task(pool, &task_id).await?;
+    if task.startup_id != caller.startup_id {
+        return Err(("cross_startup".into(), "task belongs to another startup".into()));
+    }
+    let is_manager = caller_is_manager_of_task(pool, caller, &task).await?;
+    let is_assignee = task
+        .assignee_agent_id
+        .as_deref()
+        .map(|a| a == caller.agent_id)
+        .unwrap_or(false);
+    if !is_manager && !is_assignee {
+        return Err((
+            "no_permission".into(),
+            "task_set_blocking: caller must be manager or assignee".into(),
+        ));
+    }
+    // Reject self-blocking outright (would deadlock the scheduler).
+    if let Some(Some(b)) = &blocked_change {
+        if b == &task_id {
+            return Err(("self_blocking".into(), "a task cannot block on itself".into()));
+        }
+    }
+    let mut tx = pool.begin().await.map_err(|e| ("sql".into(), e.to_string()))?;
+    if let Some(b) = &blocked_change {
+        sqlx::query("UPDATE tasks SET blocked_on = ?, updated_at = unixepoch() WHERE id = ?")
+            .bind(b.as_deref())
+            .bind(&task_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ("sql".into(), e.to_string()))?;
+    }
+    if let Some(d) = &deadline_change {
+        // Clear the dedup stamp whenever the deadline shifts so a new
+        // overdue event can fire against the new boundary.
+        sqlx::query(
+            "UPDATE tasks SET deadline_at = ?, deadline_notified_at = NULL, \
+                              updated_at = unixepoch() WHERE id = ?",
+        )
+        .bind(*d)
+        .bind(&task_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ("sql".into(), e.to_string()))?;
+    }
+    tx.commit().await.map_err(|e| ("sql".into(), e.to_string()))?;
+
+    let _ = persist::append_audit(
+        pool,
+        &task_id,
+        &json!({
+            "actor": "agent",
+            "kind": "task_set_blocking",
+            "agent_id": caller.agent_id,
+            "blocked_on": blocked_change.clone().flatten(),
+            "deadline_at": deadline_change.flatten(),
+        })
+        .to_string(),
+    )
+    .await;
+
+    // Surface the change so the operator console can refresh the row.
+    if let Err(e) = crate::emit::emit_system_event(
+        pool,
+        event_tx,
+        Some(&caller.startup_id),
+        "task_blocking_changed",
+        &json!({
+            "task_id": task_id,
+            "blocked_on": blocked_change.clone().flatten(),
+            "deadline_at": deadline_change.flatten(),
+        })
+        .to_string(),
+        "info",
+    )
+    .await
+    {
+        tracing::warn!(component = "mcp_dispatch",
+            task_id = %task_id, err = %e,
+            "task_set_blocking: system_event emit failed after UPDATE"
+        );
+    }
+
+    Ok(json!({
+        "task_id": task_id,
+        "blocked_on": blocked_change.flatten(),
+        "deadline_at": deadline_change.flatten(),
+    }))
 }
