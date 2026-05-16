@@ -141,6 +141,7 @@ pub fn spawn_with_layout(
                         &out_bus,
                         &pool,
                         supervisor.as_ref(),
+                        &event_tx_owned,
                     )
                     .await;
                     crate::proximity::compute_and_emit(&w, &out_bus);

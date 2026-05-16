@@ -202,7 +202,7 @@ async fn proposal_to_queued_to_assigned() {
     );
 
     // ── Step 3: scheduler tick → in_progress, fans task_assigned to engineer.
-    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None).await;
+    let n = scheduler::tick(&mut w, &mut paths, &layout, &graph, &out_bus, &pool, None, &event_tx).await;
     assert_eq!(n, 1, "scheduler should dispatch the queued task");
 
     let assigned = eng_rx

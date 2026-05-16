@@ -47,6 +47,9 @@ struct QueuedTask {
     startup_id: String,
     agent_backend: String,
     workspace_path: String,
+    /// P4 Theme E2: blocking dependency. When non-NULL, dispatch is held
+    /// until the referenced task reaches a terminal state.
+    blocked_on: Option<String>,
 }
 
 /// Run one scheduler tick. Returns the number of tasks dispatched
@@ -57,6 +60,8 @@ struct QueuedTask {
 /// `supervisor` is honored only when `CLIPTOWN_PER_TASK_WORKERS=1` AND a
 /// handle is supplied (loop_::spawn passes one in production; tests pass
 /// `None` to keep the legacy out_bus path).
+/// `event_tx` (added P4 Theme E2) is the broadcast channel for
+/// `task_unblocked` / `task_overdue` system_events emitted from this tick.
 pub async fn tick(
     world: &mut WorldView,
     paths: &mut PathStore,
@@ -65,16 +70,22 @@ pub async fn tick(
     out_bus: &HashMap<String, mpsc::Sender<serde_json::Value>>,
     pool: &SqlitePool,
     supervisor: Option<&Arc<AgentSupervisor>>,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
 ) -> usize {
     // P3 Theme D follow-up: tick-level tracing event so post-hoc analysis can
     // bucket dispatch latency by tick. Same event-pair pattern as
     // mcp_dispatch — no Span guard because the tick handler awaits SQL.
     let tick_start = std::time::Instant::now();
     let tick_seq = world.tick_seq;
+    // P4 Theme E2: surface `blocked_on` so the dispatch loop can hold tasks
+    // whose dependency hasn't finished. Deadline scan runs separately
+    // below — it touches every non-terminal task with a deadline, not just
+    // queued ones, so it doesn't piggyback on this query.
     let queued: Vec<QueuedTask> = match sqlx::query_as(
         "SELECT t.id, t.title, t.description, t.assignee_agent_id, t.required_room, \
                 t.parent_id, t.preferred_backend, t.preferred_model, \
-                t.startup_id, a.backend AS agent_backend, s.workspace_path \
+                t.startup_id, a.backend AS agent_backend, s.workspace_path, \
+                t.blocked_on \
          FROM tasks t \
          JOIN agents a ON a.id = t.assignee_agent_id \
          JOIN startups s ON s.id = t.startup_id \
@@ -102,6 +113,49 @@ pub async fn tick(
 
         if avatar_status != "idle" {
             continue; // agent is busy; wait until it finishes its current work.
+        }
+
+        // P4 Theme E2: blocking-gate check. When `blocked_on` is set, only
+        // dispatch when the dependency has reached a terminal state. Emits
+        // `task_unblocked` once on the transitioning tick so the operator
+        // console can refresh; uses the SQL row's `blocked_on = NULL` write
+        // as the dedup signal (we clear it before emit so re-emit can't
+        // fire a second time).
+        if let Some(blocker_id) = &task.blocked_on {
+            let blocker_status: Result<Option<(String,)>, _> =
+                sqlx::query_as("SELECT status FROM tasks WHERE id = ?")
+                    .bind(blocker_id)
+                    .fetch_optional(pool)
+                    .await;
+            let is_terminal = match blocker_status {
+                Ok(Some((s,))) => matches!(s.as_str(), "done" | "failed" | "escalated"),
+                Ok(None) => true, // blocker row deleted; treat as resolved.
+                Err(e) => {
+                    tracing::warn!(component = "scheduler",
+                        task_id = %task.id, blocker_id = %blocker_id, error = %e,
+                        "blocker status query failed"
+                    );
+                    continue;
+                }
+            };
+            if !is_terminal {
+                continue; // hold the task; next tick re-checks.
+            }
+            // Dependency cleared. Clear the column + emit unblocked event
+            // before proceeding to dispatch.
+            let _ = sqlx::query("UPDATE tasks SET blocked_on = NULL WHERE id = ?")
+                .bind(&task.id)
+                .execute(pool)
+                .await;
+            let _ = crate::emit::emit_system_event(
+                pool,
+                event_tx,
+                Some(&task.startup_id),
+                "task_unblocked",
+                &json!({"task_id": task.id, "blocker_id": blocker_id}).to_string(),
+                "info",
+            )
+            .await;
         }
 
         // If a required_room is set and the agent is not in it, kick off a
@@ -303,6 +357,47 @@ pub async fn tick(
         }
         dispatched += 1;
     }
+
+    // P4 Theme E2: deadline scan. Per tick, find non-terminal tasks whose
+    // `deadline_at` has passed and we haven't notified yet (
+    // `deadline_notified_at IS NULL OR < deadline_at`), emit one
+    // `task_overdue` system_event each, and stamp `deadline_notified_at`
+    // to dedup the next tick. A deadline change (UPDATE deadline_at)
+    // should clear `deadline_notified_at`; the MCP tool below handles
+    // that.
+    let now = chrono::Utc::now().timestamp();
+    let overdue: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT id, startup_id, deadline_at FROM tasks \
+         WHERE deadline_at IS NOT NULL AND deadline_at < ? \
+           AND status NOT IN ('done', 'failed', 'escalated') \
+           AND (deadline_notified_at IS NULL OR deadline_notified_at < deadline_at)",
+    )
+    .bind(now)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (task_id, startup_id, deadline_at) in overdue {
+        let _ = crate::emit::emit_system_event(
+            pool,
+            event_tx,
+            Some(&startup_id),
+            "task_overdue",
+            &json!({
+                "task_id": task_id,
+                "deadline_at": deadline_at,
+                "overdue_by_secs": now - deadline_at,
+            })
+            .to_string(),
+            "warn",
+        )
+        .await;
+        let _ = sqlx::query("UPDATE tasks SET deadline_notified_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(&task_id)
+            .execute(pool)
+            .await;
+    }
+
     if dispatched > 0 || tick_start.elapsed().as_millis() > 5 {
         // Only log non-trivial ticks. Quiet ticks (0 dispatches, <5ms) are
         // skipped so /metrics' tick_seq counter is the cheap path; this

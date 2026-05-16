@@ -37,6 +37,14 @@ pub struct CreateTaskBody {
     /// world emits `task_cost_variance` system_event if actual spend (from
     /// the worker's `report_budget`) diverges by more than ±50%.
     pub cost_estimate_usd: Option<f64>,
+    /// P4 Theme E2: another task whose completion must precede dispatch
+    /// of this one. Scheduler holds the task until the dependency hits a
+    /// terminal state.
+    pub blocked_on: Option<String>,
+    /// P4 Theme E2: unix-seconds wall-clock deadline. Scheduler emits a
+    /// single `task_overdue` system_event when `now() > deadline_at` and
+    /// the task isn't yet terminal.
+    pub deadline_at: Option<i64>,
 }
 
 pub async fn create_task(
@@ -114,8 +122,9 @@ pub async fn create_task(
     let r = sqlx::query(
         "INSERT INTO tasks (id, startup_id, parent_id, title, description, status, \
                             assignee_agent_id, required_room, preferred_backend, preferred_model, \
-                            cost_estimate_usd, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())",
+                            cost_estimate_usd, blocked_on, deadline_at, \
+                            created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())",
     )
     .bind(&task_id)
     .bind(&body.startup_id)
@@ -128,6 +137,8 @@ pub async fn create_task(
     .bind(&body.preferred_backend)
     .bind(&body.preferred_model)
     .bind(body.cost_estimate_usd)
+    .bind(&body.blocked_on)
+    .bind(body.deadline_at)
     .execute(&s.pool)
     .await;
     match r {
