@@ -71,6 +71,7 @@ pub async fn dispatch(
         ConsoleInbound::SkillUpsertOperator { .. } => "skill_upsert_operator",
         ConsoleInbound::SkillDeleteOperator { .. } => "skill_delete_operator",
         ConsoleInbound::SkillSetGlobal { .. } => "skill_set_global",
+        ConsoleInbound::AgentSetPeerReviewer { .. } => "agent_set_peer_reviewer",
     };
     tracing::debug!(
         component = "cmd_console",
@@ -415,6 +416,26 @@ pub async fn dispatch(
                 }
                 Err(crate::skills::SkillError::NotFound) => json!({"type":"error","reason":"not_found"}),
                 Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
+            }
+        }
+        ConsoleInbound::AgentSetPeerReviewer { agent_id, is_peer_reviewer, .. } => {
+            // Admin-only — peer-reviewer status grants write access on
+            // review state for every same-startup task. Manager-level
+            // privilege isn't enough.
+            if !identity.role.at_least(OperatorRole::Admin) { return forbidden(); }
+            let r = sqlx::query("UPDATE agents SET is_peer_reviewer = ? WHERE id = ?")
+                .bind(if is_peer_reviewer { 1i64 } else { 0i64 })
+                .bind(&agent_id)
+                .execute(pool).await;
+            match r {
+                Ok(res) if res.rows_affected() == 0 => {
+                    json!({"type":"error","reason":"not_found"})
+                }
+                Ok(_) => json!({
+                    "type":"ok","kind":"agent_set_peer_reviewer",
+                    "agent_id": agent_id, "is_peer_reviewer": is_peer_reviewer,
+                }),
+                Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
             }
         }
         ConsoleInbound::SkillDeleteOperator { startup_id, skill_id, .. } => {

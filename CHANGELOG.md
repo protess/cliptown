@@ -1,5 +1,31 @@
 # Changelog
 
+## M14 — feat: peer review beyond manager review (Theme E1) (2026-05-16)
+
+Second Phase 4 PR (per #75). `task_request_changes` was
+manager-only; real teams want a designer reviewing engineer output
+or an engineer reviewing a founder spec.
+
+- Migration 0010 adds `agents.is_peer_reviewer INTEGER NOT NULL
+  DEFAULT 0` + a partial index on `is_peer_reviewer = 1`.
+- `mcp_dispatch::handle_task_request_changes` permission check
+  becomes a disjunction: manager-of-task OR (peer_reviewer AND
+  same-startup AND not the assignee). Self-review is still
+  refused. The audit_trail entry carries `actor = "manager" |
+  "peer"` so the org graph stays readable.
+- New admin-only ConsoleInbound `agent_set_peer_reviewer
+  {agent_id, is_peer_reviewer}`. Peer-reviewer status is a
+  cross-startup privilege grant — manager privilege isn't enough
+  to flip the flag.
+- 4 mcp-handler tests: peer-flagged can review / unflagged peer
+  rejected / peer-as-assignee can't self-review / manager still
+  writes `actor:"manager"`. 3 cmd_console tests: admin flips /
+  viewer forbidden / unknown agent_id returns not_found. TS
+  bindings regenerated.
+
+Operator-side UI (mark/unmark peer reviewer button on agent rows)
+deferred — Theme G bucket.
+
 ## M14 — feat: local-LLM smoke (Theme F1) (2026-05-16)
 
 First Phase 4 PR. Validates the local-first deploy narrative from

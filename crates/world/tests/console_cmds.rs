@@ -274,6 +274,66 @@ async fn accept_proposal_rejects_cross_startup_assignee() {
     expect_no_broadcasts(&mut event_rx);
 }
 
+// ── P4 Theme E1: agent_set_peer_reviewer ConsoleInbound ───────────────────
+
+#[tokio::test]
+async fn agent_set_peer_reviewer_admin_flips_flag() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status) \
+         VALUES ('d1', 's1', 'D1', 'designer', 'claude_code', 'm', '{}', 'suite_1', 'idle')"
+    ).execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
+        "type":"agent_set_peer_reviewer","v":1,"agent_id":"d1","is_peer_reviewer":true
+    })).await;
+    assert_eq!(r["type"], "ok");
+    let row: (i64,) = sqlx::query_as("SELECT is_peer_reviewer FROM agents WHERE id='d1'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(row.0, 1);
+}
+
+#[tokio::test]
+async fn agent_set_peer_reviewer_viewer_forbidden() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO agents (id, startup_id, name, role, backend, model_id, position_json, home_room_id, status) \
+         VALUES ('d1', 's1', 'D1', 'designer', 'claude_code', 'm', '{}', 'suite_1', 'idle')"
+    ).execute(&pool).await.unwrap();
+    let viewer = cliptown_world::auth::OperatorIdentity {
+        id: "op_v".into(), name: "v".into(),
+        role: cliptown_world::auth::OperatorRole::Viewer,
+    };
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &viewer, json!({
+        "type":"agent_set_peer_reviewer","v":1,"agent_id":"d1","is_peer_reviewer":true
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "forbidden");
+}
+
+#[tokio::test]
+async fn agent_set_peer_reviewer_unknown_returns_not_found() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &cliptown_world::auth::OperatorIdentity::admin_for_tests(), json!({
+        "type":"agent_set_peer_reviewer","v":1,"agent_id":"ghost","is_peer_reviewer":true
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "not_found");
+}
+
 /// P3 Theme B: viewer-role operators cannot trigger task-mutating arms; the
 /// dispatcher returns `forbidden` before any SQL or broadcast.
 #[tokio::test]

@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M14 feat — peer review beyond manager review (Theme E1) — 2026-05-16
+**Source:** Second Phase 4 PR (per #75 roadmap). PR `<TBD>`.
+
+Was: `task_request_changes` was structurally manager-only — caller had to be parent-task's assignee or recorded `agents.manager_id`. Real teams want cross-role review (designer reviews engineer, etc.) but the schema didn't support it.
+
+Fixed: migration 0010 adds `agents.is_peer_reviewer INTEGER NOT NULL DEFAULT 0`. `task_request_changes` permission becomes manager OR (peer_reviewer AND same-startup AND not-self). Audit `actor` discriminates `"manager" | "peer"`. New admin-only `AgentSetPeerReviewer` ConsoleInbound — admin-only because peer-reviewer is a cross-startup privilege grant. 4 mcp-handler tests + 3 console tests. Operator-side UI deferred to Theme G.
+
 ### M14 feat — local-LLM smoke (Theme F1) — 2026-05-16
 **Source:** First Phase 4 PR. Validates the local-first narrative from #55. PR `<TBD>`.
 
