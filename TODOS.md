@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M14 feat — SkillsPanel revision history + revert (Theme G slice 4) — 2026-05-17
+**Source:** Fourth Theme G slice. Closes the #72 "skill_revert UI deferred" carry. PR `<TBD>`.
+
+Was: the `skill_revert` MCP tool existed (since #71) but operators had no UI for it. To roll back, an admin had to either possess as an agent or hand-craft a WS frame.
+
+Fixed: new `SkillListRevisionsOperator` (read-only, any operator) and `SkillRevertOperator` (manager-or-above) ConsoleInbound variants reusing the existing `skills::list_revisions` / `skills::revert_to_revision` helpers. Revert broadcasts `SkillChanged { kind: "revert" }`. Frontend `skillRevisions` cache lazy-loads per skill; reducer invalidates on upsert/delete/revert so the next history-button click refetches. SkillsPanel gains a "⏱" history button per row → sub-panel listing revisions newest-first with author + size + Revert button (gated by confirm). 3 new console_cmds tests cover happy path + viewer-forbidden. Tests seed the `op_test` operator row so `append_revision`'s FK doesn't soft-fail silently — closes a latent gap.
+
 ### M14 feat — kanban blocked/deadline badges + steal flash (Theme G slice 3) — 2026-05-17
 **Source:** Third Theme G slice. Closes the E2 (#78) "kanban blocked/deadline badges" + E3 (#79) "kanban reshuffle animation on task_stolen" carry-forwards. PR `<TBD>`.
 

@@ -7,8 +7,8 @@
  * variants. Content authoring uses a plain <textarea> — markdown rendering
  * is the agent CLI's job, not the operator's preview surface.
  */
-import { useMemo, useState, type CSSProperties } from "react";
-import type { WorldState, SkillVM, AvatarVM } from "../store.js";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import type { WorldState, SkillVM, AvatarVM, SkillRevisionVM } from "../store.js";
 
 interface Props {
   state: WorldState;
@@ -18,6 +18,13 @@ interface Props {
   onUpsert: (name: string, contentMd: string, skillId: string | null) => void;
   onDelete: (skillId: string) => void;
   onSetGlobal: (skillId: string, isGlobal: boolean) => void;
+  /**
+   * Theme G slice 4: lazy-fetch this skill's revision history. The reply
+   * lands in `state.skillRevisions[skillId]` via the store reducer.
+   */
+  onListRevisions: (skillId: string) => void;
+  /** Theme G slice 4: revert this skill to `rev_seq` (manager+ only). */
+  onRevert: (skillId: string, revSeq: number) => void;
 }
 
 export function SkillsPanel({
@@ -28,6 +35,8 @@ export function SkillsPanel({
   onUpsert,
   onDelete,
   onSetGlobal,
+  onListRevisions,
+  onRevert,
 }: Props) {
   const [creating, setCreating] = useState(false);
   const skills = useMemo(() => {
@@ -85,11 +94,14 @@ export function SkillsPanel({
               key={s.id}
               skill={s}
               agents={agents}
+              revisions={state.skillRevisions[s.id]}
               onAttach={(agentId) => onAttach(s.id, agentId)}
               onDetach={(agentId) => onDetach(s.id, agentId)}
               onSave={(name, content) => onUpsert(name, content, s.id)}
               onDelete={() => onDelete(s.id)}
               onToggleGlobal={() => onSetGlobal(s.id, !s.is_global)}
+              onListRevisions={() => onListRevisions(s.id)}
+              onRevert={(revSeq) => onRevert(s.id, revSeq)}
             />
           ))}
         </ul>
@@ -101,16 +113,41 @@ export function SkillsPanel({
 interface SkillRowProps {
   skill: SkillVM;
   agents: AvatarVM[];
+  revisions: SkillRevisionVM[] | undefined;
   onAttach: (agentId: string) => void;
   onDetach: (agentId: string) => void;
   onSave: (name: string, contentMd: string) => void;
   onDelete: () => void;
   onToggleGlobal: () => void;
+  onListRevisions: () => void;
+  onRevert: (revSeq: number) => void;
 }
 
-function SkillRow({ skill, agents, onAttach, onDetach, onSave, onDelete, onToggleGlobal }: SkillRowProps) {
+function SkillRow({
+  skill,
+  agents,
+  revisions,
+  onAttach,
+  onDetach,
+  onSave,
+  onDelete,
+  onToggleGlobal,
+  onListRevisions,
+  onRevert,
+}: SkillRowProps) {
   const [editing, setEditing] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const unattached = agents.filter((a) => !skill.attachments.includes(a.agent_id));
+
+  // Theme G slice 4: lazy-fetch on first open. The reducer clears the
+  // cache on any skill mutation, so re-opening after an edit triggers
+  // a fresh fetch automatically.
+  useEffect(() => {
+    if (historyOpen && revisions === undefined) {
+      onListRevisions();
+    }
+  }, [historyOpen, revisions, onListRevisions]);
+
   return (
     <li style={rowStyle} data-testid={`skill-row-${skill.name}`}>
       <div style={rowHeaderStyle}>
@@ -136,6 +173,17 @@ function SkillRow({ skill, agents, onAttach, onDetach, onSave, onDelete, onToggl
             🌐
           </button>
           <button
+            style={{
+              ...iconButtonStyle,
+              color: historyOpen ? "var(--accent, #4a90e2)" : "var(--fg-secondary)",
+            }}
+            onClick={() => setHistoryOpen((v) => !v)}
+            data-testid={`skill-history-${skill.name}`}
+            title="View revision history (manager+ may revert)"
+          >
+            ⏱
+          </button>
+          <button
             style={iconButtonStyle}
             onClick={() => setEditing((v) => !v)}
             data-testid={`skill-edit-${skill.name}`}
@@ -157,6 +205,21 @@ function SkillRow({ skill, agents, onAttach, onDetach, onSave, onDelete, onToggl
           </button>
         </div>
       </div>
+      {historyOpen && (
+        <RevisionsPanel
+          skillName={skill.name}
+          revisions={revisions}
+          onRevert={(revSeq) => {
+            if (
+              confirm(
+                `Revert "${skill.name}" to rev ${revSeq}? A new revision will be appended pointing at this historical content.`,
+              )
+            ) {
+              onRevert(revSeq);
+            }
+          }}
+        />
+      )}
       {editing && (
         // Note: the WS snapshot ships skill metadata only (`len` + `updated_at`),
         // not `content_md` — re-fetching content per skill would inflate every
@@ -216,6 +279,72 @@ function SkillRow({ skill, agents, onAttach, onDetach, onSave, onDelete, onToggl
         </select>
       )}
     </li>
+  );
+}
+
+/**
+ * Theme G slice 4: collapsible revision-history sub-panel inside a SkillRow.
+ * Shows up to 20 revisions newest-first with a "Revert" button on each
+ * non-current row. Author column shows the operator or agent id (short).
+ * `revisions === undefined` means we're still waiting for the WS reply.
+ */
+function RevisionsPanel({
+  skillName,
+  revisions,
+  onRevert,
+}: {
+  skillName: string;
+  revisions: SkillRevisionVM[] | undefined;
+  onRevert: (revSeq: number) => void;
+}) {
+  if (revisions === undefined) {
+    return (
+      <div style={revisionsPanelStyle} data-testid={`skill-revisions-${skillName}`}>
+        <p style={emptyStyle}>loading history…</p>
+      </div>
+    );
+  }
+  if (revisions.length === 0) {
+    return (
+      <div style={revisionsPanelStyle} data-testid={`skill-revisions-${skillName}`}>
+        <p style={emptyStyle}>no revisions</p>
+      </div>
+    );
+  }
+  const currentSeq = revisions.reduce((max, r) => Math.max(max, r.rev_seq), 0);
+  return (
+    <div style={revisionsPanelStyle} data-testid={`skill-revisions-${skillName}`}>
+      <ul style={revListStyle}>
+        {revisions.slice(0, 20).map((r) => {
+          const isCurrent = r.rev_seq === currentSeq;
+          const author = r.created_by_agent_id ?? r.created_by_operator_id ?? "?";
+          return (
+            <li
+              key={r.id}
+              style={revRowStyle}
+              data-testid={`skill-revision-${skillName}-${r.rev_seq}`}
+            >
+              <span style={revSeqStyle}>r{r.rev_seq}</span>
+              <span style={{ flex: 1, fontSize: 11, color: "var(--fg-secondary)" }}>
+                {new Date(r.created_at * 1000).toLocaleString()} · {author.slice(0, 10)}
+                {isCurrent && <em style={currentMarkerStyle}> · current</em>}
+              </span>
+              <span style={revLenStyle}>{r.content_md.length}b</span>
+              {!isCurrent && (
+                <button
+                  style={revertButtonStyle}
+                  onClick={() => onRevert(r.rev_seq)}
+                  data-testid={`skill-revert-${skillName}-${r.rev_seq}`}
+                  title="Restore this revision as the live content"
+                >
+                  Revert
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -418,6 +547,59 @@ const smallButtonStyle: CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: 6,
   padding: "3px 10px",
+  cursor: "pointer",
+  color: "var(--fg)",
+};
+
+const revisionsPanelStyle: CSSProperties = {
+  padding: 6,
+  background: "var(--raised)",
+  border: "1px dashed var(--border)",
+  borderRadius: 6,
+};
+
+const revListStyle: CSSProperties = {
+  listStyle: "none",
+  margin: 0,
+  padding: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: 3,
+};
+
+const revRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 11,
+  padding: "2px 4px",
+};
+
+const revSeqStyle: CSSProperties = {
+  fontFamily: "monospace",
+  fontWeight: 600,
+  color: "var(--fg)",
+  minWidth: 28,
+};
+
+const revLenStyle: CSSProperties = {
+  fontSize: 10,
+  color: "var(--fg-secondary)",
+};
+
+const currentMarkerStyle: CSSProperties = {
+  fontStyle: "normal",
+  color: "var(--accent, #4a90e2)",
+  fontWeight: 500,
+};
+
+const revertButtonStyle: CSSProperties = {
+  font: "inherit",
+  fontSize: 10,
+  background: "var(--bg)",
+  border: "1px solid var(--border)",
+  borderRadius: 4,
+  padding: "1px 8px",
   cursor: "pointer",
   color: "var(--fg)",
 };

@@ -73,6 +73,8 @@ pub async fn dispatch(
         ConsoleInbound::SkillSetGlobal { .. } => "skill_set_global",
         ConsoleInbound::AgentSetPeerReviewer { .. } => "agent_set_peer_reviewer",
         ConsoleInbound::StartupSetAutoSteal { .. } => "startup_set_auto_steal",
+        ConsoleInbound::SkillListRevisionsOperator { .. } => "skill_list_revisions_operator",
+        ConsoleInbound::SkillRevertOperator { .. } => "skill_revert_operator",
     };
     tracing::debug!(
         component = "cmd_console",
@@ -576,6 +578,68 @@ pub async fn dispatch(
                     "startup_id": startup_id, "enabled": enabled, "after_secs": after_secs,
                 }),
                 Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
+            }
+        }
+        ConsoleInbound::SkillListRevisionsOperator { startup_id, skill_id, .. } => {
+            // Read-only — any logged-in operator can inspect history.
+            // Same-startup gate is enforced inside `skills::list_revisions`.
+            match crate::skills::list_revisions(pool, &startup_id, &skill_id).await {
+                Ok(rows) => {
+                    let arr: Vec<serde_json::Value> = rows
+                        .into_iter()
+                        .map(|r| json!({
+                            "id": r.id,
+                            "skill_id": r.skill_id,
+                            "rev_seq": r.rev_seq,
+                            "content_md": r.content_md,
+                            "created_at": r.created_at,
+                            "created_by_agent_id": r.created_by_agent_id,
+                            "created_by_operator_id": r.created_by_operator_id,
+                        }))
+                        .collect();
+                    json!({"type":"ok","kind":"skill_revisions","skill_id":skill_id,"revisions":arr})
+                }
+                Err(crate::skills::SkillError::NotFound) => {
+                    json!({"type":"error","reason":"not_found"})
+                }
+                Err(crate::skills::SkillError::CrossStartup) => {
+                    json!({"type":"error","reason":"cross_startup"})
+                }
+                Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
+            }
+        }
+        ConsoleInbound::SkillRevertOperator { startup_id, skill_id, rev_seq, .. } => {
+            // Write — manager-or-above. Symmetric with SkillUpsertOperator
+            // / SkillDeleteOperator.
+            if !is_manager { return forbidden(); }
+            match crate::skills::revert_to_revision(
+                pool,
+                &startup_id,
+                &skill_id,
+                rev_seq,
+                crate::skills::Author::Operator(&identity.id),
+            ).await {
+                Ok(content_md) => {
+                    let _ = event_tx.send(crate::protocol::ConsoleOutbound::SkillChanged {
+                        v: 1,
+                        startup_id: startup_id.clone(),
+                        kind: "revert".to_string(),
+                        skill_id: skill_id.clone(),
+                        agent_id: None,
+                        skill: None,
+                    });
+                    json!({
+                        "type":"ok","kind":"skill_reverted",
+                        "skill_id": skill_id, "rev_seq": rev_seq, "len": content_md.len(),
+                    })
+                }
+                Err(crate::skills::SkillError::NotFound) => {
+                    json!({"type":"error","reason":"not_found"})
+                }
+                Err(crate::skills::SkillError::CrossStartup) => {
+                    json!({"type":"error","reason":"cross_startup"})
+                }
+                Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
             }
         }
     };

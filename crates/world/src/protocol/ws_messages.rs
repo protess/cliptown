@@ -97,6 +97,14 @@ pub enum ConsoleInbound {
     /// same-role peer. `after_secs` is optional — when `None`, the
     /// SQL default (60s) is left in place.
     StartupSetAutoSteal { v: u8, startup_id: String, enabled: bool, after_secs: Option<i64> },
+    /// P4 Theme G slice 4: operator-side skill revision surface.
+    /// `list` is read-only (any logged-in operator); `revert` is a write
+    /// (manager-or-above). Same-startup gate enforced server-side via
+    /// the existing `skills::list_revisions` / `skills::revert_to_revision`
+    /// helpers. The agent-side MCP tools (`skill_list_revisions`,
+    /// `skill_revert`) remain — these are the operator-console twins.
+    SkillListRevisionsOperator { v: u8, startup_id: String, skill_id: String },
+    SkillRevertOperator { v: u8, startup_id: String, skill_id: String, rev_seq: i64 },
 }
 
 #[derive(Debug, Serialize, Deserialize, TS, Clone)]

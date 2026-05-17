@@ -134,6 +134,22 @@ export interface SkillVM {
   is_global: boolean;
 }
 
+/**
+ * Theme G slice 4: one row of a skill's revision history. Returned by
+ * `skill_list_revisions_operator` and stored per-skill in
+ * `WorldState.skillRevisions`. `content_md` carries the full historical
+ * content so the operator can diff/preview before reverting.
+ */
+export interface SkillRevisionVM {
+  id: string;
+  skill_id: string;
+  rev_seq: number;
+  content_md: string;
+  created_at: number;
+  created_by_agent_id: string | null;
+  created_by_operator_id: string | null;
+}
+
 export interface WorldState {
   status: ConnectionStatus;
   avatars: Record<string, AvatarVM>;
@@ -145,6 +161,13 @@ export interface WorldState {
   modals: ModalVM[];
   messages: MessageVM[];
   skills: Record<string, Record<string, SkillVM>>;
+  /**
+   * Theme G slice 4: per-skill revision history, lazy-loaded by the
+   * SkillsPanel via `skill_list_revisions_operator`. Keyed by `skill_id`
+   * (not `(startup_id, skill_id)` because skill ids are globally unique).
+   * Absent until the user opens the history panel on a given skill.
+   */
+  skillRevisions: Record<string, SkillRevisionVM[]>;
   /**
    * P3 Theme B follow-up: operator-management state for the admin panel.
    * `null` = not yet fetched (panel sends `operator_list` on mount to
@@ -181,6 +204,7 @@ const INITIAL: WorldState = {
   modals: [],
   messages: [],
   skills: {},
+  skillRevisions: {},
   operators: null,
   mintedOperatorToken: null,
   currentOperator: null,
@@ -622,7 +646,16 @@ function reducer(state: WorldState, action: Action): WorldState {
         };
       }
       next[sid] = inner;
-      return { ...state, skills: next };
+      // Theme G slice 4: any mutation invalidates the cached revision
+      // list — the next history-button click will refetch.
+      let nextRevs = state.skillRevisions;
+      if ((kind === "upsert" || kind === "revert" || kind === "delete") && skill_id) {
+        if (skill_id in nextRevs) {
+          nextRevs = { ...nextRevs };
+          delete nextRevs[skill_id];
+        }
+      }
+      return { ...state, skills: next, skillRevisions: nextRevs };
     }
     // P3 Theme B follow-up: operator-management replies. The world responds
     // with `{type:"ok", kind:"operator_*"}` envelopes; the reducer hoists
@@ -663,6 +696,32 @@ function reducer(state: WorldState, action: Action): WorldState {
           ...state,
           operators: state.operators ? state.operators.filter((o) => o.id !== m.id) : null,
         };
+      }
+      if (kind === "skill_revisions" && typeof m.skill_id === "string" && Array.isArray(m.revisions)) {
+        const skill_id = m.skill_id as string;
+        const rows = (m.revisions as unknown[])
+          .map((r): SkillRevisionVM | null => {
+            const obj = asObject(r);
+            if (!obj) return null;
+            const id = asString(obj.id);
+            const rev_seq = typeof obj.rev_seq === "number" ? obj.rev_seq : 0;
+            const content_md = asString(obj.content_md);
+            const created_at = typeof obj.created_at === "number" ? obj.created_at : 0;
+            if (!id) return null;
+            return {
+              id,
+              skill_id: asString(obj.skill_id, skill_id),
+              rev_seq,
+              content_md,
+              created_at,
+              created_by_agent_id:
+                typeof obj.created_by_agent_id === "string" ? obj.created_by_agent_id : null,
+              created_by_operator_id:
+                typeof obj.created_by_operator_id === "string" ? obj.created_by_operator_id : null,
+            };
+          })
+          .filter((r): r is SkillRevisionVM => r !== null);
+        return { ...state, skillRevisions: { ...state.skillRevisions, [skill_id]: rows } };
       }
       if (kind === "operator_set_role" && typeof m.id === "string" && typeof m.role === "string") {
         const id = String(m.id);

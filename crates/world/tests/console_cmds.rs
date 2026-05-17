@@ -625,6 +625,99 @@ async fn skill_delete_operator_viewer_forbidden() {
     assert_eq!(count.0, 1, "viewer attempt must not touch SQL");
 }
 
+// ── Theme G slice 4: operator-side skill revisions ────────────────────────
+
+#[tokio::test]
+async fn skill_list_revisions_operator_returns_history() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    // Seed the admin operator row so append_revision's FK
+    // (created_by_operator_id REFERENCES operators) doesn't soft-fail.
+    sqlx::query(
+        "INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_test','test-admin','tok','admin',unixepoch())"
+    ).execute(&pool).await.unwrap();
+    // Create + edit to generate two revisions.
+    let r1 = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"skill_upsert_operator","v":1,"startup_id":"s1","skill_id":null,
+        "name":"my-skill","content_md":"v1"
+    })).await;
+    let id = r1["skill_id"].as_str().unwrap().to_string();
+    let _ = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"skill_upsert_operator","v":1,"startup_id":"s1","skill_id":null,
+        "name":"my-skill","content_md":"v2"
+    })).await;
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &viewer(), json!({
+        "type":"skill_list_revisions_operator","v":1,"startup_id":"s1","skill_id":id
+    })).await;
+    assert_eq!(r["type"], "ok", "viewer may read revisions: {r}");
+    assert_eq!(r["kind"], "skill_revisions");
+    let revs = r["revisions"].as_array().unwrap();
+    assert_eq!(revs.len(), 2);
+    // Most recent rev_seq first when ordered desc — but order is whatever
+    // skills::list_revisions returns. Just assert both contents present.
+    let contents: std::collections::HashSet<&str> = revs.iter()
+        .map(|r| r["content_md"].as_str().unwrap()).collect();
+    assert!(contents.contains("v1"));
+    assert!(contents.contains("v2"));
+}
+
+#[tokio::test]
+async fn skill_revert_operator_restores_historical_content() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_test','test-admin','tok','admin',unixepoch())"
+    ).execute(&pool).await.unwrap();
+    let r1 = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"skill_upsert_operator","v":1,"startup_id":"s1","skill_id":null,
+        "name":"my-skill","content_md":"original"
+    })).await;
+    let id = r1["skill_id"].as_str().unwrap().to_string();
+    let _ = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"skill_upsert_operator","v":1,"startup_id":"s1","skill_id":null,
+        "name":"my-skill","content_md":"breakage"
+    })).await;
+    // Revert to rev_seq = 1 (the "original" content).
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
+        "type":"skill_revert_operator","v":1,"startup_id":"s1","skill_id":id,"rev_seq":1
+    })).await;
+    assert_eq!(r["type"], "ok", "{r}");
+    assert_eq!(r["kind"], "skill_reverted");
+    let row: (String,) = sqlx::query_as("SELECT content_md FROM skills WHERE name='my-skill'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(row.0, "original");
+}
+
+#[tokio::test]
+async fn skill_revert_operator_viewer_forbidden() {
+    let (mut w, pool) = fresh().await;
+    let bus = empty_bus();
+    let (event_tx, _rx) = make_event_tx();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO skills (id, startup_id, name, content_md, created_at, updated_at) \
+         VALUES ('sk_v','s1','sk','c',unixepoch(),unixepoch())"
+    ).execute(&pool).await.unwrap();
+    let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &viewer(), json!({
+        "type":"skill_revert_operator","v":1,"startup_id":"s1","skill_id":"sk_v","rev_seq":1
+    })).await;
+    assert_eq!(r["type"], "error");
+    assert_eq!(r["reason"], "forbidden");
+}
+
 #[tokio::test]
 async fn operator_set_role_refuses_self_demotion() {
     let (mut w, pool) = fresh().await;
