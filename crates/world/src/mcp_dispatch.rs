@@ -548,6 +548,9 @@ async fn handle_speak(
             ts: chrono::Utc::now().timestamp_millis(),
             startup_id: caller.startup_id.clone(),
             author_id: caller.agent_id.clone(),
+            // Agent-sourced (speak / ask_peer); frontend resolves the
+            // name from `state.avatars[author_id]`.
+            author_display_name: None,
             to_agent_id: rid.to_string(),
             body: body.clone(),
             in_response_to_task: None,
@@ -1003,6 +1006,9 @@ async fn handle_task_request_changes(
         ts: chrono::Utc::now().timestamp_millis(),
         startup_id: caller.startup_id.clone(),
         author_id: caller.agent_id.clone(),
+        // Agent-sourced review feedback; frontend resolves the name
+        // from `state.avatars[author_id]`.
+        author_display_name: None,
         to_agent_id: assignee.to_string(),
         body: feedback.clone(),
         in_response_to_task: Some(task_id.clone()),

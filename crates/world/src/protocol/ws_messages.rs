@@ -146,6 +146,14 @@ pub enum ConsoleOutbound {
         ts: i64,
         startup_id: String,
         author_id: String,
+        /// P5 Theme B: operator-sourced directives carry the operator's
+        /// display name resolved at emit time. `None` for agent-sourced
+        /// directives (peer review etc.) where the frontend can look up
+        /// the agent by `author_id` directly. Server-side resolution
+        /// means a name change in `operators` is reflected in *future*
+        /// broadcasts; historical frames keep the name they were emitted
+        /// with.
+        author_display_name: Option<String>,
         to_agent_id: String,
         body: String,
         in_response_to_task: Option<String>,

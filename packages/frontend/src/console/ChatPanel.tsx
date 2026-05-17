@@ -19,6 +19,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 import type { MessageVM } from "../store.js";
+import { PresenceAvatar } from "./PresenceAvatar.js";
 
 const HUES = [
   "#E63946", "#F4A261", "#E9C46A", "#2A9D8F",
@@ -202,7 +203,23 @@ export function ChatPanel({ selectedAgentId }: ChatPanelProps = {}) {
 function looksLikeUuid(id: string): boolean {
   return id.length === 36 && id.charAt(8) === "-" && id.charAt(13) === "-";
 }
-function AuthorId({ id }: { id: string }) {
+function AuthorId({ id, displayName }: { id: string; displayName?: string | null }) {
+  // P5 Theme B: operator-sourced messages carry a resolved name from
+  // the server. Render `op:Alice` so the operator stands out from the
+  // agent ids around them.
+  if (id === "operator" && displayName) {
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <PresenceAvatar
+          operatorId={displayName /* fallback hash key */}
+          name={displayName}
+          size={14}
+          title={`Operator ${displayName}`}
+        />
+        <code style={{ color: "var(--fg)" }}>op:{displayName}</code>
+      </span>
+    );
+  }
   if (!id) return <code>?</code>;
   if (!looksLikeUuid(id)) return <code>{id}</code>;
   return <code title={id}>{id.slice(0, 6)}</code>;
@@ -239,7 +256,7 @@ function Bubble({
             opacity: cross ? 1 : 0.6,
           }}
         />
-        <AuthorId id={m.author_id} />
+        <AuthorId id={m.author_id} displayName={m.author_display_name} />
         {cross && (
           <span
             title={m.startup_id}

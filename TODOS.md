@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M15 feat — per-operator audit visibility (P5 Theme B) — 2026-05-17
+**Source:** Second Phase 5 PR (per #85 roadmap). PR `<TBD>`.
+
+Was: audit + history surfaces showed the opaque `operator` sentinel for operator-sourced actions. With 2-5 operators on one cliptown, "Who did this?" is the most common question and the UI had no answer.
+
+Fixed: `ConsoleOutbound::Directive` carries `author_display_name: Option<String>`; cmd_console resolves `identity.name` at emit time. Audit-trail JSON for `accept_proposal` / `reject_proposal` / `force_accept` / `force_fail` includes `operator_id`. Frontend `MessageVM.author_display_name` parsed; ChatPanel renders operator-sourced messages with a 14px `PresenceAvatar` + `op:Alice` instead of `operator`. `author_id` stays "operator" sentinel for backward-compat discriminator. console_emit test updated.
+
 ### M15 feat — operator presence (P5 Theme A) — 2026-05-17
 **Source:** First Phase 5 PR (per #85 roadmap). PR `<TBD>`.
 

@@ -1,5 +1,31 @@
 # Changelog
 
+## M15 — feat: per-operator audit visibility (P5 Theme B) (2026-05-17)
+
+Second Phase 5 PR. Audit/history surfaces stop showing the
+"operator" sentinel and start showing the actual operator who
+took the action. Builds on P5.A's `PresenceAvatar` color hash.
+
+- `ConsoleOutbound::Directive` carries new
+  `author_display_name: Option<String>`. cmd_console's
+  `OperatorDirective` handler resolves `identity.name` at
+  emit time. Agent-sourced directives (peer review, manager
+  feedback) pass `None` — frontend resolves from
+  `state.avatars[author_id]` as before.
+- Audit-trail JSON entries for `accept_proposal`,
+  `reject_proposal`, `force_accept`, `force_fail` now include
+  `operator_id`. Invisible until a future UI surfaces
+  audit_trail; the data shape is right.
+- Frontend `MessageVM.author_display_name`. ChatPanel
+  renders operator-sourced messages as a colored 14px
+  `PresenceAvatar` + `op:Alice` instead of the bare
+  `operator` sentinel.
+- console_emit test updated to destructure the new field.
+
+`author_id` stays "operator" as a backwards-compatible
+discriminator (existing clients match on it); the real
+identity rides in `author_display_name`.
+
 ## M15 — feat: operator presence (P5 Theme A) (2026-05-17)
 
 First Phase 5 PR. Two operators connected to the same cliptown

@@ -180,7 +180,13 @@ pub async fn dispatch(
                         message_id: id.clone(),
                         ts: chrono::Utc::now().timestamp_millis(),
                         startup_id: recipient_startup_id,
+                        // P5 Theme B: `author_id` stays "operator" as a
+                        // backwards-compatible discriminator (existing
+                        // clients match on it); the actual operator
+                        // identity rides in `author_display_name` +
+                        // the new `author_operator_id` field below.
                         author_id: "operator".into(),
+                        author_display_name: Some(identity.name.clone()),
                         to_agent_id: to_agent_id.clone(),
                         body: body.clone(),
                         in_response_to_task: None,
@@ -246,7 +252,7 @@ pub async fn dispatch(
                     let _ = persist::append_audit(
                         pool,
                         &task_id,
-                        &json!({"actor":"operator","kind":"accept_proposal"}).to_string(),
+                        &json!({"actor":"operator","operator_id":identity.id,"kind":"accept_proposal"}).to_string(),
                     )
                     .await;
                     json!({"type":"ok","kind":"operator_accept_proposal","task_id":task_id})
@@ -269,7 +275,7 @@ pub async fn dispatch(
                     pool,
                     &task_id,
                     &json!({
-                        "actor":"operator","kind":"reject_proposal","reason":reason
+                        "actor":"operator","operator_id":identity.id,"kind":"reject_proposal","reason":reason
                     })
                     .to_string(),
                 )
@@ -291,7 +297,7 @@ pub async fn dispatch(
                 let _ = persist::append_audit(
                     pool,
                     &task_id,
-                    &json!({"actor":"operator","kind":"force_accept"}).to_string(),
+                    &json!({"actor":"operator","operator_id":identity.id,"kind":"force_accept"}).to_string(),
                 )
                 .await;
             }
@@ -310,7 +316,7 @@ pub async fn dispatch(
                 let _ = persist::append_audit(
                     pool,
                     &task_id,
-                    &json!({"actor":"operator","kind":"force_fail","note":note}).to_string(),
+                    &json!({"actor":"operator","operator_id":identity.id,"kind":"force_fail","note":note}).to_string(),
                 )
                 .await;
             }
