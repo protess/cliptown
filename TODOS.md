@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M14 feat — async work-stealing (Theme E3) — 2026-05-16
+**Source:** Fourth Phase 4 PR (per #75 roadmap). PR `<TBD>`.
+
+Was: queued tasks lived with their original assignee even when that engineer was buried and a same-role peer sat idle. No way to rebalance short of operator-driven `OperatorForceFail`+re-route.
+
+Fixed: migration 0012 adds `startups.auto_steal_enabled` (default 0) + `auto_steal_after_secs` (default 60). New MCP tool `task_steal {task_id}` — caller must be idle, same-startup, same-role as the current assignee, not-self; task must be `queued`. Same-row WHERE clause guards UPDATE (race → `lost_race`). Scheduler post-dispatch auto-steal pass reassigns stale queued tasks when the flag is on AND assignee is busy AND an idle same-role peer exists; skips when assignee is already idle (no churn). Admin-only `StartupSetAutoSteal` ConsoleInbound for the flip. `task_stolen` system_event surfaces both modes. 8 integration tests. Operator-side UI button + kanban swim-lane shuffle deferred to Theme G.
+
 ### M14 feat — blocking dependencies + deadlines (Theme E2) — 2026-05-16
 **Source:** Third Phase 4 PR (per #75 roadmap). PR `<TBD>`.
 

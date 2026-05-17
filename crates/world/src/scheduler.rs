@@ -398,6 +398,14 @@ pub async fn tick(
             .await;
     }
 
+    // P4 Theme E3: opt-in auto work-stealing pass. For each startup with
+    // `auto_steal_enabled = 1`, find queued tasks whose assignee is busy and
+    // whose `updated_at` is older than the per-startup threshold, then
+    // reassign to an idle same-role peer in the same startup. Manual
+    // `task_steal` handles ad-hoc claims; this pass rebalances the chronic
+    // case where one engineer's queue stays warm while a peer sits idle.
+    auto_steal_pass(world, pool, event_tx).await;
+
     if dispatched > 0 || tick_start.elapsed().as_millis() > 5 {
         // Only log non-trivial ticks. Quiet ticks (0 dispatches, <5ms) are
         // skipped so /metrics' tick_seq counter is the cheap path; this
@@ -411,6 +419,127 @@ pub async fn tick(
         );
     }
     dispatched
+}
+
+/// P4 Theme E3: per-tick auto-steal pass. Walks every startup with
+/// `auto_steal_enabled = 1`, collects queued tasks that have sat untouched
+/// past the per-startup threshold AND whose current assignee is busy,
+/// and reassigns them to an idle same-role peer when one exists. The
+/// reassignment uses a same-row WHERE clause (`assignee = ?, status =
+/// 'queued'`) so a concurrent manual steal between SELECT and UPDATE
+/// loses the race cleanly. Bumping `updated_at` after the swap prevents
+/// the same row from re-firing on the next tick.
+async fn auto_steal_pass(
+    world: &WorldView,
+    pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+) {
+    let now = chrono::Utc::now().timestamp();
+    let startups: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT id, auto_steal_after_secs FROM startups WHERE auto_steal_enabled = 1",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (startup_id, after_secs) in startups {
+        let cutoff = now - after_secs.max(1);
+        let stale: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, assignee_agent_id FROM tasks \
+             WHERE startup_id = ? AND status = 'queued' \
+               AND assignee_agent_id IS NOT NULL \
+               AND updated_at < ?",
+        )
+        .bind(&startup_id)
+        .bind(cutoff)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+        for (task_id, current_assignee) in stale {
+            // Current assignee must NOT be idle — if they're idle the
+            // normal dispatch loop already picked it up (or will next
+            // tick). Stealing from an idle peer would just churn.
+            let assignee_status = world
+                .avatars
+                .get(&current_assignee)
+                .map(|a| a.status.clone());
+            if assignee_status.as_deref() == Some("idle") {
+                continue;
+            }
+            // Find an idle same-role peer in the same startup. Pick the
+            // first match — Phase 0 doesn't load-balance among multiple
+            // idle peers; that's a fairness concern for later.
+            let assignee_role: Option<String> =
+                sqlx::query_scalar("SELECT role FROM agents WHERE id = ?")
+                    .bind(&current_assignee)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
+            let Some(role) = assignee_role else { continue };
+            let peer_id = world.avatars.iter().find_map(|(id, a)| {
+                if a.startup_id == startup_id
+                    && a.role == role
+                    && a.status == "idle"
+                    && *id != current_assignee
+                {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            });
+            let Some(peer_id) = peer_id else { continue };
+
+            let res = sqlx::query(
+                "UPDATE tasks SET assignee_agent_id = ?, updated_at = unixepoch() \
+                 WHERE id = ? AND status = 'queued' AND assignee_agent_id = ?",
+            )
+            .bind(&peer_id)
+            .bind(&task_id)
+            .bind(&current_assignee)
+            .execute(pool)
+            .await;
+            let rows = match res {
+                Ok(r) => r.rows_affected(),
+                Err(e) => {
+                    tracing::warn!(component = "scheduler",
+                        task_id = %task_id, error = %e,
+                        "auto-steal UPDATE failed"
+                    );
+                    continue;
+                }
+            };
+            if rows == 0 {
+                continue;
+            }
+            let _ = crate::persist::append_audit(
+                pool,
+                &task_id,
+                &json!({
+                    "actor": "stealer",
+                    "kind": "task_steal",
+                    "agent_id": peer_id,
+                    "previous_assignee": current_assignee,
+                    "mode": "auto",
+                })
+                .to_string(),
+            )
+            .await;
+            let _ = crate::emit::emit_system_event(
+                pool,
+                event_tx,
+                Some(&startup_id),
+                "task_stolen",
+                &json!({
+                    "task_id": task_id,
+                    "new_assignee": peer_id,
+                    "previous_assignee": current_assignee,
+                    "mode": "auto",
+                })
+                .to_string(),
+                "info",
+            )
+            .await;
+        }
+    }
 }
 
 /// Returns the center tile of `room_id`'s bounds, or `None` if the room

@@ -442,6 +442,17 @@ fn handle_tools_list() -> Value {
                 }
             }),
         ),
+        tool(
+            "task_steal",
+            "Claim a queued task currently assigned to an idle peer. Caller must be idle, in the same startup, share the assignee's role, and not be the current assignee.",
+            json!({
+                "type": "object",
+                "required": ["task_id"],
+                "properties": {
+                    "task_id": {"type": "string"}
+                }
+            }),
+        ),
     ]);
     json!({ "tools": tools })
 }

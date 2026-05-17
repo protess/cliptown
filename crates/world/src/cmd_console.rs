@@ -72,6 +72,7 @@ pub async fn dispatch(
         ConsoleInbound::SkillDeleteOperator { .. } => "skill_delete_operator",
         ConsoleInbound::SkillSetGlobal { .. } => "skill_set_global",
         ConsoleInbound::AgentSetPeerReviewer { .. } => "agent_set_peer_reviewer",
+        ConsoleInbound::StartupSetAutoSteal { .. } => "startup_set_auto_steal",
     };
     tracing::debug!(
         component = "cmd_console",
@@ -539,6 +540,41 @@ pub async fn dispatch(
                     json!({"type":"error","reason":"not_found"})
                 }
                 Ok(_) => json!({"type":"ok","kind":"operator_set_role","id": operator_id, "role": role}),
+                Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
+            }
+        }
+        ConsoleInbound::StartupSetAutoSteal { startup_id, enabled, after_secs, .. } => {
+            // Admin-only: auto-steal touches assignment globally for the
+            // startup. Manager-level isn't enough since the effect can
+            // reassign tasks the manager didn't originally route.
+            if !identity.role.at_least(OperatorRole::Admin) { return forbidden(); }
+            if let Some(secs) = after_secs {
+                if secs < 1 {
+                    return json!({"type":"error","reason":"bad_after_secs"});
+                }
+            }
+            let r = if let Some(secs) = after_secs {
+                sqlx::query(
+                    "UPDATE startups SET auto_steal_enabled = ?, auto_steal_after_secs = ? WHERE id = ?",
+                )
+                .bind(if enabled { 1i64 } else { 0i64 })
+                .bind(secs)
+                .bind(&startup_id)
+                .execute(pool).await
+            } else {
+                sqlx::query("UPDATE startups SET auto_steal_enabled = ? WHERE id = ?")
+                    .bind(if enabled { 1i64 } else { 0i64 })
+                    .bind(&startup_id)
+                    .execute(pool).await
+            };
+            match r {
+                Ok(res) if res.rows_affected() == 0 => {
+                    json!({"type":"error","reason":"not_found"})
+                }
+                Ok(_) => json!({
+                    "type":"ok","kind":"startup_set_auto_steal",
+                    "startup_id": startup_id, "enabled": enabled, "after_secs": after_secs,
+                }),
                 Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
             }
         }

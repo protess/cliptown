@@ -91,6 +91,12 @@ pub enum ConsoleInbound {
     /// When set, the agent can request changes on any same-startup task
     /// (except their own) via `task_request_changes`.
     AgentSetPeerReviewer { v: u8, agent_id: String, is_peer_reviewer: bool },
+    /// P4 Theme E3: admin-only per-startup auto-steal flag. When enabled,
+    /// the scheduler runs the auto-steal pass each tick, reassigning
+    /// queued tasks whose assignee is busy past `after_secs` to an idle
+    /// same-role peer. `after_secs` is optional — when `None`, the
+    /// SQL default (60s) is left in place.
+    StartupSetAutoSteal { v: u8, startup_id: String, enabled: bool, after_secs: Option<i64> },
 }
 
 #[derive(Debug, Serialize, Deserialize, TS, Clone)]
