@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M16 feat — structured tool surface (P6 Theme B) — 2026-05-17
+**Source:** Second Phase 6 PR (per #93 roadmap). PR `<TBD>`.
+
+Was: P6.A's self-review gate could only do trivial checks; real verification (run tests, lint TS/Rust, diff against base) needed shell access with auditability. Agents had CLI access via adapter spawn but no structured tool surface that emitted audit rows.
+
+Fixed: new `crates/world/src/agent_tools.rs` with `run_command` (16KiB tail cap, UTF-8-safe truncation, 600s max timeout) + `task_workdir` + `sniff_test_command` for Rust/Node/Make/fallback workdirs. Three new MCP tools (29 → 32): `run_tests {task_id, command?}`, `lint_artifact {task_id, artifact_path}` (`.ts`→tsc, `.rs`→cargo check, md/json reuse existing verify), `read_artifact_diff {task_id, artifact_path, base_ref?}`. Same-startup + assignee-only gates. 8 new unit tests on the helper. Backup restore-drill test stabilized via explicit `pool.close().await`.
+
 ### M16 feat — self-review gates (P6 Theme A) — 2026-05-17
 **Source:** First Phase 6 PR (per #93 roadmap). PR `<TBD>`.
 
