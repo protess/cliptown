@@ -1,13 +1,14 @@
-# cliptown local-prod-equivalent. Single world process + persistent volumes.
+# cliptown local-prod-equivalent. World + frontend + (opt-in) observability.
 #
 # Usage:
-#   docker compose up -d              # boot
-#   docker compose logs -f world      # tail logs
-#   docker compose exec world sh      # shell in
-#   docker compose down               # stop (data persists in volumes)
-#   docker compose down -v            # stop + wipe volumes
+#   docker compose up -d                          # world + frontend only
+#   docker compose --profile observability up -d  # + prometheus + grafana
+#   docker compose logs -f world                  # tail world logs
+#   docker compose exec world sh                  # shell in
+#   docker compose down                           # stop (data persists)
+#   docker compose down -v                        # stop + wipe volumes
 #
-# Override secrets / model auth via .env (gitignored). See DEPLOY.md.
+# Override secrets / model auth via .env (gitignored). See docs/DEPLOY.md.
 
 services:
   world:
@@ -37,6 +38,68 @@ services:
       timeout: 3s
       retries: 3
 
+  frontend:
+    build:
+      context: .
+      dockerfile: packages/frontend/Dockerfile
+    image: cliptown-frontend:latest
+    container_name: cliptown-frontend
+    restart: unless-stopped
+    depends_on:
+      world:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health.txt"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # P5 Theme D ships the dashboard + alert artifacts; this profile mounts
+  # them into Prometheus + Grafana so a small team gets a working ops
+  # surface with one command. Off by default — start with
+  # `docker compose --profile observability up -d`.
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: cliptown-prometheus
+    restart: unless-stopped
+    profiles: ["observability"]
+    depends_on:
+      world:
+        condition: service_healthy
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docs/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docs/observability/alerts/cliptown.yml:/etc/prometheus/cliptown.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: cliptown-grafana
+    restart: unless-stopped
+    profiles: ["observability"]
+    depends_on:
+      - prometheus
+    ports:
+      - "3001:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./docs/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/observability/grafana:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
 volumes:
   cliptown-data:
   cliptown-workspaces:
+  prometheus-data:
+  grafana-data:

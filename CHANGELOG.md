@@ -1,5 +1,41 @@
 # Changelog
 
+## M15 — feat: docker deploy pipeline (P5 Theme E) (2026-05-17)
+
+Fifth Phase 5 PR. DEPLOY.md described docker compose as an
+option since Phase 3, but only the world image existed. Frontend
+deployment was "build + serve yourself"; observability tooling
+was "build it yourself." This slice closes both gaps + adds
+tag-triggered GHCR release.
+
+- New `packages/frontend/Dockerfile` (multi-stage: pnpm build →
+  nginx serve) + `nginx.conf` porting the Vite dev-proxy rewrites
+  (`/api/*`, `/ws/*`, `/metrics`) to nginx with SPA fallback.
+- `docker-compose.yml` gains the `frontend` service (depends on
+  `world` healthy, port 3000:80) + a profile-gated
+  `observability` stack: `prometheus` (port 9090) +
+  `grafana` (port 3001, anonymous-admin). Grafana auto-loads
+  the P5 Theme D dashboard via provisioning; Prometheus loads
+  the alert rules from the same docs/ tree.
+- New `docs/observability/prometheus/prometheus.yml`, plus
+  `docs/observability/grafana/provisioning/{datasources,
+  dashboards}/*.yml` so Grafana hydrates fully on boot — no
+  manual import, no datasource setup.
+- `.github/workflows/release.yml`: tag-triggered (`v*`) matrix
+  build of `cliptown-world` + `cliptown-frontend` images via
+  `docker buildx`, multi-arch (amd64 + arm64), pushed to GHCR
+  with both `:vX.Y.Z` and `:latest` tags. Cache via
+  `type=gha,scope=<image>`.
+- CI gains docker-build smoke steps for both images +
+  `docker compose config` validation for both profiles.
+- DEPLOY.md "Local: docker compose" section rewritten around
+  the two-service default + the observability profile +
+  "pull prebuilt from GHCR" option.
+
+The compose `observability` profile completes the P5 Theme D
+loop: dashboard JSON + alert YAML existed since slice D; now
+the orchestration that brings them up lives next to them.
+
 ## M15 — feat: observability artifacts (P5 Theme D) (2026-05-17)
 
 Fourth Phase 5 PR. The world has been exposing `/metrics` since

@@ -49,18 +49,25 @@ Stop with Ctrl-C; SQLite + workspaces persist between runs.
 
 ## Local: docker compose
 
-Same image you'd ship to a cloud target, running on your laptop.
+Same images you'd ship to a cloud target, running on your laptop. Two
+services by default (`world` + `frontend`); an opt-in `observability`
+profile adds Prometheus + Grafana (P5 Theme D dashboards).
 
 ```bash
-# Build + boot.
+# Build + boot world + frontend.
 docker compose up -d --build
+
+# Add the obs stack.
+docker compose --profile observability up -d
 
 # Tail logs.
 docker compose logs -f world
 
 # Health check.
-curl http://localhost:8080/health
-# → {"ok": true}
+curl http://localhost:8080/health     # → {"ok": true}
+curl http://localhost:3000/health.txt # → ok
+# Open the console in a browser:
+open http://localhost:3000/console
 
 # Stop (data persists in volumes).
 docker compose down
@@ -68,6 +75,29 @@ docker compose down
 # Wipe everything including SQLite data + workspaces.
 docker compose down -v
 ```
+
+### Prebuilt images from GHCR
+
+Tagged releases push multi-arch images to GHCR
+(`ghcr.io/<owner>/cliptown-{world,frontend}:<version>`). To pull
+instead of build locally, replace the `build:` keys with the
+matching `image: ghcr.io/...:vX.Y.Z` and skip `--build`:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+### Observability profile
+
+The `observability` profile boots Prometheus (port 9090) +
+Grafana (port 3001, anonymous-admin) wired together. Grafana
+auto-provisions the cliptown dashboard from
+`docs/observability/grafana/cliptown-overview.json`; Prometheus
+loads the alert rules from
+`docs/observability/alerts/cliptown.yml`. Open
+`http://localhost:3001/dashboards` and the "cliptown" folder
+appears on boot.
 
 ### Required env
 
