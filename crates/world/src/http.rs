@@ -155,18 +155,19 @@ pub async fn build_console_snapshot(
     // snapshot rather than a side fetch.
     let startups: Vec<serde_json::Value> = sqlx::query_as::<
         _,
-        (String, String, f64, f64, i64, i64, i64),
+        (String, String, f64, f64, i64, i64, i64, i64, i64),
     >(
         "SELECT id, name, budget_spent_usd, budget_cap_usd, \
          COALESCE((SELECT MAX(ts) FROM system_events WHERE startup_id = startups.id), created_at), \
-         auto_steal_enabled, auto_steal_after_secs \
+         auto_steal_enabled, auto_steal_after_secs, \
+         auto_recovery_enabled, auto_recovery_max_attempts \
          FROM startups WHERE status = 'active'",
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(id, name, spent, cap, last_ts, autosteal, autosteal_secs)| {
+    .map(|(id, name, spent, cap, last_ts, autosteal, autosteal_secs, recovery, recovery_max)| {
         json!({
             "id": id,
             "name": name,
@@ -175,6 +176,8 @@ pub async fn build_console_snapshot(
             "last_event_ts": last_ts,
             "auto_steal_enabled": autosteal != 0,
             "auto_steal_after_secs": autosteal_secs,
+            "auto_recovery_enabled": recovery != 0,
+            "auto_recovery_max_attempts": recovery_max,
         })
     })
     .collect();

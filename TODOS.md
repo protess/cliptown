@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M16 feat — auto-recovery on review failure (P6 Theme C) — 2026-05-17
+**Source:** Third and final Phase 6 PR (per #93 roadmap). Closes Phase 6. PR `<TBD>`.
+
+Was: tasks the manager kept bouncing sat at `changes_requested` until `max_review_rounds` escalated to operator. No automated rescue path.
+
+Fixed: migration 0015 adds `startups.auto_recovery_enabled` + `auto_recovery_max_attempts`. New `scheduler::auto_recovery_pass` reassigns tasks past the threshold to an idle same-role peer (resets to `queued`, review_round=0). Mirrors P4 E3 task_steal SQL pattern. `task_recovered` system_event surfaces as a toast via the Theme G slice 1 surfacing pattern. Admin-only `StartupSetAutoRecovery` ConsoleInbound + handler. Snapshot extends startups with both fields; `StartupVM` + new `AutoRecoveryToggle` pill in MainHeader (teal). 4 scheduler tests + 1 http_smoke test. Closes Phase 6.
+
 ### M16 feat — structured tool surface (P6 Theme B) — 2026-05-17
 **Source:** Second Phase 6 PR (per #93 roadmap). PR `<TBD>`.
 

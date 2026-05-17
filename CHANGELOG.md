@@ -1,5 +1,54 @@
 # Changelog
 
+## M16 — feat: auto-recovery on review failure (P6 Theme C) (2026-05-17)
+
+Third and final Phase 6 PR. Closes the Phase 6 roadmap.
+Before this, a task that the manager kept bouncing would sit
+at `changes_requested` until `max_review_rounds` escalated
+it to the operator. Now, opt-in per startup, the scheduler
+tries to rescue the task by reassigning to an idle same-role
+peer first.
+
+- Migration 0015 adds
+  `startups.auto_recovery_enabled INTEGER NOT NULL DEFAULT 0`
+  + `startups.auto_recovery_max_attempts INTEGER NOT NULL
+  DEFAULT 2`.
+- `scheduler::tick` runs a new `auto_recovery_pass` after
+  the auto-steal pass:
+  - For each enabled startup, find `changes_requested` tasks
+    where `review_round >= max_attempts`.
+  - Pick an idle same-role peer (not the current assignee).
+    Reuses the SQL pattern from P4 E3 `task_steal`.
+  - UPDATE assignee + reset status to `queued` + reset
+    review_round to 0 + bump updated_at. Same-row WHERE
+    clause makes concurrent steals lose cleanly.
+  - Audit row + `task_recovered` system_event with
+    `strategy: "peer_reassign"`, severity `info`.
+- New admin-only `StartupSetAutoRecovery {startup_id,
+  enabled, max_attempts?}` ConsoleInbound. Mirrors P4 E3's
+  `StartupSetAutoSteal`. `max_attempts == None` leaves the
+  SQL default in place.
+- Snapshot's `startups[*]` now carries
+  `auto_recovery_enabled` + `auto_recovery_max_attempts`
+  for client hydration.
+- Frontend `StartupVM` + indexer parse both fields. New
+  `AutoRecoveryToggle` pill in MainHeader (admin-only,
+  teal color to distinguish from auto-steal's blue) with
+  inline popover for enable + max_attempts input.
+- `task_recovered` joins the toast-worthy SystemEvent set
+  with a prettifier entry "T1 recovered e1 → e2
+  (peer_reassign)".
+- 4 new scheduler integration tests (reassigns when over
+  threshold / skips when under / disabled is noop / skips
+  when no idle peer). New http_smoke test pins the
+  snapshot enrichment.
+
+Phase 6 close: A self-review gates, B structured tool
+surface, C auto-recovery. Agents now catch their own bad
+artifacts before manager review, run real tests/lints with
+audit, and the system rescues stuck tasks before they
+escalate to a human.
+
 ## M16 — feat: structured tool surface for self-review (P6 Theme B) (2026-05-17)
 
 Second Phase 6 PR. P6.A shipped the self-review gate but the

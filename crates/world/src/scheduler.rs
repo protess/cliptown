@@ -406,6 +406,14 @@ pub async fn tick(
     // case where one engineer's queue stays warm while a peer sits idle.
     auto_steal_pass(world, pool, event_tx).await;
 
+    // P6 Theme C: opt-in auto-recovery pass. For each startup with
+    // `auto_recovery_enabled = 1`, find tasks in `changes_requested`
+    // whose `review_round >= auto_recovery_max_attempts` and reassign
+    // to an idle same-role peer (resetting status to `queued`). If no
+    // peer is available, the task stays where it is and the next
+    // round eventually escalates via the existing flow.
+    auto_recovery_pass(world, pool, event_tx).await;
+
     if dispatched > 0 || tick_start.elapsed().as_millis() > 5 {
         // Only log non-trivial ticks. Quiet ticks (0 dispatches, <5ms) are
         // skipped so /metrics' tick_seq counter is the cheap path; this
@@ -533,6 +541,125 @@ async fn auto_steal_pass(
                     "new_assignee": peer_id,
                     "previous_assignee": current_assignee,
                     "mode": "auto",
+                })
+                .to_string(),
+                "info",
+            )
+            .await;
+        }
+    }
+}
+
+/// P6 Theme C: per-tick auto-recovery pass. For each startup with
+/// `auto_recovery_enabled = 1`, find tasks in `changes_requested`
+/// whose `review_round >= auto_recovery_max_attempts` and reassign
+/// to an idle same-role peer. Mirrors the `auto_steal_pass` plumbing
+/// — the SQL gate is `assignee = old_assignee AND review_round >=
+/// threshold AND status = 'changes_requested'`, so a concurrent
+/// manual `task_steal` between SELECT and UPDATE loses the race
+/// cleanly. Emits `task_recovered` system_event with severity info
+/// on success.
+async fn auto_recovery_pass(
+    world: &WorldView,
+    pool: &SqlitePool,
+    event_tx: &tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+) {
+    let startups: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT id, auto_recovery_max_attempts FROM startups WHERE auto_recovery_enabled = 1",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (startup_id, max_attempts) in startups {
+        // Find changes_requested tasks past the threshold.
+        let candidates: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT id, assignee_agent_id, review_round FROM tasks \
+             WHERE startup_id = ? AND status = 'changes_requested' \
+               AND assignee_agent_id IS NOT NULL \
+               AND review_round >= ?",
+        )
+        .bind(&startup_id)
+        .bind(max_attempts)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+        for (task_id, current_assignee, review_round) in candidates {
+            // Look up the current assignee's role for same-role peer
+            // pick.
+            let assignee_role: Option<String> =
+                sqlx::query_scalar("SELECT role FROM agents WHERE id = ?")
+                    .bind(&current_assignee)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
+            let Some(role) = assignee_role else { continue };
+            // Pick the first idle same-role peer that isn't the
+            // current assignee.
+            let peer_id = world.avatars.iter().find_map(|(id, a)| {
+                if a.startup_id == startup_id
+                    && a.role == role
+                    && a.status == "idle"
+                    && *id != current_assignee
+                {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            });
+            let Some(peer_id) = peer_id else { continue };
+
+            // Reassign + reset to queued. Same-row WHERE clause on
+            // assignee + status so we don't clobber a manual steal or
+            // a re-flip that happened between SELECT and UPDATE.
+            let res = sqlx::query(
+                "UPDATE tasks SET assignee_agent_id = ?, status = 'queued', \
+                                  review_round = 0, updated_at = unixepoch() \
+                 WHERE id = ? AND status = 'changes_requested' \
+                   AND assignee_agent_id = ?",
+            )
+            .bind(&peer_id)
+            .bind(&task_id)
+            .bind(&current_assignee)
+            .execute(pool)
+            .await;
+            let rows = match res {
+                Ok(r) => r.rows_affected(),
+                Err(e) => {
+                    tracing::warn!(component = "scheduler",
+                        task_id = %task_id, error = %e,
+                        "auto-recovery UPDATE failed"
+                    );
+                    continue;
+                }
+            };
+            if rows == 0 {
+                continue;
+            }
+            let _ = crate::persist::append_audit(
+                pool,
+                &task_id,
+                &json!({
+                    "actor": "scheduler",
+                    "kind": "task_recovered",
+                    "strategy": "peer_reassign",
+                    "from_agent_id": current_assignee,
+                    "to_agent_id": peer_id,
+                    "review_round_at_recovery": review_round,
+                })
+                .to_string(),
+            )
+            .await;
+            let _ = crate::emit::emit_system_event(
+                pool,
+                event_tx,
+                Some(&startup_id),
+                "task_recovered",
+                &json!({
+                    "task_id": task_id,
+                    "strategy": "peer_reassign",
+                    "from_agent_id": current_assignee,
+                    "to_agent_id": peer_id,
+                    "review_round_at_recovery": review_round,
                 })
                 .to_string(),
                 "info",

@@ -147,6 +147,7 @@ export function MainHeader({ startupId }: { startupId: string | null }) {
       </div>
 
       <AutoStealToggle startup={s} />
+      <AutoRecoveryToggle startup={s} />
 
       <Link
         to={`/town/${s.id}`}
@@ -314,3 +315,104 @@ const emptyStyle: CSSProperties = {
   borderBottom: "1px solid var(--border)",
   background: "var(--raised)",
 };
+
+/**
+ * P6 Theme C: admin-only per-startup auto-recovery toggle. Sits next
+ * to the auto-steal pill from P5.B and follows the same popover
+ * pattern. Threshold input is `max_attempts` (review rounds before
+ * recovery fires), not seconds.
+ */
+function AutoRecoveryToggle({ startup }: { startup: import("../store.js").StartupVM }) {
+  const { state, send } = useWorld();
+  const [open, setOpen] = useState(false);
+  const [draftMax, setDraftMax] = useState<string>(
+    String(startup.auto_recovery_max_attempts ?? 2),
+  );
+
+  if (state.currentOperator?.role !== "admin") return null;
+
+  const enabled = startup.auto_recovery_enabled === true;
+  const max = startup.auto_recovery_max_attempts ?? 2;
+
+  const submit = (nextEnabled: boolean) => {
+    const parsed = parseInt(draftMax, 10);
+    const ma = Number.isFinite(parsed) && parsed >= 1 ? parsed : max;
+    send({
+      type: "startup_set_auto_recovery",
+      v: 1,
+      startup_id: startup.id,
+      enabled: nextEnabled,
+      max_attempts: ma,
+    });
+    setOpen(false);
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={recoveryPillStyle(enabled)}
+        data-testid="auto-recovery-toggle"
+        title="Per-startup auto-recovery on review failure (admin)"
+      >
+        Auto-recovery: {enabled ? `On (${max} attempts)` : "Off"}
+      </button>
+      {open && (
+        <div style={popoverStyle} role="dialog" aria-label="auto-recovery settings">
+          <div style={{ fontSize: 12, color: "var(--fg-secondary)", marginBottom: 6 }}>
+            Reassign changes_requested tasks to an idle peer after N review rounds.
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            <span style={{ fontSize: 12 }}>Max attempts:</span>
+            <input
+              type="number"
+              min={1}
+              value={draftMax}
+              onChange={(e) => setDraftMax(e.target.value)}
+              data-testid="auto-recovery-max"
+              style={{
+                width: 70,
+                font: "inherit",
+                fontSize: 12,
+                padding: "2px 6px",
+                background: "var(--raised)",
+                color: "var(--fg)",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+              }}
+            />
+          </label>
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            <button
+              onClick={() => submit(false)}
+              style={popButtonStyle}
+              data-testid="auto-recovery-disable"
+            >
+              Disable
+            </button>
+            <button
+              onClick={() => submit(true)}
+              style={{ ...popButtonStyle, fontWeight: 600 }}
+              data-testid="auto-recovery-enable"
+            >
+              Enable
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function recoveryPillStyle(enabled: boolean): CSSProperties {
+  return {
+    font: "inherit",
+    fontSize: 11,
+    background: enabled ? "#2A9D8F" : "var(--raised)",
+    color: enabled ? "white" : "var(--fg)",
+    border: "1px solid var(--border)",
+    borderRadius: 999,
+    padding: "4px 10px",
+    cursor: "pointer",
+  };
+}
