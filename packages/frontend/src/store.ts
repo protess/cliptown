@@ -142,6 +142,20 @@ export interface SkillVM {
 }
 
 /**
+ * P5 Theme C: a currently-held soft-lock on a destructive action.
+ * Keyed by `lock_key` (e.g. `task:T1:force_accept`). Renders as a
+ * "locked by Alice 25s" hint and disables the matching affordance
+ * until `expires_at`. Re-set by snapshot + ActionLocked broadcasts;
+ * removed by ActionUnlocked broadcasts.
+ */
+export interface ActionLockVM {
+  lock_key: string;
+  operator_id: string;
+  operator_name: string;
+  expires_at: number;
+}
+
+/**
  * P5 Theme A: operator presence entry. Re-broadcast by the world via
  * `ConsoleOutbound::OperatorPresence` on connect/disconnect, focus
  * change, and GC tick. `focused_startup_id == null` means the operator
@@ -213,6 +227,13 @@ export interface WorldState {
    * empty (which is correct: nobody else is on yet).
    */
   presence: PresenceVM[];
+  /**
+   * P5 Theme C: active soft-locks keyed by `lock_key`. Re-set on
+   * snapshot; mutated by `action_locked` / `action_unlocked`
+   * broadcasts. UI consumers check `actionLocks[lock_key]?.expires_at`
+   * to gate destructive affordances.
+   */
+  actionLocks: Record<string, ActionLockVM>;
 }
 
 export interface OperatorRow {
@@ -238,6 +259,7 @@ const INITIAL: WorldState = {
   mintedOperatorToken: null,
   currentOperator: null,
   presence: [],
+  actionLocks: {},
 };
 
 const MAX_SYSTEM_EVENTS = 200;
@@ -420,6 +442,29 @@ function coerceSkill(a: Record<string, unknown>): SkillVM {
   };
 }
 
+function coerceActionLock(o: Record<string, unknown>): ActionLockVM | null {
+  const lock_key = asString(o.lock_key);
+  if (!lock_key) return null;
+  return {
+    lock_key,
+    operator_id: asString(o.operator_id),
+    operator_name: asString(o.operator_name),
+    expires_at: typeof o.expires_at === "number" ? o.expires_at : 0,
+  };
+}
+
+function coerceActionLocks(raw: unknown): Record<string, ActionLockVM> {
+  if (!Array.isArray(raw)) return {};
+  const out: Record<string, ActionLockVM> = {};
+  for (const item of raw) {
+    const obj = asObject(item);
+    if (!obj) continue;
+    const lock = coerceActionLock(obj);
+    if (lock) out[lock.lock_key] = lock;
+  }
+  return out;
+}
+
 function severityFromString(s: unknown): SystemEventVM["severity"] {
   if (s === "warn" || s === "alert" || s === "critical") return s;
   return "info";
@@ -492,6 +537,49 @@ function reducer(state: WorldState, action: Action): WorldState {
   }
   const m = action.msg;
   switch (m.type) {
+    case "error": {
+      // P5 Theme C: surface `locked_by` errors as a transient warn
+      // toast so the operator sees "Bob just clicked this — wait
+      // 25s" instead of the silent reply being eaten.
+      if (asString((m as { reason?: unknown }).reason) === "locked_by") {
+        const who = asString((m as { operator_name?: unknown }).operator_name, "another operator");
+        const exp = typeof (m as { expires_at?: unknown }).expires_at === "number"
+          ? (m as { expires_at: number }).expires_at
+          : 0;
+        const now = Math.floor(Date.now() / 1000);
+        const remaining = Math.max(0, exp - now);
+        const toast: ToastVM = {
+          id: newId(),
+          ts: Date.now(),
+          severity: "warn",
+          body: remaining > 0
+            ? `Locked by ${who} — ${remaining}s`
+            : `Locked by ${who}`,
+          sticky: false,
+        };
+        const nextToasts = [...state.toasts, toast];
+        if (nextToasts.length > MAX_TOASTS) nextToasts.splice(0, nextToasts.length - MAX_TOASTS);
+        return { ...state, toasts: nextToasts };
+      }
+      return state;
+    }
+    case "action_locked": {
+      const info = asObject((m as { info?: unknown }).info);
+      if (!info) return state;
+      const lock = coerceActionLock(info);
+      if (!lock) return state;
+      return {
+        ...state,
+        actionLocks: { ...state.actionLocks, [lock.lock_key]: lock },
+      };
+    }
+    case "action_unlocked": {
+      const key = asString((m as { lock_key?: unknown }).lock_key);
+      if (!key || !(key in state.actionLocks)) return state;
+      const next = { ...state.actionLocks };
+      delete next[key];
+      return { ...state, actionLocks: next };
+    }
     case "operator_presence": {
       const raw = (m as { presences?: unknown }).presences;
       if (!Array.isArray(raw)) return state;
@@ -529,6 +617,12 @@ function reducer(state: WorldState, action: Action): WorldState {
       const snap = asObject(m.snapshot) ?? {};
       const avatars = indexAvatars(snap.avatars);
       const catalog = asObject(snap.backend_catalog) ?? {};
+      // P5 Theme C: hydrate active soft-locks. Field absent → keep
+      // existing (e.g. mid-reconnect); present → replace.
+      const locksField = (snap as Record<string, unknown>).action_locks;
+      const actionLocks = locksField === undefined
+        ? state.actionLocks
+        : coerceActionLocks(locksField);
       // Codex round-5 P2#4: distinguish "field absent" (preserve previous
       // state) from "field present but empty" (clear). The previous code
       // collapsed both cases via `Object.keys(...).length > 0`, so a
@@ -547,6 +641,7 @@ function reducer(state: WorldState, action: Action): WorldState {
         startups,
         tasks,
         backendCatalog: catalog,
+        actionLocks,
       };
     }
     case "world_view_delta": {

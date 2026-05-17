@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M15 feat — soft-locks on destructive actions (P5 Theme C) — 2026-05-17
+**Source:** Third Phase 5 PR (per #85 roadmap). PR `<TBD>`.
+
+Was: with two operators on the same cliptown, "Force-Accept T1" clicked simultaneously would clobber each other silently — no server-side gate, no UI feedback that another operator was mid-action.
+
+Fixed: migration 0013 adds `action_locks` table with `UNIQUE(lock_key)` as test-and-set. New `crates/world/src/action_locks.rs` (acquire/release/gc/list_active). `cmd_console::OperatorForceAccept` / `OperatorForceFail` / `OperatorRevoke` wrap with 30s locks; conflict → `locked_by` error. New `ActionLocked` / `ActionUnlocked` ConsoleOutbound broadcasts; snapshot carries `action_locks`. 5s lock GC tick in `loop_::spawn_with_layout` drops expired rows + broadcasts unlocks. Frontend `ActionLockVM` + reducer; `type:"error", reason:"locked_by"` surfaces as a transient warn toast "Locked by Alice — 25s". 6 unit tests + test fixture updates across console_cmds/e2e_force_actions for the new operators FK + lock broadcast filter. v1 doesn't disable buttons per-lock — server-side gate + toast is the v1 UX.
+
 ### M15 feat — per-operator audit visibility (P5 Theme B) — 2026-05-17
 **Source:** Second Phase 5 PR (per #85 roadmap). PR `<TBD>`.
 

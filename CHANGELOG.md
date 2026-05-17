@@ -1,5 +1,48 @@
 # Changelog
 
+## M15 — feat: soft-locks on destructive actions (P5 Theme C) (2026-05-17)
+
+Third Phase 5 PR. Two operators clicking "Force-Accept T1" at
+the same time can no longer clobber each other. The second
+click bounces with a friendly "locked by Alice — 25s" toast
+while the first finishes.
+
+- Migration 0013 adds `action_locks { id, lock_key UNIQUE,
+  operator_id, acquired_at, expires_at }`. `lock_key` is a
+  namespaced string (`task:T1:force_accept`,
+  `operator:op_xyz:revoke`). `UNIQUE` is the test-and-set.
+- New `crates/world/src/action_locks.rs`: `try_acquire`
+  (returns `Err(Conflict(LockConflict))` on contention),
+  `release`, `gc_expired` (returns dropped keys for
+  broadcasting), `list_active`.
+- `cmd_console`'s `OperatorForceAccept`, `OperatorForceFail`,
+  and `OperatorRevoke` paths wrap with 30s soft-locks. Conflict
+  reply: `{type:"error",reason:"locked_by",operator_name,
+  expires_at}`. Lock release on success or via the GC tick.
+- `loop_::spawn_with_layout` spawns a 5s lock GC tick that
+  drops expired rows and emits `ActionUnlocked` so peers
+  re-enable their UI without polling.
+- New `ConsoleOutbound::ActionLocked { info }` +
+  `ConsoleOutbound::ActionUnlocked { lock_key }` broadcasts
+  on acquire/release/GC. Snapshot includes `action_locks: []`
+  for hydration on new connections.
+- Frontend `ActionLockVM` + `state.actionLocks`. Reducer
+  handles `action_locked` / `action_unlocked` broadcasts and
+  parses the snapshot field. `type:"error"` with
+  `reason:"locked_by"` surfaces as a transient warn toast
+  showing "Locked by Alice — 25s".
+- 6 unit tests on the locks module (acquire/conflict/release/
+  stale-sweep/gc/list_active). Test fixtures across
+  `console_cmds`, `e2e_force_actions` now seed `operators`
+  rows so the FK on `action_locks.operator_id` holds; broadcast
+  assertions filter `ActionLocked`/`ActionUnlocked`
+  infrastructure frames.
+
+v1 deliberately doesn't disable buttons per-lock in Card/
+Kanban — the server-side gate is the real safety, and the
+toast on conflict covers the UX. Per-button disable can land
+as a Theme G-style polish slice if friction shows.
+
 ## M15 — feat: per-operator audit visibility (P5 Theme B) (2026-05-17)
 
 Second Phase 5 PR. Audit/history surfaces stop showing the

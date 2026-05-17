@@ -121,7 +121,7 @@ pub fn spawn_with_layout(
     let presence = crate::presence::new_registry();
     let presence_for_gc = presence.clone();
     let presence_for_handle = presence.clone();
-    let event_tx_for_gc = event_tx;
+    let event_tx_for_gc = event_tx.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         interval.tick().await; // skip immediate first tick
@@ -137,6 +137,34 @@ pub fn spawn_with_layout(
                         presences: serde_json::to_value(&snap).unwrap_or(serde_json::Value::Null),
                     },
                 );
+            }
+        }
+    });
+
+    // P5 Theme C: action-lock GC tick. Drops expired rows every 5s
+    // and broadcasts unlock frames so peers re-enable affordances
+    // even if the holding session crashed mid-action.
+    let lock_pool = pool.clone();
+    let event_tx_for_lock_gc = event_tx;
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let now = chrono::Utc::now().timestamp();
+            match crate::action_locks::gc_expired(&lock_pool, now).await {
+                Ok(keys) => {
+                    for k in keys {
+                        let _ = event_tx_for_lock_gc.send(
+                            crate::protocol::ConsoleOutbound::ActionUnlocked {
+                                v: 1, lock_key: k,
+                            },
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(component = "loop", err = %e, "action_locks gc failed");
+                }
             }
         }
     });

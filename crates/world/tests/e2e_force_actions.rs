@@ -23,6 +23,25 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::sync::{broadcast, mpsc};
 
+/// P5 Theme C: drain ActionLocked/ActionUnlocked broadcasts that
+/// every destructive action now emits. Tests below assert "no
+/// business broadcasts" after the action; this helper lets that
+/// assertion stay simple.
+fn drain_lock_broadcasts(rx: &mut broadcast::Receiver<ConsoleOutbound>) {
+    loop {
+        match rx.try_recv() {
+            Ok(ConsoleOutbound::ActionLocked { .. })
+            | Ok(ConsoleOutbound::ActionUnlocked { .. }) => continue,
+            Ok(other) => {
+                // Push it back is impossible; surface as a panic so we
+                // notice unexpected broadcasts instead of swallowing.
+                panic!("unexpected broadcast during drain: {other:?}");
+            }
+            Err(_) => break,
+        }
+    }
+}
+
 async fn fixture() -> sqlx::SqlitePool {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("test.db");
@@ -32,6 +51,9 @@ async fn fixture() -> sqlx::SqlitePool {
     // sibling e2e suites that need the sqlite file on disk).
     std::mem::forget(dir);
 
+    // P5 Theme C: action_locks FK requires the operator row to exist.
+    sqlx::query("INSERT OR IGNORE INTO operators (id, name, token, role, created_at) VALUES ('op_test','test-admin','tok_admin','admin',unixepoch())")
+        .execute(&pool).await.unwrap();
     sqlx::query(
         "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
          VALUES ('s1', 'alpha', 'goal', 10.0, 'town_default', 'workspaces/s1', 'active', unixepoch())"
@@ -97,6 +119,9 @@ async fn force_accept_awaiting_review_to_done() {
     assert_eq!(row.0, "done");
     assert!(row.1.contains("force_accept"));
     assert!(row.1.contains("\"actor\":\"operator\""));
+    // P5 Theme C: drain ActionLocked/ActionUnlocked infrastructure
+    // broadcasts before asserting no other frames remain.
+    drain_lock_broadcasts(&mut event_rx);
     assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
@@ -128,6 +153,9 @@ async fn force_accept_from_in_progress_rejected() {
         .await
         .unwrap();
     assert_eq!(row.0, "in_progress");
+    // P5 Theme C: drain ActionLocked/ActionUnlocked infrastructure
+    // broadcasts before asserting no other frames remain.
+    drain_lock_broadcasts(&mut event_rx);
     assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
@@ -166,6 +194,9 @@ async fn force_fail_from_queued_to_failed_with_note() {
     assert!(row.1.contains("force_fail"));
     assert!(row.1.contains("abandoned by operator"));
     assert!(row.1.contains("\"actor\":\"operator\""));
+    // P5 Theme C: drain ActionLocked/ActionUnlocked infrastructure
+    // broadcasts before asserting no other frames remain.
+    drain_lock_broadcasts(&mut event_rx);
     assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
@@ -194,6 +225,9 @@ async fn force_fail_from_in_progress() {
         .await
         .unwrap();
     assert_eq!(row.0, "failed");
+    // P5 Theme C: drain ActionLocked/ActionUnlocked infrastructure
+    // broadcasts before asserting no other frames remain.
+    drain_lock_broadcasts(&mut event_rx);
     assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }
 
@@ -223,5 +257,8 @@ async fn force_fail_already_done_rejected() {
         .await
         .unwrap();
     assert_eq!(row.0, "done");
+    // P5 Theme C: drain ActionLocked/ActionUnlocked infrastructure
+    // broadcasts before asserting no other frames remain.
+    drain_lock_broadcasts(&mut event_rx);
     assert!(matches!(event_rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)));
 }

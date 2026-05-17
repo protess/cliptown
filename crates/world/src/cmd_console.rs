@@ -285,6 +285,28 @@ pub async fn dispatch(
         }
         ConsoleInbound::OperatorForceAccept { task_id, .. } => {
             if !is_manager { return forbidden(); }
+            // P5 Theme C: soft-lock so two operators don't double-resolve.
+            let lock_key = format!("task:{}:force_accept", task_id);
+            let lock = match crate::action_locks::try_acquire(
+                pool, &lock_key, &identity.id, crate::action_locks::DEFAULT_TTL_SECS,
+            ).await {
+                Ok(l) => l,
+                Err(crate::action_locks::AcquireError::Conflict(c)) => {
+                    return json!({
+                        "type":"error","reason":"locked_by",
+                        "lock_key": c.lock_key,
+                        "operator_name": c.operator_name,
+                        "expires_at": c.expires_at,
+                    });
+                }
+                Err(crate::action_locks::AcquireError::Sql(e)) => {
+                    return json!({"type":"error","reason":"sql","detail":e.to_string()});
+                }
+            };
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::ActionLocked {
+                v: 1,
+                info: serde_json::to_value(&lock).unwrap_or(serde_json::Value::Null),
+            });
             let result = apply_status_only_transition(
                 pool,
                 &task_id,
@@ -301,10 +323,36 @@ pub async fn dispatch(
                 )
                 .await;
             }
+            let _ = crate::action_locks::release(pool, &lock_key).await;
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::ActionUnlocked {
+                v: 1,
+                lock_key,
+            });
             result
         }
         ConsoleInbound::OperatorForceFail { task_id, note, .. } => {
             if !is_manager { return forbidden(); }
+            let lock_key = format!("task:{}:force_fail", task_id);
+            let lock = match crate::action_locks::try_acquire(
+                pool, &lock_key, &identity.id, crate::action_locks::DEFAULT_TTL_SECS,
+            ).await {
+                Ok(l) => l,
+                Err(crate::action_locks::AcquireError::Conflict(c)) => {
+                    return json!({
+                        "type":"error","reason":"locked_by",
+                        "lock_key": c.lock_key,
+                        "operator_name": c.operator_name,
+                        "expires_at": c.expires_at,
+                    });
+                }
+                Err(crate::action_locks::AcquireError::Sql(e)) => {
+                    return json!({"type":"error","reason":"sql","detail":e.to_string()});
+                }
+            };
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::ActionLocked {
+                v: 1,
+                info: serde_json::to_value(&lock).unwrap_or(serde_json::Value::Null),
+            });
             let result = apply_status_only_transition(
                 pool,
                 &task_id,
@@ -320,6 +368,11 @@ pub async fn dispatch(
                 )
                 .await;
             }
+            let _ = crate::action_locks::release(pool, &lock_key).await;
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::ActionUnlocked {
+                v: 1,
+                lock_key,
+            });
             result
         }
         ConsoleInbound::OperatorRecheckBackends => {
@@ -521,9 +574,39 @@ pub async fn dispatch(
                 // Self-revoke would lock the admin out mid-session — refuse.
                 return json!({"type":"error","reason":"cannot_revoke_self"});
             }
+            // P5 Theme C: prevent two admins from dueling on the same revoke.
+            let lock_key = format!("operator:{}:revoke", operator_id);
+            let lock = match crate::action_locks::try_acquire(
+                pool, &lock_key, &identity.id, crate::action_locks::DEFAULT_TTL_SECS,
+            ).await {
+                Ok(l) => l,
+                Err(crate::action_locks::AcquireError::Conflict(c)) => {
+                    return json!({
+                        "type":"error","reason":"locked_by",
+                        "lock_key": c.lock_key,
+                        "operator_name": c.operator_name,
+                        "expires_at": c.expires_at,
+                    });
+                }
+                Err(crate::action_locks::AcquireError::Sql(e)) => {
+                    return json!({"type":"error","reason":"sql","detail":e.to_string()});
+                }
+            };
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::ActionLocked {
+                v: 1,
+                info: serde_json::to_value(&lock).unwrap_or(serde_json::Value::Null),
+            });
             let r = sqlx::query("DELETE FROM operators WHERE id = ?")
                 .bind(&operator_id)
                 .execute(pool).await;
+            // Revoking the operator cascades the lock row (FK ON DELETE
+            // CASCADE on operator_id), so explicit release here is for
+            // the failure path. Safe either way.
+            let _ = crate::action_locks::release(pool, &lock_key).await;
+            let _ = event_tx.send(crate::protocol::ConsoleOutbound::ActionUnlocked {
+                v: 1,
+                lock_key,
+            });
             match r {
                 Ok(res) if res.rows_affected() == 0 => {
                     json!({"type":"error","reason":"not_found"})

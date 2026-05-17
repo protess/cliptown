@@ -10,6 +10,16 @@ async fn fresh() -> (WorldView, sqlx::SqlitePool) {
     let p = dir.path().join("test.db");
     let pool = storage::open(p.to_str().unwrap()).await.unwrap();
     seed::seed_if_empty(&pool).await.unwrap();
+    // P5 Theme C: seed the operator rows used by `admin()` / `viewer()`
+    // / `op_m` manager identity so destructive-path soft-locks
+    // (FK on operators.id) can acquire. OR IGNORE so tests that
+    // explicitly re-insert these rows (legacy pattern) don't fail.
+    sqlx::query("INSERT OR IGNORE INTO operators (id, name, token, role, created_at) VALUES ('op_test','test-admin','tok_admin','admin',unixepoch())")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT OR IGNORE INTO operators (id, name, token, role, created_at) VALUES ('op_v','viewer','tok_v','viewer',unixepoch())")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT OR IGNORE INTO operators (id, name, token, role, created_at) VALUES ('op_m','manager','tok_m','manager',unixepoch())")
+        .execute(&pool).await.unwrap();
     std::mem::forget(dir);
     (WorldView::default(), pool)
 }
@@ -32,7 +42,18 @@ fn expect_no_broadcasts(
     let mut found = Vec::new();
     loop {
         match rx.try_recv() {
-            Ok(frame) => found.push(frame),
+            Ok(frame) => {
+                // P5 Theme C: ActionLocked/ActionUnlocked are infrastructure
+                // broadcasts emitted around every destructive action.
+                // These tests assert "no business broadcasts," so we
+                // filter them out here rather than touching every
+                // assertion site.
+                match frame {
+                    cliptown_world::protocol::ConsoleOutbound::ActionLocked { .. }
+                    | cliptown_world::protocol::ConsoleOutbound::ActionUnlocked { .. } => continue,
+                    other => found.push(other),
+                }
+            }
             Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
             Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
             Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
@@ -40,7 +61,7 @@ fn expect_no_broadcasts(
     }
     assert!(
         found.is_empty(),
-        "expected no console broadcasts, found {} frame(s): {:?}",
+        "expected no business broadcasts, found {} frame(s): {:?}",
         found.len(),
         found
     );
@@ -508,7 +529,7 @@ async fn operator_revoke_refuses_self() {
     let (event_tx, _rx) = make_event_tx();
     // The admin_for_tests identity has id = "op_test" — insert that row so
     // the self-revoke path is meaningful.
-    sqlx::query("INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_test','self','tok_self','admin',unixepoch())")
+    sqlx::query("INSERT OR REPLACE INTO operators (id, name, token, role, created_at) VALUES ('op_test','self','tok_self','admin',unixepoch())")
         .execute(&pool).await.unwrap();
     let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
         "type":"operator_revoke","v":1,"operator_id":"op_test"
@@ -639,7 +660,7 @@ async fn skill_list_revisions_operator_returns_history() {
     // Seed the admin operator row so append_revision's FK
     // (created_by_operator_id REFERENCES operators) doesn't soft-fail.
     sqlx::query(
-        "INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_test','test-admin','tok','admin',unixepoch())"
+        "INSERT OR REPLACE INTO operators (id, name, token, role, created_at) VALUES ('op_test','test-admin','tok','admin',unixepoch())"
     ).execute(&pool).await.unwrap();
     // Create + edit to generate two revisions.
     let r1 = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
@@ -676,7 +697,7 @@ async fn skill_revert_operator_restores_historical_content() {
          VALUES ('s1', 'a', 'g', 10.0, 'town_default', '/tmp/s1', 'active', unixepoch())"
     ).execute(&pool).await.unwrap();
     sqlx::query(
-        "INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_test','test-admin','tok','admin',unixepoch())"
+        "INSERT OR REPLACE INTO operators (id, name, token, role, created_at) VALUES ('op_test','test-admin','tok','admin',unixepoch())"
     ).execute(&pool).await.unwrap();
     let r1 = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
         "type":"skill_upsert_operator","v":1,"startup_id":"s1","skill_id":null,
@@ -723,7 +744,7 @@ async fn operator_set_role_refuses_self_demotion() {
     let (mut w, pool) = fresh().await;
     let bus = empty_bus();
     let (event_tx, _rx) = make_event_tx();
-    sqlx::query("INSERT INTO operators (id, name, token, role, created_at) VALUES ('op_test','self','tok_self','admin',unixepoch())")
+    sqlx::query("INSERT OR REPLACE INTO operators (id, name, token, role, created_at) VALUES ('op_test','self','tok_self','admin',unixepoch())")
         .execute(&pool).await.unwrap();
     let r = cmd_console::dispatch(&mut w, &pool, &bus, &event_tx, &admin(), json!({
         "type":"operator_set_role","v":1,"operator_id":"op_test","role":"viewer"
