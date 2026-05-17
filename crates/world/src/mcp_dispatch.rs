@@ -146,6 +146,7 @@ pub async fn dispatch(
         "skill_revert" => handle_skill_revert(pool, event_tx, &caller, args).await,
         "task_set_blocking" => handle_task_set_blocking(pool, event_tx, &caller, args).await,
         "task_steal" => handle_task_steal(pool, event_tx, &caller, args).await,
+        "self_review" => handle_self_review(pool, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
             format!("no handler for tool: {}", tool),
@@ -603,6 +604,32 @@ async fn handle_task_done(
     sandbox::resolve(&workspace_root, &inside)
         .map_err(|e| ("sandbox_violation".to_string(), format!("{e}")))?;
 
+    // P6 Theme A: optional auto_check gate. Default ON — agents that
+    // omit the field get the pre-submit check pipeline; agents that
+    // explicitly pass `auto_check: false` opt out (rare, but useful
+    // for special-cased manager submissions or migration scripts).
+    let auto_check = args
+        .get("auto_check")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    if auto_check {
+        let outcome =
+            crate::self_review::run(&caller.startup_id, &task_id, &artifact_path).await;
+        let _ = crate::self_review::record(
+            pool, &task_id, &caller.agent_id, &outcome,
+        )
+        .await;
+        if !outcome.ok {
+            // Surface the must_fix list as a structured error. The
+            // caller's adapter renders it back to the LLM so the agent
+            // can fix and retry without operator intervention.
+            return Err((
+                "must_fix".into(),
+                serde_json::to_string(&outcome.must_fix).unwrap_or_default(),
+            ));
+        }
+    }
+
     let new_status = next(task.status, &Transition::TaskDoneMcp)
         .map_err(|r| ("illegal_transition".to_string(), r.to_string()))?;
     sqlx::query(
@@ -979,7 +1006,9 @@ async fn handle_task_request_changes(
     let directive_id = uuid::Uuid::new_v4().to_string();
     let mut tx = pool.begin().await.map_err(|e| ("sql".into(), e.to_string()))?;
     sqlx::query(
-        "UPDATE tasks SET status = ?, review_round = review_round + 1, updated_at = unixepoch() WHERE id = ?",
+        "UPDATE tasks SET status = ?, review_round = review_round + 1, \
+                          self_reviewed_at = NULL, updated_at = unixepoch() \
+         WHERE id = ?",
     )
     .bind(status_to_str(new_status)).bind(&task_id)
     .execute(&mut *tx).await
@@ -1964,5 +1993,35 @@ async fn handle_task_steal(
         "task_id": task_id,
         "new_assignee": caller.agent_id,
         "previous_assignee": current_assignee,
+    }))
+}
+
+/// P6 Theme A: agent-driven self-review. Runs the v1 check pipeline +
+/// records the outcome in audit_trail. Always returns `Ok`; the inner
+/// `ok` flag tells the caller whether it passed. Errors are folded
+/// into the `must_fix` list. Same-startup gate is implicit — caller
+/// can only run self_review on tasks where they are the assignee
+/// (we enforce that explicitly).
+async fn handle_self_review(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let task_id = require_str(&args, "task_id")?.to_string();
+    let artifact_path = require_str(&args, "artifact_path")?.to_string();
+    let task = load_task(pool, &task_id).await?;
+    if task.startup_id != caller.startup_id {
+        return Err(("cross_startup".into(), "task belongs to another startup".into()));
+    }
+    if task.assignee_agent_id.as_deref() != Some(caller.agent_id.as_str()) {
+        return Err(("no_permission".into(), "self_review requires assignee".into()));
+    }
+    let outcome =
+        crate::self_review::run(&caller.startup_id, &task_id, &artifact_path).await;
+    let _ = crate::self_review::record(pool, &task_id, &caller.agent_id, &outcome).await;
+    Ok(json!({
+        "task_id": task_id,
+        "ok": outcome.ok,
+        "must_fix": outcome.must_fix,
     }))
 }

@@ -29,6 +29,7 @@ pub mod proximity;
 pub mod sandbox;
 pub mod scheduler;
 pub mod seed;
+pub mod self_review;
 pub mod skills;
 pub mod state;
 pub mod storage;

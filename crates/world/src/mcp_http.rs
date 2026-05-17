@@ -453,6 +453,18 @@ fn handle_tools_list() -> Value {
                 }
             }),
         ),
+        tool(
+            "self_review",
+            "Run the pre-submit self-review pipeline on this task's artifact. Returns {ok, must_fix:[{check,severity,message}]}. Severity 'error' blocks task_done; 'warn' is informational.",
+            json!({
+                "type": "object",
+                "required": ["task_id", "artifact_path"],
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "artifact_path": {"type": "string"}
+                }
+            }),
+        ),
     ]);
     json!({ "tools": tools })
 }
