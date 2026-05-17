@@ -1,0 +1,14 @@
+# P5 Theme E: auto-load the cliptown dashboard JSON. Grafana scans
+# /var/lib/grafana/dashboards (mounted from docs/observability/grafana
+# in the compose file) and picks up cliptown-overview.json on boot.
+apiVersion: 1
+providers:
+  - name: cliptown
+    type: file
+    folder: cliptown
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

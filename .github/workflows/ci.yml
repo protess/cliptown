@@ -26,3 +26,18 @@ jobs:
         run: pnpm --filter @cliptown/frontend e2e:install
       - name: E2E (mocked LLM)
         run: pnpm test:e2e
+
+      # P5 Theme E: verify both images build without pushing. Catches
+      # Dockerfile regressions before they break the tag-triggered
+      # release.yml run. Using `--load` keeps the images locally so
+      # docker-compose config validation can reference them.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Docker build smoke (world)
+        run: docker buildx build --load -t cliptown-world:ci -f Dockerfile .
+      - name: Docker build smoke (frontend)
+        run: docker buildx build --load -t cliptown-frontend:ci -f packages/frontend/Dockerfile .
+      - name: Validate docker-compose
+        run: docker compose config > /dev/null
+      - name: Validate docker-compose observability profile
+        run: docker compose --profile observability config > /dev/null

@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M15 feat — docker deploy pipeline (P5 Theme E) — 2026-05-17
+**Source:** Fifth Phase 5 PR (per #85 roadmap). PR `<TBD>`.
+
+Was: only the world image had a Dockerfile; frontend deploy was "build it yourself"; observability tooling was "build it yourself"; no tag-triggered release path existed.
+
+Fixed: new `packages/frontend/Dockerfile` (pnpm build → nginx serve with proxied `/api/*` `/ws/*` `/metrics`). `docker-compose.yml` adds `frontend` service + profile-gated `observability` stack (prometheus + grafana with the P5.D dashboard + alert rules auto-provisioned). New `.github/workflows/release.yml` tag-triggered (`v*`) matrix build pushes multi-arch images to GHCR. CI gains docker-build smoke for both images + compose validation for both profiles. DEPLOY.md docker section rewritten around two-service default + observability profile + GHCR pull option.
+
 ### M15 feat — observability artifacts (P5 Theme D) — 2026-05-17
 **Source:** Fourth Phase 5 PR (per #85 roadmap). PR `<TBD>`.
 
