@@ -6,6 +6,15 @@ _(empty)_
 
 ## Completed
 
+### M15 feat — backup/restore drill (P5 Theme F) — 2026-05-17
+**Source:** Sixth and final Phase 5 PR (per #85 roadmap). Closes Phase 5. PR `<TBD>`.
+
+Was: SQLite WAL was fine for live performance but had no story for disk failure or catastrophic migration recovery. Once 2-5 humans depend on world state, lost state is phase-killing.
+
+Fixed: new `crates/world/src/backup.rs` with `VACUUM INTO`-backed hot snapshots, opt-in via `CLIPTOWN_BACKUP_DIR` + `CLIPTOWN_BACKUP_INTERVAL_HOURS` + `CLIPTOWN_BACKUP_KEEP`. Periodic Tokio tick spawned from `loop_::spawn_with_layout`; no-op when env unset. `scripts/restore-from-snapshot.sh` does the stop-swap-restart dance with an undoable `.pre-restore` backup. 6 integration tests incl. the full restore-drill cycle. DEPLOY.md "Backups" + "Restore drill" sections cover env vars + docker compose example.
+
+Phase 5 sealed: A (presence), B (audit visibility), C (soft-locks), D (obs artifacts), E (docker deploy), F (backup/restore). Small-team coordination tool is now a real product surface.
+
 ### M15 feat — docker deploy pipeline (P5 Theme E) — 2026-05-17
 **Source:** Fifth Phase 5 PR (per #85 roadmap). PR `<TBD>`.
 
