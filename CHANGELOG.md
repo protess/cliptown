@@ -1,5 +1,43 @@
 # Changelog
 
+## M15 — feat: operator presence (P5 Theme A) (2026-05-17)
+
+First Phase 5 PR. Two operators connected to the same cliptown
+no longer work in the dark — they see each other in the TopBar
+and as per-startup focus dots in the Sidebar. Foundation for
+P5.B (operator-name audit) and P5.C (soft-locks "locked by …").
+
+- New `crates/world/src/presence.rs` module: `PresenceRegistry`
+  (Arc<RwLock<HashMap<operator_id, PresenceEntry>>>) +
+  `upsert` / `drop_entry` / `gc` / `snapshot` helpers.
+  `PRESENCE_TTL_SECS = 90` (3× the 30s heartbeat).
+- `Handle` carries the registry. `loop_::spawn_with_layout`
+  spawns a 30s GC tick that drops stale entries and broadcasts
+  if any dropped.
+- `ConsoleOutbound::OperatorPresence { v, presences }`
+  re-broadcast on connect, disconnect, focus-change heartbeat,
+  and GC-with-drops. `ConsoleInbound::PresenceHeartbeat { v,
+  focused_startup_id? }` short-circuits in `handle_console`
+  (doesn't traverse the world loop — presence isn't world
+  state). The matching `cmd_console` arm returns a noop ack
+  to preserve the exhaustive-match invariant.
+- Frontend: `PresenceVM` + `state.presence` in the store,
+  reducer case for `operator_presence`. Console emits a
+  heartbeat on `selectedStartupId` change and every 30s.
+- New `PresenceAvatar` component with deterministic 8-hue
+  hash on `operator_id` so the same operator reads visually
+  consistent across panels (a primitive Theme B will reuse).
+- Sidebar renders up to 3 other-operator avatars per startup
+  row (filtering self out). TopBar shows online operators
+  next to the wordmark with a "+N" overflow pill.
+- 6 unit tests on the registry helpers (upsert new/same/
+  focus-change, drop, GC stale/at-boundary).
+
+v1 scope (per the roadmap): focus is tracked at startup
+granularity only. Possession-aware presence (which agent an
+operator is possessing) deferred — last-write-wins on
+`OperatorPossess` is acceptable for v1.
+
 ## M14 — feat: HistoryModal filtering + OperatorsPanel grouping (Theme G slice 5) (2026-05-17)
 
 Fifth and final Theme G slice. Closes the last two items in the

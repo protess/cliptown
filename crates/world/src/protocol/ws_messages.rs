@@ -105,6 +105,12 @@ pub enum ConsoleInbound {
     /// `skill_revert`) remain — these are the operator-console twins.
     SkillListRevisionsOperator { v: u8, startup_id: String, skill_id: String },
     SkillRevertOperator { v: u8, startup_id: String, skill_id: String, rev_seq: i64 },
+    /// P5 Theme A: operator presence heartbeat. Frontend emits on
+    /// startup-click (focus change) and on a 30s tick. Server upserts
+    /// the registry entry and re-broadcasts presence if anything
+    /// changed. `focused_startup_id == None` means the operator has no
+    /// startup focused (e.g. on the empty sidebar).
+    PresenceHeartbeat { v: u8, focused_startup_id: Option<String> },
 }
 
 #[derive(Debug, Serialize, Deserialize, TS, Clone)]
@@ -166,4 +172,12 @@ pub enum ConsoleOutbound {
     /// surfaces (OperatorsPanel, the SkillsPanel global toggle) for
     /// viewer / manager operators. The wire never echoes the bearer token.
     HelloOk { v: u8, operator_id: String, operator_name: String, role: String },
+    /// P5 Theme A: operator presence list. Re-broadcast on
+    /// connect/disconnect/heartbeat-with-changed-focus and on each GC
+    /// tick that drops entries. `presences` is a JSON array of
+    /// `{operator_id, operator_name, role, focused_startup_id?,
+    /// last_seen_at}`. Untyped JsonValue here keeps presence::PresenceEntry
+    /// from cascading through the ts-rs export — the frontend store
+    /// coerces defensively.
+    OperatorPresence { v: u8, presences: serde_json::Value },
 }

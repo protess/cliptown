@@ -8,10 +8,11 @@
  * empty state hints at the "+ New Startup" affordance in the top bar.
  */
 
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import type { CSSProperties } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 import type { StartupVM } from "../store.js";
+import { PresenceAvatar } from "./PresenceAvatar.js";
 
 const HUES = [
   "#E63946", // red
@@ -47,6 +48,21 @@ export function Sidebar({
   const sorted = Object.values(state.startups)
     .slice()
     .sort((a, b) => recencyOf(b) - recencyOf(a));
+
+  // P5 Theme A: bucket presence entries by focused startup so each row
+  // can render the avatars of operators looking at it. Self-presence
+  // (currentOperator) is filtered out — no point showing your own face.
+  const presenceByStartup = useMemo(() => {
+    const out = new Map<string, typeof state.presence>();
+    for (const p of state.presence) {
+      if (!p.focused_startup_id) continue;
+      if (p.operator_id === state.currentOperator?.id) continue;
+      const arr = out.get(p.focused_startup_id) ?? [];
+      arr.push(p);
+      out.set(p.focused_startup_id, arr);
+    }
+    return out;
+  }, [state.presence, state.currentOperator?.id]);
 
   // FLIP: capture previous rects, then animate to new positions.
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -138,12 +154,23 @@ export function Sidebar({
                 {budgetLabel(s)}
               </div>
             </div>
-            <code
-              style={{ fontSize: 11, color: "var(--fg-secondary)" }}
-              title={s.id}
-            >
-              {s.id.slice(0, 6)}
-            </code>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              {(presenceByStartup.get(s.id) ?? []).slice(0, 3).map((p) => (
+                <PresenceAvatar
+                  key={p.operator_id}
+                  operatorId={p.operator_id}
+                  name={p.operator_name}
+                  size={16}
+                  title={`${p.operator_name} is focused here`}
+                />
+              ))}
+              <code
+                style={{ fontSize: 11, color: "var(--fg-secondary)" }}
+                title={s.id}
+              >
+                {s.id.slice(0, 6)}
+              </code>
+            </div>
           </div>
         ))}
       </div>

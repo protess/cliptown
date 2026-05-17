@@ -75,6 +75,7 @@ pub async fn dispatch(
         ConsoleInbound::StartupSetAutoSteal { .. } => "startup_set_auto_steal",
         ConsoleInbound::SkillListRevisionsOperator { .. } => "skill_list_revisions_operator",
         ConsoleInbound::SkillRevertOperator { .. } => "skill_revert_operator",
+        ConsoleInbound::PresenceHeartbeat { .. } => "presence_heartbeat",
     };
     tracing::debug!(
         component = "cmd_console",
@@ -641,6 +642,14 @@ pub async fn dispatch(
                 }
                 Err(e) => json!({"type":"error","reason":"sql","detail":format!("{e:?}")}),
             }
+        }
+        ConsoleInbound::PresenceHeartbeat { .. } => {
+            // P5 Theme A: handled by `http::handle_console` before the
+            // message reaches the world loop. Reachable only if a
+            // future code path forwards a heartbeat through `Cmd::
+            // HandleConsoleMsg` — return a noop ack rather than err so
+            // the WS client doesn't surface a false-positive error.
+            json!({"type":"ok","kind":"presence_heartbeat"})
         }
     };
     tracing::debug!(

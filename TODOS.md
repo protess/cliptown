@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M15 feat — operator presence (P5 Theme A) — 2026-05-17
+**Source:** First Phase 5 PR (per #85 roadmap). PR `<TBD>`.
+
+Was: two operators connected to the same cliptown couldn't see each other. No way to know if a teammate was looking at the same startup, mid-edit, or already inside the kanban you're about to touch.
+
+Fixed: new `crates/world/src/presence.rs` registry on `Handle` with TTL'd entries (90s, 3× heartbeat). `ConsoleOutbound::OperatorPresence` broadcasts on connect/disconnect/focus-change/GC. `ConsoleInbound::PresenceHeartbeat` short-circuits in `handle_console`. Frontend `Console.tsx` emits 30s heartbeats keyed off `selectedStartupId`. New `PresenceAvatar` with deterministic 8-hue hash on `operator_id` (reusable for B's audit visibility). Sidebar shows up to 3 other-operator avatars per startup row; TopBar shows online operators with "+N" overflow. 6 unit tests on the registry helpers. v1 = startup-level focus only; possession-aware presence deferred.
+
 ### M14 feat — HistoryModal filtering + OperatorsPanel grouping (Theme G slice 5) — 2026-05-17
 **Source:** Fifth and final Theme G slice. Drains the last two roadmap items (#75) — "HistoryModal richer filtering" + "OperatorsPanel grouped by role". PR `<TBD>`.
 
