@@ -123,7 +123,8 @@ async fn broadcasts_on_operator_directive() {
 
     let frame = ctx.expect_one_broadcast();
     let cliptown_world::protocol::ConsoleOutbound::Directive {
-        v, message_id: emitted_id, ts, startup_id, author_id, to_agent_id, body, in_response_to_task,
+        v, message_id: emitted_id, ts, startup_id, author_id, author_display_name,
+        to_agent_id, body, in_response_to_task,
     } = frame else {
         panic!("expected Directive");
     };
@@ -132,6 +133,8 @@ async fn broadcasts_on_operator_directive() {
     assert!(ts > 1_000_000_000_000, "ts should be milliseconds");
     assert_eq!(startup_id, "s1");
     assert_eq!(author_id, "operator");
+    // P5 Theme B: operator-sourced directives carry the resolved name.
+    assert!(author_display_name.is_some(), "operator name should resolve");
     assert_eq!(to_agent_id, "founder1");
     assert_eq!(body, "build the spec");
     assert_eq!(in_response_to_task, None);

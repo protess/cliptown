@@ -119,6 +119,13 @@ export interface MessageVM {
   startup_id: string;
   room_id: string | null;
   author_id: string;
+  /**
+   * P5 Theme B: operator-sourced directives carry the resolved
+   * operator name from the server. `null` for agent-sourced
+   * messages — the frontend resolves the agent name from
+   * `state.avatars[author_id]`.
+   */
+  author_display_name: string | null;
   body: string;
   kind: "chat" | "directive";
   recipient_id: string | null;
@@ -638,6 +645,8 @@ function reducer(state: WorldState, action: Action): WorldState {
         startup_id: asString(m.startup_id),
         room_id: typeof m.room_id === "string" ? m.room_id : null,
         author_id: asString(m.author_id, asString(m.from)),
+        author_display_name:
+          typeof m.author_display_name === "string" ? m.author_display_name : null,
         body: asString(m.body),
         kind,
         recipient_id: recipient,
