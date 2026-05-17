@@ -17,6 +17,7 @@ import { MainHeader } from "./MainHeader.js";
 import { Kanban } from "./Kanban.js";
 import { ChatPanel } from "./ChatPanel.js";
 import { SkillsPanel } from "./SkillsPanel.js";
+import { AgentsPanel } from "./AgentsPanel.js";
 import { OperatorsPanel } from "./OperatorsPanel.js";
 
 const OPERATOR_AVATAR_ID = "__operator__";
@@ -118,6 +119,7 @@ export function Console() {
             onDelete={onSkillDelete}
             onSetGlobal={onSkillSetGlobal}
           />
+          <AgentsPanel startupId={selectedStartupId} />
           <OperatorsPanel />
         </main>
       </div>

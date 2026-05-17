@@ -2,18 +2,16 @@
 
 ## Open
 
-### M14 feat — Theme G slice 2: admin toggles for is_peer_reviewer + auto_steal_enabled
-**Source:** Carry-forwards from E1 (#77) and E3 (#79). Theme G slice 1 (#80) closed the toast/marquee surfacing but the admin-side flip UI still doesn't exist.
-
-**Scope:**
-- Add `is_peer_reviewer` to AvatarView in `crates/world/src/state.rs` so the field reaches the snapshot; surface it in the frontend's `AvatarVM`.
-- Add `auto_steal_enabled` + `auto_steal_after_secs` to whatever WorldView.startups carries (today it's a stand-in; this is the moment to populate it).
-- New compact AgentsPanel mirroring OperatorsPanel structure: lists agents per startup with a peer-reviewer checkbox. Admin-only via `currentOperator.role === "admin"`.
-- Startup-settings popover (or fold into Sidebar) with the auto-steal flag + threshold input.
-
-**Size:** S-M (one focused PR).
+_(empty)_
 
 ## Completed
+
+### M14 feat — admin toggles for peer-reviewer + auto-steal (Theme G slice 2) — 2026-05-17
+**Source:** Second Theme G slice. Closes the E1 (#77) + E3 (#79) "operator-side admin UI deferred" notes. PR `<TBD>`.
+
+Was: E1 added `agents.is_peer_reviewer` and E3 added `startups.auto_steal_enabled` + `auto_steal_after_secs` to SQL, but the only way to flip them was raw SQL or hand-crafted WS frames.
+
+Fixed: `build_console_snapshot` enriches the snapshot — avatars carry `is_peer_reviewer` (joined from `agents` so the 46 AvatarView literal sites don't need cascading edits), startups carry both auto-steal fields. Frontend `AvatarVM` / `StartupVM` parse them. New admin-only `AgentsPanel` (collapsible, lists agents of the selected startup with peer-reviewer checkbox) and `AutoStealToggle` pill in `MainHeader` (inline popover for enable + threshold). Both wire to ConsoleInbound handlers that already existed from E1 + E3. 2 new http_smoke tests cover the snapshot enrichment incl. SQL defaults.
 
 ### M14 feat — SystemEvent toasts + readable marquee (Theme G slice 1) — 2026-05-17
 **Source:** First Theme G slice. Closes "operator-side surface for E2/E3 events" deferred from #78 + #79. PR `<TBD>`.
