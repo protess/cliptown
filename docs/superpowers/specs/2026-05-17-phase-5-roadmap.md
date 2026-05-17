@@ -271,7 +271,11 @@ teammate's avatar appears in the sidebar is the moment
 cliptown stops feeling like a solo tool), and lands the
 operator-id↔name lookup primitive that B and C reuse.
 
-Open question to resolve at brainstorm time: does presence
-need to track *which agent* an operator is possessing
-(possess-overlap is a real footgun) or is startup-level
-focus enough for v1?
+**v1 scope decision (resolved 2026-05-17):** presence tracks
+`focused_startup_id` only. Agent-possession overlap is a real
+footgun but lives outside P5.A — possess is already a
+single-slot operation (`OperatorPossess` replaces any prior
+`__operator__` avatar in that startup), so the worst case is
+last-write-wins, not silent data corruption. Add
+possession-aware presence in a follow-up if real friction
+shows up.
