@@ -1,5 +1,42 @@
 # Changelog
 
+## M15 — feat: backup/restore drill (P5 Theme F) (2026-05-17)
+
+Sixth and final Phase 5 PR. Closes the Phase 5 roadmap.
+Adds the SQLite hot-snapshot daemon, restore script, and an
+integration test that runs the full snapshot → mutate →
+restore cycle on every CI build.
+
+- New `crates/world/src/backup.rs`:
+  - `snapshot_to(pool, path)`: writes a hot snapshot via
+    `VACUUM INTO`. Path whitelist rejects quotes/backslashes
+    (the splice is inline; binds aren't supported by VACUUM
+    INTO).
+  - `prune(dir, keep)`: deletes oldest snapshots beyond
+    `keep`. Non-snapshot files in the dir are left alone.
+  - `spawn_backup_tick(pool)`: opt-in periodic task gated on
+    `CLIPTOWN_BACKUP_DIR`. Reads `CLIPTOWN_BACKUP_INTERVAL_
+    HOURS` (default 6) and `CLIPTOWN_BACKUP_KEEP` (default
+    14). Wired in `loop_::spawn_with_layout`. No-op when env
+    is unset, so existing deploys see no behavior change.
+- New `scripts/restore-from-snapshot.sh`: stop world → swap
+  files → remove stale WAL/SHM → restart. Backs up the
+  current live DB to `<live-db>.pre-restore` first so the
+  operation is undoable. Refuses corrupt snapshots via a
+  `sqlite3 ".tables"` precheck when the binary is available.
+- 6 integration tests including the full restore drill:
+  snapshot → mutate post-snapshot → swap files → re-open →
+  assert pre-snapshot state survives, post-snapshot rolled
+  back. Path-injection rejection + prune retention semantics
+  pinned.
+- DEPLOY.md gains "Backups" + "Restore drill" sections with
+  the env-var reference, a sample restore against the docker
+  compose volume path, and a pointer to the integration test.
+
+Phase 5 close: A presence, B audit visibility, C soft-locks,
+D obs artifacts, E docker deploy, F backup/restore.
+Small-team coordination tool is now a real product surface.
+
 ## M15 — feat: docker deploy pipeline (P5 Theme E) (2026-05-17)
 
 Fifth Phase 5 PR. DEPLOY.md described docker compose as an

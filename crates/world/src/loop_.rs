@@ -141,6 +141,11 @@ pub fn spawn_with_layout(
         }
     });
 
+    // P5 Theme F: opt-in periodic SQLite hot snapshot. No-op unless
+    // CLIPTOWN_BACKUP_DIR is set. Lives next to the other GC ticks
+    // so we don't sprinkle background tasks across the crate.
+    crate::backup::spawn_backup_tick(pool.clone());
+
     // P5 Theme C: action-lock GC tick. Drops expired rows every 5s
     // and broadcasts unlock frames so peers re-enable affordances
     // even if the holding session crashed mid-action.

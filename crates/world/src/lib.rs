@@ -5,6 +5,7 @@ pub mod api_startups;
 pub mod api_tasks;
 pub mod auth;
 pub mod backend_catalog;
+pub mod backup;
 pub mod budget;
 pub mod cmd_console;
 pub mod cmd_worker;

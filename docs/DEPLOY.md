@@ -99,6 +99,54 @@ loads the alert rules from
 `http://localhost:3001/dashboards` and the "cliptown" folder
 appears on boot.
 
+### Backups
+
+The world ships a SQLite hot-snapshot daemon that uses
+`VACUUM INTO` to write a clean, consistent copy of the live DB
+to a configured directory. Disabled by default; opt-in via env:
+
+```bash
+# In .env (or as docker compose environment overrides):
+CLIPTOWN_BACKUP_DIR=/data/backups       # required to enable
+CLIPTOWN_BACKUP_INTERVAL_HOURS=6        # default 6
+CLIPTOWN_BACKUP_KEEP=14                 # default 14 (~3.5 days at 6h)
+```
+
+Mount the backup dir on a separate volume from the live DB
+(another machine, S3 via rclone, etc.) so a disk-failure event
+on the live volume doesn't also lose the backups.
+
+Snapshots are named `cliptown-YYYYMMDD-HHMMSS.db`. Newest
+files are kept; the daemon prunes the tail to `KEEP` after
+each successful write. Non-snapshot files in the dir are left
+alone.
+
+### Restore drill
+
+A snapshot that nobody has tested is a snapshot you don't
+have. The restore procedure is intentionally a single shell
+script: stop the world, run the script, restart.
+
+```bash
+# 1. Stop the world (so the live DB isn't open).
+docker compose stop world
+
+# 2. Restore from a chosen snapshot. The script copies the
+#    current live DB to <live-db>.pre-restore first, so the
+#    operation is undoable.
+scripts/restore-from-snapshot.sh /data/backups/cliptown-20260517-060000.db \
+    --live-db /var/lib/docker/volumes/cliptown_cliptown-data/_data/cliptown.db
+
+# 3. Boot.
+docker compose start world
+curl http://localhost:8080/health
+```
+
+The integration test
+(`crates/world/tests/backup.rs::restore_from_snapshot_rolls_back_state`)
+runs the snapshot → mutate → restore cycle on every CI build to
+catch regressions in either path.
+
 ### Required env
 
 `.env` in the repo root (gitignored). Minimum:
