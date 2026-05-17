@@ -73,6 +73,11 @@ pub struct Handle {
     pub tx: mpsc::Sender<Cmd>,
     pub view_rx: watch::Receiver<WorldView>,
     pub event_tx: tokio::sync::broadcast::Sender<crate::protocol::ConsoleOutbound>,
+    /// P5 Theme A: presence registry shared across all console connections.
+    /// Each `handle_console` task upserts on connect and on heartbeat,
+    /// drops on disconnect. A background tick GCs stale entries
+    /// (> `presence::PRESENCE_TTL_SECS`).
+    pub presence: crate::presence::PresenceRegistry,
 }
 
 pub fn spawn(
@@ -110,7 +115,31 @@ pub fn spawn_with_layout(
     let mut layout = layout;
 
     let event_tx_for_handle = event_tx.clone();  // retained for Handle return value
-    let event_tx_owned = event_tx;  // moved into the spawn task; Task 5
+    let event_tx_owned = event_tx.clone();  // moved into the spawn task; Task 5
+    // P5 Theme A: presence registry shared with the GC tick and every
+    // `handle_console` task.
+    let presence = crate::presence::new_registry();
+    let presence_for_gc = presence.clone();
+    let presence_for_handle = presence.clone();
+    let event_tx_for_gc = event_tx;
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.tick().await; // skip immediate first tick
+        loop {
+            interval.tick().await;
+            let now = chrono::Utc::now().timestamp();
+            let dropped = crate::presence::gc(&presence_for_gc, now).await;
+            if dropped > 0 {
+                let snap = crate::presence::snapshot(&presence_for_gc).await;
+                let _ = event_tx_for_gc.send(
+                    crate::protocol::ConsoleOutbound::OperatorPresence {
+                        v: 1,
+                        presences: serde_json::to_value(&snap).unwrap_or(serde_json::Value::Null),
+                    },
+                );
+            }
+        }
+    });
     tokio::spawn(async move {
         while let Some(cmd) = rx.recv().await {
             match cmd {
@@ -239,6 +268,6 @@ pub fn spawn_with_layout(
         }
     });
 
-    Handle { tx, view_rx, event_tx: event_tx_for_handle }
+    Handle { tx, view_rx, event_tx: event_tx_for_handle, presence: presence_for_handle }
 }
 

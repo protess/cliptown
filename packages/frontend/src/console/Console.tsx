@@ -9,7 +9,7 @@
  * M12 P2.2 — SkillsPanel added below the Kanban. `possessedStartupId` is
  * derived from the `__operator__` avatar (same convention as ChatPanel).
  */
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 import { TopBar } from "./TopBar.js";
 import { Sidebar } from "./Sidebar.js";
@@ -108,6 +108,25 @@ export function Console() {
     },
     [send, possessedStartupId],
   );
+
+  // P5 Theme A: presence heartbeat. Sent immediately on focus change and
+  // every 30s thereafter. Server-side TTL is 90s so missing one beat
+  // (laptop sleep, brief tab switch) doesn't immediately drop us.
+  useEffect(() => {
+    send({
+      type: "presence_heartbeat",
+      v: 1,
+      focused_startup_id: selectedStartupId,
+    });
+    const id = window.setInterval(() => {
+      send({
+        type: "presence_heartbeat",
+        v: 1,
+        focused_startup_id: selectedStartupId,
+      });
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [send, selectedStartupId]);
 
   return (
     <div

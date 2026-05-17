@@ -344,6 +344,26 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
+    // P5 Theme A: register presence on connect, broadcast initial list.
+    {
+        let now = chrono::Utc::now().timestamp();
+        let _ = crate::presence::upsert(
+            &state.handle.presence,
+            &identity.id,
+            &identity.name,
+            identity.role.as_str(),
+            None,
+            now,
+        ).await;
+        let snap = crate::presence::snapshot(&state.handle.presence).await;
+        let _ = state.handle.event_tx.send(
+            crate::protocol::ConsoleOutbound::OperatorPresence {
+                v: 1,
+                presences: serde_json::to_value(&snap).unwrap_or(serde_json::Value::Null),
+            },
+        );
+    }
+
     // Phase 2: split + select! loop. Inbound frames go to the world via
     // `Cmd::HandleConsoleMsg`; world-view changes are pushed back as fresh
     // snapshots. Mirrors the structure used by `handle_worker`.
@@ -354,6 +374,36 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
                 match inbound {
                     Some(Ok(Message::Text(txt))) => {
                         let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) else { continue; };
+                        // P5 Theme A: short-circuit presence heartbeats so they
+                        // don't traverse the world loop (presence is not world
+                        // state). Heartbeats with a changed focus broadcast a
+                        // fresh presence list; same-focus pings just refresh
+                        // last_seen_at.
+                        if msg.get("type").and_then(|v| v.as_str()) == Some("presence_heartbeat") {
+                            let focused = msg.get("focused_startup_id")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let now = chrono::Utc::now().timestamp();
+                            let changed = crate::presence::upsert(
+                                &state.handle.presence,
+                                &identity.id,
+                                &identity.name,
+                                identity.role.as_str(),
+                                focused,
+                                now,
+                            ).await;
+                            if changed {
+                                let snap = crate::presence::snapshot(&state.handle.presence).await;
+                                let _ = state.handle.event_tx.send(
+                                    crate::protocol::ConsoleOutbound::OperatorPresence {
+                                        v: 1,
+                                        presences: serde_json::to_value(&snap)
+                                            .unwrap_or(serde_json::Value::Null),
+                                    },
+                                );
+                            }
+                            continue;
+                        }
                         let (tx, rx) = oneshot::channel();
                         let _ = state.handle.tx.send(Cmd::HandleConsoleMsg {
                             msg,
@@ -402,6 +452,19 @@ async fn handle_console(mut socket: WebSocket, state: Arc<AppState>) {
                 }
             }
         }
+    }
+
+    // P5 Theme A: drop presence on disconnect + broadcast the new list
+    // so peers see us go offline immediately. GC also drops stale
+    // entries every 30s but explicit drop is faster.
+    if crate::presence::drop_entry(&state.handle.presence, &identity.id).await {
+        let snap = crate::presence::snapshot(&state.handle.presence).await;
+        let _ = state.handle.event_tx.send(
+            crate::protocol::ConsoleOutbound::OperatorPresence {
+                v: 1,
+                presences: serde_json::to_value(&snap).unwrap_or(serde_json::Value::Null),
+            },
+        );
     }
 }
 

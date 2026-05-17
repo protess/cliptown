@@ -9,12 +9,13 @@
  * messages.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 import { prettifySystemEventPayload } from "../store.js";
 import { HistoryModal } from "./HistoryModal.js";
 import { NewStartupModal } from "./NewStartupModal.js";
+import { PresenceAvatar } from "./PresenceAvatar.js";
 
 const ROTATE_MS = 3_000;
 // Empty default → relative URL so fetch() goes through the Vite dev proxy
@@ -96,6 +97,8 @@ export function TopBar() {
       }}
     >
       <span style={{ fontWeight: 700, letterSpacing: "-0.02em" }}>cliptown</span>
+
+      <OnlinePresence />
 
       <div
         aria-label="event-feed"
@@ -198,6 +201,49 @@ const menuItemStyle: CSSProperties = {
   cursor: "pointer",
   font: "inherit",
 };
+
+/**
+ * P5 Theme A: online-operators row. Renders other-operator avatars only —
+ * showing your own face here would just be noise. Up to 5 avatars
+ * inline; overflow surfaces as a "+N" pill.
+ */
+function OnlinePresence() {
+  const { state } = useWorld();
+  const others = useMemo(
+    () => state.presence.filter((p) => p.operator_id !== state.currentOperator?.id),
+    [state.presence, state.currentOperator?.id],
+  );
+  if (others.length === 0) return null;
+  const visible = others.slice(0, 5);
+  const overflow = others.length - visible.length;
+  return (
+    <div
+      style={{ display: "flex", alignItems: "center", gap: 4 }}
+      aria-label="online-operators"
+    >
+      {visible.map((p) => (
+        <PresenceAvatar
+          key={p.operator_id}
+          operatorId={p.operator_id}
+          name={p.operator_name}
+          size={20}
+        />
+      ))}
+      {overflow > 0 && (
+        <span
+          style={{
+            fontSize: 11,
+            color: "var(--fg-secondary)",
+            padding: "0 4px",
+          }}
+          title={`${overflow} more online`}
+        >
+          +{overflow}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function SeverityDot({ severity }: { severity: "info" | "warn" | "alert" | "critical" }) {
   const color =

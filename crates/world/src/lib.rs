@@ -21,6 +21,7 @@ pub mod move_sys;
 pub mod path;
 pub mod permissions;
 pub mod persist;
+pub mod presence;
 pub mod protocol;
 pub mod proximity;
 pub mod sandbox;

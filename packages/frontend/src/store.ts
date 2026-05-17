@@ -135,6 +135,21 @@ export interface SkillVM {
 }
 
 /**
+ * P5 Theme A: operator presence entry. Re-broadcast by the world via
+ * `ConsoleOutbound::OperatorPresence` on connect/disconnect, focus
+ * change, and GC tick. `focused_startup_id == null` means the operator
+ * has no startup selected (empty sidebar). `last_seen_at` is unix
+ * seconds; entries older than ~90s get GC'd server-side.
+ */
+export interface PresenceVM {
+  operator_id: string;
+  operator_name: string;
+  role: string;
+  focused_startup_id: string | null;
+  last_seen_at: number;
+}
+
+/**
  * Theme G slice 4: one row of a skill's revision history. Returned by
  * `skill_list_revisions_operator` and stored per-skill in
  * `WorldState.skillRevisions`. `content_md` carries the full historical
@@ -184,6 +199,13 @@ export interface WorldState {
    * `currentOperator?.role === "admin"`.
    */
   currentOperator: { id: string; name: string; role: string } | null;
+  /**
+   * P5 Theme A: list of currently-online operators with their focused
+   * startup. Re-set on every `OperatorPresence` broadcast. Empty array
+   * is "no one online" — until the first broadcast arrives we start
+   * empty (which is correct: nobody else is on yet).
+   */
+  presence: PresenceVM[];
 }
 
 export interface OperatorRow {
@@ -208,6 +230,7 @@ const INITIAL: WorldState = {
   operators: null,
   mintedOperatorToken: null,
   currentOperator: null,
+  presence: [],
 };
 
 const MAX_SYSTEM_EVENTS = 200;
@@ -462,6 +485,26 @@ function reducer(state: WorldState, action: Action): WorldState {
   }
   const m = action.msg;
   switch (m.type) {
+    case "operator_presence": {
+      const raw = (m as { presences?: unknown }).presences;
+      if (!Array.isArray(raw)) return state;
+      const presence: PresenceVM[] = [];
+      for (const p of raw) {
+        const obj = asObject(p);
+        if (!obj) continue;
+        const operator_id = asString(obj.operator_id);
+        if (!operator_id) continue;
+        presence.push({
+          operator_id,
+          operator_name: asString(obj.operator_name),
+          role: asString(obj.role, "viewer"),
+          focused_startup_id:
+            typeof obj.focused_startup_id === "string" ? obj.focused_startup_id : null,
+          last_seen_at: typeof obj.last_seen_at === "number" ? obj.last_seen_at : 0,
+        });
+      }
+      return { ...state, presence };
+    }
     case "hello_ok": {
       return {
         ...state,
