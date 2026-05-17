@@ -1,0 +1,83 @@
+# P5 Theme D: cliptown alert rules for Prometheus / Alertmanager.
+#
+# Load this with:
+#   rule_files:
+#     - /etc/prometheus/cliptown.yml
+# and route the resulting alerts through Alertmanager. The
+# docker-compose `observability` profile (P5.E) mounts this file
+# into the prometheus container at the path above.
+#
+# Severity convention:
+#   - warn  → annoyance, look when convenient
+#   - alert → human action needed soon
+#   - critical → human action needed NOW (no critical rules here yet —
+#                cliptown's worst case is "agent loop wedged," which
+#                surfaces as escalation_rate or tick_stalled)
+
+groups:
+  - name: cliptown
+    rules:
+      - alert: CliptownTickStalled
+        expr: rate(cliptown_tick_seq[1m]) < 0.5
+        for: 30s
+        labels:
+          severity: alert
+        annotations:
+          summary: "Cliptown loop tick rate < 0.5Hz for 30s"
+          description: |
+            The world loop is supposed to tick at ~1Hz. Sub-0.5Hz
+            means either the scheduler is wedged on SQL or a
+            blocking handler hasn't returned. Check
+            cliptown_world logs for `component=loop` warnings.
+
+      - alert: CliptownMCPErrorRate
+        expr: rate(cliptown_mcp_errors_total[1m]) > (1/60)
+        for: 60s
+        labels:
+          severity: warn
+        annotations:
+          summary: "MCP error rate > 1/min sustained 60s"
+          description: |
+            Agents are receiving mcp_error replies at >1/min.
+            Common causes: an adapter regression, a tool removed
+            from the dispatch arm, or budget gates kicking in.
+            Inspect /metrics for the per-tool error breakdown
+            (not yet labeled — TODO P6).
+
+      - alert: CliptownBudgetWarning
+        expr: cliptown_budget_spent_usd / cliptown_budget_cap_usd > 0.95
+        for: 60s
+        labels:
+          severity: warn
+        annotations:
+          summary: "Startup {{ $labels.startup_id }} > 95% budget"
+          description: |
+            The startup is one bad LLM call away from hitting
+            its cap and pausing. Operator should either raise
+            the cap or wind the work down.
+
+      - alert: CliptownAgentLost
+        expr: cliptown_agents{bucket="recently_lost"} > 0
+        for: 30s
+        labels:
+          severity: warn
+        annotations:
+          summary: "{{ $value }} agent(s) marked recently_lost"
+          description: |
+            An agent's worker stopped sending heartbeats but is
+            within the 2-minute grace window. If it doesn't
+            come back, the next alert (`CliptownAgentOffline`)
+            will fire and the operator will need to relaunch.
+
+      - alert: CliptownAgentOffline
+        expr: cliptown_agents{bucket="offline"} > 0
+        for: 60s
+        labels:
+          severity: alert
+        annotations:
+          summary: "{{ $value }} agent(s) marked offline"
+          description: |
+            An agent's worker process is gone. Tasks assigned
+            to it will not be picked up. Operator action: kick
+            the worker (CLI restart) or fail-out its in-flight
+            task so a peer can steal it (P5 Theme E3).

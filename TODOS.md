@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M15 feat — observability artifacts (P5 Theme D) — 2026-05-17
+**Source:** Fourth Phase 5 PR (per #85 roadmap). PR `<TBD>`.
+
+Was: `/metrics` Prometheus endpoint existed since P3 but no Grafana dashboards or Alertmanager rules lived in the repo. Operators had to build their own.
+
+Fixed: `docs/observability/grafana/cliptown-overview.json` ships an importable dashboard with 7 panels (tick rate, MCP calls/errors, tasks by status, agents by health, budget %, active startups, cumulative MCP calls). `docs/observability/alerts/cliptown.yml` ships 5 alert rules (tick stall, MCP error rate, budget warning, agent lost/offline). README "Observability" section points at both. New `observability_artifacts` test parses both files and verifies every alert expression references a known metric — catches typos before they land in ops. `serde_yaml` added as dev-dep.
+
 ### M15 feat — soft-locks on destructive actions (P5 Theme C) — 2026-05-17
 **Source:** Third Phase 5 PR (per #85 roadmap). PR `<TBD>`.
 

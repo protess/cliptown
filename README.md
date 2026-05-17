@@ -94,6 +94,25 @@ curl http://localhost:8080/health
 Local LLM via ollama, Fly.io, and other targets — see
 [`docs/DEPLOY.md`](docs/DEPLOY.md).
 
+## Observability
+
+The world exposes a Prometheus text-exposition endpoint at
+`http://localhost:8080/metrics`. The repo ships:
+
+- [`docs/observability/grafana/cliptown-overview.json`](docs/observability/grafana/cliptown-overview.json)
+  — importable Grafana dashboard with panels for tick rate,
+  MCP throughput, task distribution, agent health, and
+  per-startup budget %.
+- [`docs/observability/alerts/cliptown.yml`](docs/observability/alerts/cliptown.yml)
+  — Prometheus alert rules for tick stall, MCP error rate,
+  budget warning, and agent lost/offline.
+
+Wire-up: P5 Theme E (docker-compose) provides the
+`observability` profile that pre-provisions a Prometheus +
+Grafana pair with these files mounted. Until that lands,
+import the dashboard JSON manually and add the alerts to
+your existing Prometheus config.
+
 ## Where things live
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — system layout, MCP tools,
