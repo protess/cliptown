@@ -349,6 +349,54 @@ function severityFromString(s: unknown): SystemEventVM["severity"] {
   return "info";
 }
 
+/**
+ * Theme G slice 1: turn the JSON payload of an E-theme system_event into
+ * a single-line, human-readable string. Used for both the toast body
+ * (when the reducer auto-surfaces these) and the TopBar marquee. Returns
+ * an empty string for kinds the helper doesn't recognize, letting the
+ * caller fall back to JSON.stringify.
+ */
+export function prettifySystemEventPayload(
+  kind: string,
+  payload: unknown,
+): string {
+  const p =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
+  if (!p) return "";
+  const id = typeof p.task_id === "string" ? p.task_id : "?";
+  switch (kind) {
+    case "task_stolen": {
+      const mode = typeof p.mode === "string" ? ` (${p.mode})` : "";
+      const newA = typeof p.new_assignee === "string" ? p.new_assignee : "?";
+      const prev = typeof p.previous_assignee === "string" ? p.previous_assignee : "?";
+      return `${id} stolen by ${newA} ← ${prev}${mode}`;
+    }
+    case "task_unblocked": {
+      const blocker = typeof p.blocker_id === "string" ? p.blocker_id : "?";
+      return `${id} unblocked from ${blocker}`;
+    }
+    case "task_overdue": {
+      const secs = typeof p.overdue_by_secs === "number" ? p.overdue_by_secs : 0;
+      return `${id} overdue by ${secs}s`;
+    }
+    default:
+      return "";
+  }
+}
+
+/**
+ * Theme G slice 1: SystemEvent kinds that should also raise a toast so
+ * the operator notices without scanning the marquee. Sticky behavior is
+ * derived from severity (warn/alert/critical → sticky).
+ */
+const TOAST_WORTHY_KINDS = new Set([
+  "task_stolen",
+  "task_unblocked",
+  "task_overdue",
+]);
+
 function reducer(state: WorldState, action: Action): WorldState {
   if (action.kind === "status") return { ...state, status: action.status };
   if (action.kind === "clearMintedOperatorToken") {
@@ -418,9 +466,29 @@ function reducer(state: WorldState, action: Action): WorldState {
         startup_id: typeof m.startup_id === "string" ? m.startup_id : null,
         payload: m.payload ?? null,
       };
-      const next = [ev, ...state.systemEvents];
-      if (next.length > MAX_SYSTEM_EVENTS) next.length = MAX_SYSTEM_EVENTS;
-      return { ...state, systemEvents: next };
+      const nextEvents = [ev, ...state.systemEvents];
+      if (nextEvents.length > MAX_SYSTEM_EVENTS) nextEvents.length = MAX_SYSTEM_EVENTS;
+      // Theme G slice 1: auto-surface E-theme events as toasts. The
+      // marquee rotates every 3s and is easy to miss; a transient toast
+      // catches the eye without requiring the operator to scrub the
+      // history rail. Sticky for warn-or-above so an overdue task
+      // doesn't disappear while the operator is mid-action.
+      if (TOAST_WORTHY_KINDS.has(ev.kind)) {
+        const body = prettifySystemEventPayload(ev.kind, ev.payload) ||
+          `${ev.kind}: ${JSON.stringify(ev.payload)}`;
+        const sticky = ev.severity === "warn" || ev.severity === "alert" || ev.severity === "critical";
+        const toast: ToastVM = {
+          id: newId(),
+          ts: Date.now(),
+          severity: ev.severity,
+          body,
+          sticky,
+        };
+        const nextToasts = [...state.toasts, toast];
+        if (nextToasts.length > MAX_TOASTS) nextToasts.splice(0, nextToasts.length - MAX_TOASTS);
+        return { ...state, systemEvents: nextEvents, toasts: nextToasts };
+      }
+      return { ...state, systemEvents: nextEvents };
     }
     case "backend_catalog": {
       return {

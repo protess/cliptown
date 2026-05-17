@@ -1,5 +1,32 @@
 # Changelog
 
+## M14 — feat: SystemEvent toasts + readable marquee (Theme G slice 1) (2026-05-17)
+
+First Theme G slice. The E2/E3 work landed three new SystemEvent
+kinds (`task_unblocked`, `task_overdue`, `task_stolen`) but the
+operator could only catch them by scrubbing the 1-line rotating
+marquee or the History rail. Easy to miss while mid-action.
+
+- `store.ts`: new `prettifySystemEventPayload(kind, payload)`
+  exports a one-line summary for the three kinds
+  ("T1 stolen by e2 ← e1 (auto)", "T1 unblocked from T0",
+  "T1 overdue by 60s"). The reducer's `system_event` case now
+  auto-pushes a `ToastVM` for these kinds in addition to the
+  history append. Sticky for warn-or-above (overdue stays visible),
+  transient for info-level (unblocked / stolen).
+- `TopBar.tsx`: the marquee uses the same prettifier before
+  falling back to `describeDetail`'s JSON.stringify, so the
+  rotating banner reads "T1 unblocked from T0" instead of
+  `{"task_id":"T1","blocker_id":"T0"}`.
+
+Pure frontend slice — no protocol or world changes. Type-check
+passes; ship-gate e2e references `task_escalated` (untouched).
+
+Admin toggles for `is_peer_reviewer` and `auto_steal_enabled`
+deferred to Theme G slice 2 — they need protocol-level shape
+extensions (AvatarView + StartupVM new fields) so worth their
+own focused PR.
+
 ## M14 — feat: async work-stealing (Theme E3) (2026-05-16)
 
 Fourth Phase 4 PR. When one engineer's queue stays warm and a peer
