@@ -3,7 +3,7 @@
 //! Asserts the four contract points spec'd in
 //! `docs/superpowers/specs/2026-05-09-real-llm-e2e-design.md` § A1':
 //!   - `initialize` returns a protocolVersion + capabilities + serverInfo handshake.
-//!   - `tools/list` returns the 28 cliptown tools by name.
+//!   - `tools/list` returns the 29 cliptown tools by name.
 //!   - `tools/call task_done` routes through `mcp_dispatch::dispatch` and the
 //!     SQL side effect lands (`tasks.status` flips to `awaiting_review`).
 //!   - A missing/bad Bearer token returns 401 before the dispatch runs.
@@ -75,6 +75,17 @@ async fn boot() -> axum::Router {
     .execute(&pool)
     .await
     .unwrap();
+
+    // P6 Theme A: pre-create the canonical artifact + workspace path so
+    // self_review's `artifact_exists` check passes in this dispatch-
+    // routing test. Without it, sandbox::resolve fails on the
+    // not-yet-existing workspace dir and the test surfaces a
+    // sandbox_violation instead of the task_done happy path it's
+    // trying to assert.
+    let workspace = std::path::Path::new("workspaces/s1/artifacts");
+    std::fs::create_dir_all(workspace).expect("create artifacts dir");
+    std::fs::write(workspace.join("T1.md"), "test artifact content\n")
+        .expect("seed T1.md");
 
     // Seed the in-memory world with e1's avatar so `mcp_dispatch::dispatch`'s
     // `world.avatars.get(agent_id)` lookup succeeds. Production gets this via
@@ -181,7 +192,7 @@ async fn initialize_returns_handshake() {
 }
 
 #[tokio::test]
-async fn tools_list_returns_all_28_cliptown_tools() {
+async fn tools_list_returns_all_29_cliptown_tools() {
     let app = boot().await;
     let (status, body) = post_mcp(
         app,
@@ -224,11 +235,12 @@ async fn tools_list_returns_all_28_cliptown_tools() {
         "skill_revert",
         "task_set_blocking",
         "task_steal",
+        "self_review",
     ]
     .into_iter()
     .map(String::from)
     .collect();
-    assert_eq!(names, expected, "tools/list must enumerate all 28 names");
+    assert_eq!(names, expected, "tools/list must enumerate all 29 names");
     // Each tool must carry at least a minimal inputSchema — MCP spec requires it.
     for t in tools {
         assert!(

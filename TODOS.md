@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M16 feat — self-review gates (P6 Theme A) — 2026-05-17
+**Source:** First Phase 6 PR (per #93 roadmap). PR `<TBD>`.
+
+Was: engineer agents called `task_done` and the work flowed straight to the manager queue. Bad artifacts (missing files, empty bodies, non-canonical paths) burned manager LLM cycles every time.
+
+Fixed: migration 0014 adds `tasks.self_reviewed_at`. New `crates/world/src/self_review.rs` runs the v1 pipeline (canonical_path → artifact_exists → json_lint → markdown_lint warn-stub). 29th MCP tool `self_review {task_id, artifact_path}` callable directly. `task_done` gains `auto_check: bool` (default true) — `error` severity blocks the status flip with a structured `must_fix` reply; `warn` is informational. `task_request_changes` clears `self_reviewed_at` so re-submit triggers fresh checks. 6 new tests pin gate semantics. TS sidecar linters still deferred (P6.B).
+
 ### M15 feat — backup/restore drill (P5 Theme F) — 2026-05-17
 **Source:** Sixth and final Phase 5 PR (per #85 roadmap). Closes Phase 5. PR `<TBD>`.
 

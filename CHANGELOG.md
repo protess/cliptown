@@ -1,5 +1,46 @@
 # Changelog
 
+## M16 — feat: self-review gates (P6 Theme A) (2026-05-17)
+
+First Phase 6 PR. The engineer agent now runs a pre-submit
+check pipeline before `task_done` flips the task to
+`awaiting_review`. Bad artifacts (missing files, empty
+output, non-canonical paths) bounce back to the agent with a
+structured `must_fix` list instead of riding into the
+manager's review queue.
+
+- Migration 0014 adds `tasks.self_reviewed_at INTEGER`,
+  cleared on `task_request_changes` so the next re-submit
+  triggers a fresh check.
+- New `crates/world/src/self_review.rs` module:
+  - `canonical_artifact_path(startup_id, task_id)` centralizes
+    the canonical-path string used by `task_done`'s hard
+    check + the soft gate.
+  - `run(startup_id, task_id, artifact_path)` runs the v1
+    pipeline: canonical_path → artifact_exists → json_lint
+    (when applicable) → markdown_lint (warn-severity stub
+    until P6.B's TS sidecar lint pipeline lands).
+  - `record(pool, task_id, agent_id, outcome)` stamps
+    `self_reviewed_at = unixepoch()` on pass + appends an
+    audit_trail entry with the full outcome.
+- New 29th MCP tool `self_review {task_id, artifact_path}`.
+  Returns `{ok, must_fix:[{check, severity, message}]}`.
+  Same-startup + assignee-only gates.
+- `task_done` gains optional `auto_check: bool` (default
+  true). When true, runs `self_review` mid-transition; if
+  any check has `severity:"error"`, returns `Err(("must_fix",
+  json))` instead of flipping status. `severity:"warn"` is
+  informational only — doesn't block submission.
+- `tools/list` count bumped 28 → 29.
+- 6 new `self_review` integration tests pinning the gate
+  semantics. `mcp_http::boot()` updated to pre-create the
+  canonical artifact dir so the dispatch-routing test isn't
+  dependent on leftover state.
+
+Markdown / TS / Rust linting still ride the deferred stub.
+P6.B wires the real linters; this slice ships the structural
+pipeline so they have a place to plug in.
+
 ## M15 — feat: backup/restore drill (P5 Theme F) (2026-05-17)
 
 Sixth and final Phase 5 PR. Closes the Phase 5 roadmap.
