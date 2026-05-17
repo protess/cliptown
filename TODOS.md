@@ -2,9 +2,25 @@
 
 ## Open
 
-_(empty)_
+### M14 feat — Theme G slice 2: admin toggles for is_peer_reviewer + auto_steal_enabled
+**Source:** Carry-forwards from E1 (#77) and E3 (#79). Theme G slice 1 (#80) closed the toast/marquee surfacing but the admin-side flip UI still doesn't exist.
+
+**Scope:**
+- Add `is_peer_reviewer` to AvatarView in `crates/world/src/state.rs` so the field reaches the snapshot; surface it in the frontend's `AvatarVM`.
+- Add `auto_steal_enabled` + `auto_steal_after_secs` to whatever WorldView.startups carries (today it's a stand-in; this is the moment to populate it).
+- New compact AgentsPanel mirroring OperatorsPanel structure: lists agents per startup with a peer-reviewer checkbox. Admin-only via `currentOperator.role === "admin"`.
+- Startup-settings popover (or fold into Sidebar) with the auto-steal flag + threshold input.
+
+**Size:** S-M (one focused PR).
 
 ## Completed
+
+### M14 feat — SystemEvent toasts + readable marquee (Theme G slice 1) — 2026-05-17
+**Source:** First Theme G slice. Closes "operator-side surface for E2/E3 events" deferred from #78 + #79. PR `<TBD>`.
+
+Was: `task_unblocked` / `task_overdue` / `task_stolen` SystemEvents only showed in the rotating 1-line marquee + History rail, with JSON.stringify'd payloads ("{"task_id":"T1","blocker_id":"T0"}"). Easy to miss while mid-action and unreadable when caught.
+
+Fixed: new `prettifySystemEventPayload` exported from `store.ts` renders one-line summaries. The `system_event` reducer auto-pushes a `ToastVM` for the three kinds (sticky for warn+, transient for info). TopBar marquee uses the same prettifier before falling back to JSON.stringify. Pure frontend slice — type-check passes; no protocol changes.
 
 ### M14 feat — async work-stealing (Theme E3) — 2026-05-16
 **Source:** Fourth Phase 4 PR (per #75 roadmap). PR `<TBD>`.

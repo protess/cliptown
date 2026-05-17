@@ -12,6 +12,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { useWorld } from "../hooks/useWorld.js";
+import { prettifySystemEventPayload } from "../store.js";
 import { HistoryModal } from "./HistoryModal.js";
 import { NewStartupModal } from "./NewStartupModal.js";
 
@@ -112,7 +113,9 @@ export function TopBar() {
           <span>
             <SeverityDot severity={ev.severity} />
             <code style={{ marginRight: 6 }}>{ev.kind}</code>
-            <span>{describeDetail(ev.payload)}</span>
+            <span>
+              {prettifySystemEventPayload(ev.kind, ev.payload) || describeDetail(ev.payload)}
+            </span>
           </span>
         ) : (
           <span>No events yet.</span>
