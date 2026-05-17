@@ -73,6 +73,7 @@ pub async fn dispatch(
         ConsoleInbound::SkillSetGlobal { .. } => "skill_set_global",
         ConsoleInbound::AgentSetPeerReviewer { .. } => "agent_set_peer_reviewer",
         ConsoleInbound::StartupSetAutoSteal { .. } => "startup_set_auto_steal",
+        ConsoleInbound::StartupSetAutoRecovery { .. } => "startup_set_auto_recovery",
         ConsoleInbound::SkillListRevisionsOperator { .. } => "skill_list_revisions_operator",
         ConsoleInbound::SkillRevertOperator { .. } => "skill_revert_operator",
         ConsoleInbound::PresenceHeartbeat { .. } => "presence_heartbeat",
@@ -666,6 +667,44 @@ pub async fn dispatch(
                 Ok(_) => json!({
                     "type":"ok","kind":"startup_set_auto_steal",
                     "startup_id": startup_id, "enabled": enabled, "after_secs": after_secs,
+                }),
+                Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
+            }
+        }
+        ConsoleInbound::StartupSetAutoRecovery { startup_id, enabled, max_attempts, .. } => {
+            // Mirrors StartupSetAutoSteal: admin-only because the
+            // recovery pass reassigns work across operators.
+            if !identity.role.at_least(OperatorRole::Admin) { return forbidden(); }
+            if let Some(n) = max_attempts {
+                if n < 1 {
+                    return json!({"type":"error","reason":"bad_max_attempts"});
+                }
+            }
+            let r = if let Some(n) = max_attempts {
+                sqlx::query(
+                    "UPDATE startups SET auto_recovery_enabled = ?, \
+                                          auto_recovery_max_attempts = ? \
+                     WHERE id = ?",
+                )
+                .bind(if enabled { 1i64 } else { 0i64 })
+                .bind(n)
+                .bind(&startup_id)
+                .execute(pool).await
+            } else {
+                sqlx::query("UPDATE startups SET auto_recovery_enabled = ? WHERE id = ?")
+                    .bind(if enabled { 1i64 } else { 0i64 })
+                    .bind(&startup_id)
+                    .execute(pool).await
+            };
+            match r {
+                Ok(res) if res.rows_affected() == 0 => {
+                    json!({"type":"error","reason":"not_found"})
+                }
+                Ok(_) => json!({
+                    "type":"ok","kind":"startup_set_auto_recovery",
+                    "startup_id": startup_id,
+                    "enabled": enabled,
+                    "max_attempts": max_attempts,
                 }),
                 Err(e) => json!({"type":"error","reason":"sql","detail":e.to_string()}),
             }

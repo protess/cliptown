@@ -55,6 +55,13 @@ export interface StartupVM {
    */
   auto_steal_enabled?: boolean;
   auto_steal_after_secs?: number;
+  /**
+   * P6 Theme C: per-startup auto-recovery config, surfaced via the
+   * snapshot enrichment. Lets the admin-only MainHeader recovery
+   * pill render hydrated. Defaults: enabled=false, max_attempts=2.
+   */
+  auto_recovery_enabled?: boolean;
+  auto_recovery_max_attempts?: number;
 }
 
 export interface TaskVM {
@@ -359,6 +366,12 @@ function coerceStartup(s: Record<string, unknown>, id: string): StartupVM {
     auto_steal_after_secs: typeof s.auto_steal_after_secs === "number"
       ? s.auto_steal_after_secs
       : undefined,
+    auto_recovery_enabled: s.auto_recovery_enabled === true ? true
+      : s.auto_recovery_enabled === false ? false
+      : undefined,
+    auto_recovery_max_attempts: typeof s.auto_recovery_max_attempts === "number"
+      ? s.auto_recovery_max_attempts
+      : undefined,
   };
 }
 
@@ -502,6 +515,13 @@ export function prettifySystemEventPayload(
       const secs = typeof p.overdue_by_secs === "number" ? p.overdue_by_secs : 0;
       return `${id} overdue by ${secs}s`;
     }
+    case "task_recovered": {
+      // P6 Theme C: auto-recovery rescued a task before escalation.
+      const from = typeof p.from_agent_id === "string" ? p.from_agent_id : "?";
+      const to = typeof p.to_agent_id === "string" ? p.to_agent_id : "?";
+      const strategy = typeof p.strategy === "string" ? p.strategy : "auto";
+      return `${id} recovered ${from} → ${to} (${strategy})`;
+    }
     default:
       return "";
   }
@@ -516,6 +536,7 @@ const TOAST_WORTHY_KINDS = new Set([
   "task_stolen",
   "task_unblocked",
   "task_overdue",
+  "task_recovered",
 ]);
 
 function reducer(state: WorldState, action: Action): WorldState {

@@ -65,6 +65,32 @@ async fn snapshot_startups_surface_auto_steal_fields() {
     assert_eq!(s2["auto_steal_after_secs"], 60, "SQL default 60s must surface");
 }
 
+/// P6 Theme C: the snapshot surfaces per-startup auto-recovery flag +
+/// max_attempts so the admin-only MainHeader toggle hydrates without a
+/// side fetch.
+#[tokio::test]
+async fn snapshot_startups_surface_auto_recovery_fields() {
+    let ctx = TestCtx::new().await;
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at, auto_recovery_enabled, auto_recovery_max_attempts) \
+         VALUES ('s1','a','g',10.0,'town_default','/tmp','active',unixepoch(), 1, 3)"
+    ).execute(&ctx.pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s2','b','g',10.0,'town_default','/tmp','active',unixepoch())"
+    ).execute(&ctx.pool).await.unwrap();
+
+    let view = cliptown_world::state::WorldView::default();
+    let frame = http::build_console_snapshot(&ctx.pool, &view, 3).await;
+    let startups = frame["snapshot"]["startups"].as_array().unwrap();
+    let s1 = startups.iter().find(|s| s["id"] == "s1").unwrap();
+    let s2 = startups.iter().find(|s| s["id"] == "s2").unwrap();
+    assert_eq!(s1["auto_recovery_enabled"], true);
+    assert_eq!(s1["auto_recovery_max_attempts"], 3);
+    assert_eq!(s2["auto_recovery_enabled"], false, "default-off must surface as false");
+    assert_eq!(s2["auto_recovery_max_attempts"], 2, "SQL default 2 must surface");
+}
+
 /// Theme G slice 3: each task object carries `blocked_on` + `deadline_at`
 /// so Kanban cards can render the badges from E2 without a side fetch.
 #[tokio::test]

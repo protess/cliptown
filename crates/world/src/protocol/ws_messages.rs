@@ -105,6 +105,13 @@ pub enum ConsoleInbound {
     /// `skill_revert`) remain — these are the operator-console twins.
     SkillListRevisionsOperator { v: u8, startup_id: String, skill_id: String },
     SkillRevertOperator { v: u8, startup_id: String, skill_id: String, rev_seq: i64 },
+    /// P6 Theme C: admin-only per-startup auto-recovery flag.
+    /// When enabled, the scheduler reassigns `changes_requested`
+    /// tasks past `auto_recovery_max_attempts` to an idle
+    /// same-role peer (resetting status to `queued`). Mirrors the
+    /// P4 E3 `StartupSetAutoSteal` plumbing. `max_attempts == None`
+    /// leaves the SQL default (2) in place.
+    StartupSetAutoRecovery { v: u8, startup_id: String, enabled: bool, max_attempts: Option<i64> },
     /// P5 Theme A: operator presence heartbeat. Frontend emits on
     /// startup-click (focus change) and on a 30s tick. Server upserts
     /// the registry entry and re-broadcasts presence if anything
