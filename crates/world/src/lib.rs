@@ -1,3 +1,4 @@
+pub mod action_locks;
 pub mod agent_supervisor;
 pub mod api_skills;
 pub mod api_startups;

@@ -188,4 +188,11 @@ pub enum ConsoleOutbound {
     /// from cascading through the ts-rs export — the frontend store
     /// coerces defensively.
     OperatorPresence { v: u8, presences: serde_json::Value },
+    /// P5 Theme C: a destructive action just acquired a soft-lock.
+    /// `info` carries `{lock_key, operator_id, operator_name,
+    /// expires_at}`. Peers should disable the matching UI affordance
+    /// until they see `ActionUnlocked` or `expires_at` passes.
+    ActionLocked { v: u8, info: serde_json::Value },
+    /// P5 Theme C: a soft-lock was released (success or TTL expiry).
+    ActionUnlocked { v: u8, lock_key: String },
 }

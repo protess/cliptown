@@ -246,6 +246,14 @@ pub async fn build_console_snapshot(
         })
         .collect();
 
+    // P5 Theme C: include current soft-locks so new connections
+    // disable affordances without needing a separate fetch. Expired
+    // rows are filtered at read time.
+    let now = chrono::Utc::now().timestamp();
+    let active_locks = crate::action_locks::list_active(pool, now)
+        .await
+        .unwrap_or_default();
+
     json!({
         "type": "world_view_snapshot",
         "v": 1,
@@ -255,6 +263,7 @@ pub async fn build_console_snapshot(
             "avatars": avatars,
             "startups": startups,
             "tasks": tasks,
+            "action_locks": active_locks,
         },
     })
 }
