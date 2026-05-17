@@ -12,7 +12,7 @@
  * proper agent picker.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, DragEvent } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 import type { AvatarVM, TaskVM } from "../store.js";
@@ -29,11 +29,57 @@ interface DragState {
   fromColumn: string;
 }
 
+const STEAL_HIGHLIGHT_MS = 1500;
+
 export function Kanban({ startupId }: { startupId: string | null }) {
   const { state, send, addToast } = useWorld();
   const [drag, setDrag] = useState<DragState | null>(null);
   const [overColumn, setOverColumn] = useState<ColumnId | null>(null);
   const [snapBack, setSnapBack] = useState<string | null>(null);
+  // Theme G slice 3: transient highlight for cards whose assignee just
+  // changed via task_stolen. Driven by the SystemEventVM stream rather
+  // than the snapshot, so manual + auto steals both flash. We dedup by
+  // tracking the highest-seen event ts.
+  const [highlightedTasks, setHighlightedTasks] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const lastStealTsRef = useRef<number>(0);
+
+  useEffect(() => {
+    // Scan freshest events; bail at the first one older than our
+    // watermark so old history doesn't trigger a flash on mount.
+    for (const ev of state.systemEvents) {
+      if (ev.ts <= lastStealTsRef.current) break;
+      if (ev.kind !== "task_stolen") continue;
+      const payload = ev.payload && typeof ev.payload === "object"
+        ? (ev.payload as Record<string, unknown>)
+        : null;
+      const taskId = payload && typeof payload.task_id === "string"
+        ? payload.task_id
+        : null;
+      if (!taskId) continue;
+      setHighlightedTasks((prev) => {
+        if (prev.has(taskId)) return prev;
+        const next = new Set(prev);
+        next.add(taskId);
+        return next;
+      });
+      window.setTimeout(() => {
+        setHighlightedTasks((prev) => {
+          if (!prev.has(taskId)) return prev;
+          const next = new Set(prev);
+          next.delete(taskId);
+          return next;
+        });
+      }, STEAL_HIGHLIGHT_MS);
+    }
+    if (state.systemEvents.length > 0) {
+      const newest = state.systemEvents[0]?.ts;
+      if (typeof newest === "number" && newest > lastStealTsRef.current) {
+        lastStealTsRef.current = newest;
+      }
+    }
+  }, [state.systemEvents]);
 
   if (!startupId) return null;
 
@@ -114,6 +160,7 @@ export function Kanban({ startupId }: { startupId: string | null }) {
             onDragStartCard={onDragStart}
             avatars={state.avatars}
             snapBack={snapBack}
+            highlightedTasks={highlightedTasks}
           />
         ))}
       </div>
@@ -125,6 +172,7 @@ export function Kanban({ startupId }: { startupId: string | null }) {
         onDrop={() => onDrop(FAILED_COLUMN.id)}
         onDragStartCard={onDragStart}
         snapBack={snapBack}
+        highlightedTasks={highlightedTasks}
       />
     </div>
   );
@@ -138,6 +186,7 @@ interface ColumnLikeProps {
   onDragStartCard: (e: DragEvent, taskId: string, fromColumn: string) => void;
   avatars: Record<string, AvatarVM>;
   snapBack: string | null;
+  highlightedTasks: Set<string>;
 }
 
 interface ColumnProps extends ColumnLikeProps {
@@ -155,6 +204,7 @@ function Column({
   onDragStartCard,
   avatars,
   snapBack,
+  highlightedTasks,
 }: ColumnProps) {
   // Escalated demands operator action — manager already bounced the work
   // max-rounds times. Tint the column header in the same alert color the
@@ -192,6 +242,7 @@ function Column({
               t.assignee_agent_id ? avatars[t.assignee_agent_id] : undefined
             }
             onDragStart={onDragStartCard}
+            highlighted={highlightedTasks.has(t.id)}
           />
         </div>
       ))}
@@ -207,6 +258,7 @@ function FailedDrawer({
   onDrop,
   onDragStartCard,
   snapBack,
+  highlightedTasks,
 }: ColumnLikeProps) {
   const [open, setOpen] = useState(false);
   return (
@@ -258,6 +310,7 @@ function FailedDrawer({
                       : undefined
                   }
                   onDragStart={onDragStartCard}
+                  highlighted={highlightedTasks.has(t.id)}
                 />
               </div>
             ))

@@ -71,6 +71,14 @@ export interface TaskVM {
   // commits, visible to the operator while the task sits in
   // `awaiting_review`. Absent on tasks before submission.
   artifact_path?: string | null;
+  /**
+   * Theme G slice 3: surfaced from the snapshot enrichment so the Kanban
+   * Card can render the blocked / deadline badges from E2.
+   * - blocked_on: id of the task this row waits on, or null.
+   * - deadline_at: unix-seconds timestamp the task is due by, or null.
+   */
+  blocked_on?: string | null;
+  deadline_at?: number | null;
 }
 
 export interface SystemEventVM {
@@ -301,6 +309,27 @@ function indexStartups(raw: unknown): Record<string, StartupVM> {
   return out;
 }
 
+function coerceTask(t: Record<string, unknown>, id: string): TaskVM {
+  return {
+    id: asString(t.id, id),
+    startup_id: asString(t.startup_id),
+    title: asString(t.title),
+    status: asString(t.status),
+    assignee_agent_id:
+      typeof t.assignee_agent_id === "string" ? t.assignee_agent_id : null,
+    required_room:
+      typeof t.required_room === "string" ? t.required_room : null,
+    review_round: typeof t.review_round === "number" ? t.review_round : undefined,
+    max_review_rounds: typeof t.max_review_rounds === "number" ? t.max_review_rounds : undefined,
+    artifact_path:
+      typeof t.artifact_path === "string" ? t.artifact_path : null,
+    blocked_on:
+      typeof t.blocked_on === "string" ? t.blocked_on : null,
+    deadline_at:
+      typeof t.deadline_at === "number" ? t.deadline_at : null,
+  };
+}
+
 function indexTasks(raw: unknown): Record<string, TaskVM> {
   const out: Record<string, TaskVM> = {};
   if (Array.isArray(raw)) {
@@ -309,20 +338,7 @@ function indexTasks(raw: unknown): Record<string, TaskVM> {
       if (!t) continue;
       const id = asString(t.id);
       if (!id) continue;
-      out[id] = {
-        id,
-        startup_id: asString(t.startup_id),
-        title: asString(t.title),
-        status: asString(t.status),
-        assignee_agent_id:
-          typeof t.assignee_agent_id === "string" ? t.assignee_agent_id : null,
-        required_room:
-          typeof t.required_room === "string" ? t.required_room : null,
-        review_round: typeof t.review_round === "number" ? t.review_round : undefined,
-        max_review_rounds: typeof t.max_review_rounds === "number" ? t.max_review_rounds : undefined,
-        artifact_path:
-          typeof t.artifact_path === "string" ? t.artifact_path : null,
-      };
+      out[id] = coerceTask(t, id);
     }
   } else {
     const obj = asObject(raw);
@@ -330,20 +346,7 @@ function indexTasks(raw: unknown): Record<string, TaskVM> {
       for (const [k, v] of Object.entries(obj)) {
         const t = asObject(v);
         if (!t) continue;
-        out[k] = {
-          id: asString(t.id, k),
-          startup_id: asString(t.startup_id),
-          title: asString(t.title),
-          status: asString(t.status),
-          assignee_agent_id:
-            typeof t.assignee_agent_id === "string" ? t.assignee_agent_id : null,
-          required_room:
-            typeof t.required_room === "string" ? t.required_room : null,
-          review_round: typeof t.review_round === "number" ? t.review_round : undefined,
-          max_review_rounds: typeof t.max_review_rounds === "number" ? t.max_review_rounds : undefined,
-          artifact_path:
-            typeof t.artifact_path === "string" ? t.artifact_path : null,
-        };
+        out[k] = coerceTask(t, k);
       }
     }
   }

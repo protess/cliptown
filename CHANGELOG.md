@@ -1,5 +1,34 @@
 # Changelog
 
+## M14 — feat: kanban blocked/deadline badges + steal flash (Theme G slice 3) (2026-05-17)
+
+Third Theme G slice. E2 (#78) added `blocked_on` + `deadline_at`
+to tasks; E3 (#79) added `task_stolen` system_events. The kanban
+had no visual cue for either — operators only saw the marquee +
+toasts from slice 1.
+
+- `build_console_snapshot` (http.rs) extends the tasks SELECT
+  with `blocked_on` + `deadline_at`. Frontend `TaskVM` gains
+  both; `coerceTask` (extracted from the two indexer branches)
+  parses them.
+- `Card.tsx` renders two new badges in the meta row:
+  `BlockedBadge` ("🔒 T_block6") when `blocked_on` is set,
+  `DeadlineBadge` ("⏰ in 2h" / "⏰ overdue 60s" in red) when
+  `deadline_at` is set. `flexWrap: "wrap"` lets the meta line
+  break gracefully on narrow columns.
+- `Kanban.tsx` watches `state.systemEvents` for `task_stolen`
+  via a ts-watermark dedup, adds the task_id to a transient
+  `highlightedTasks` set for 1.5s, and threads `highlighted`
+  through the Card so the reassignment lands visually instead
+  of silently re-rendering the assignee monogram. Card adds a
+  blue ring + 240ms box-shadow transition.
+- 1 new http_smoke test: snapshot tasks surface
+  `blocked_on` + `deadline_at` (incl. null cases).
+
+Closes the last two Phase 4 visual carry-forwards (E2 badges +
+E3 reshuffle animation). All Phase 4 themes now have their
+operator UI surface.
+
 ## M14 — feat: admin toggles for peer-reviewer + auto-steal (Theme G slice 2) (2026-05-17)
 
 Second Theme G slice. E1 (#77) and E3 (#79) shipped the wire +

@@ -6,6 +6,13 @@ _(empty)_
 
 ## Completed
 
+### M14 feat — kanban blocked/deadline badges + steal flash (Theme G slice 3) — 2026-05-17
+**Source:** Third Theme G slice. Closes the E2 (#78) "kanban blocked/deadline badges" + E3 (#79) "kanban reshuffle animation on task_stolen" carry-forwards. PR `<TBD>`.
+
+Was: E2 stored `blocked_on` + `deadline_at` on tasks and E3 fired `task_stolen` system_events, but the kanban gave no visual signal for either — operators only saw the marquee + toasts.
+
+Fixed: snapshot extends tasks SELECT with `blocked_on` + `deadline_at`. Frontend `TaskVM` parses both; Card renders `BlockedBadge` + `DeadlineBadge` in the meta row (overdue → red). Kanban watches systemEvents for `task_stolen` via a ts-watermark dedup, holds the task_id in a transient highlight set 1.5s, threads `highlighted` to Card which paints a blue ring with a 240ms box-shadow transition. 1 new http_smoke test covers the snapshot enrichment.
+
 ### M14 feat — admin toggles for peer-reviewer + auto-steal (Theme G slice 2) — 2026-05-17
 **Source:** Second Theme G slice. Closes the E1 (#77) + E3 (#79) "operator-side admin UI deferred" notes. PR `<TBD>`.
 
