@@ -11,7 +11,7 @@
  */
 
 import { Link } from "react-router-dom";
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { useWorld } from "../hooks/useWorld.js";
 
 const HUES = [
@@ -146,10 +146,11 @@ export function MainHeader({ startupId }: { startupId: string | null }) {
         <Stat label="active" value={inProgress} />
       </div>
 
+      <AutoStealToggle startup={s} />
+
       <Link
         to={`/town/${s.id}`}
         style={{
-          marginLeft: "auto",
           textDecoration: "none",
           color: "var(--fg)",
           border: "1px solid var(--border)",
@@ -163,6 +164,132 @@ export function MainHeader({ startupId }: { startupId: string | null }) {
     </div>
   );
 }
+
+/**
+ * Theme G slice 2: admin-only per-startup auto-steal toggle. Renders as
+ * a status pill ("Auto-steal: On (30s)" / "Off") with an inline popover
+ * for flipping the flag + editing the threshold. Hidden for non-admin
+ * operators.
+ */
+function AutoStealToggle({ startup }: { startup: import("../store.js").StartupVM }) {
+  const { state, send } = useWorld();
+  const [open, setOpen] = useState(false);
+  const [draftSecs, setDraftSecs] = useState<string>(
+    String(startup.auto_steal_after_secs ?? 60),
+  );
+
+  if (state.currentOperator?.role !== "admin") return null;
+
+  const enabled = startup.auto_steal_enabled === true;
+  const secs = startup.auto_steal_after_secs ?? 60;
+
+  const submit = (nextEnabled: boolean) => {
+    const parsed = parseInt(draftSecs, 10);
+    const after = Number.isFinite(parsed) && parsed >= 1 ? parsed : secs;
+    send({
+      type: "startup_set_auto_steal",
+      v: 1,
+      startup_id: startup.id,
+      enabled: nextEnabled,
+      after_secs: after,
+    });
+    setOpen(false);
+  };
+
+  return (
+    <div style={{ position: "relative", marginLeft: "auto" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={pillStyle(enabled)}
+        data-testid="auto-steal-toggle"
+        title="Per-startup auto work-stealing (admin)"
+      >
+        Auto-steal: {enabled ? `On (${secs}s)` : "Off"}
+      </button>
+      {open && (
+        <div style={popoverStyle} role="dialog" aria-label="auto-steal settings">
+          <div style={{ fontSize: 12, color: "var(--fg-secondary)", marginBottom: 6 }}>
+            Reassign queued tasks from busy peers after N seconds.
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            <span style={{ fontSize: 12 }}>Threshold (s):</span>
+            <input
+              type="number"
+              min={1}
+              value={draftSecs}
+              onChange={(e) => setDraftSecs(e.target.value)}
+              data-testid="auto-steal-secs"
+              style={{
+                width: 70,
+                font: "inherit",
+                fontSize: 12,
+                padding: "2px 6px",
+                background: "var(--raised)",
+                color: "var(--fg)",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+              }}
+            />
+          </label>
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            <button
+              onClick={() => submit(false)}
+              style={popButtonStyle}
+              data-testid="auto-steal-disable"
+            >
+              Disable
+            </button>
+            <button
+              onClick={() => submit(true)}
+              style={{ ...popButtonStyle, fontWeight: 600 }}
+              data-testid="auto-steal-enable"
+            >
+              Enable
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function pillStyle(enabled: boolean): CSSProperties {
+  return {
+    font: "inherit",
+    fontSize: 11,
+    background: enabled ? "var(--accent, #4a90e2)" : "var(--raised)",
+    color: enabled ? "white" : "var(--fg)",
+    border: "1px solid var(--border)",
+    borderRadius: 999,
+    padding: "4px 10px",
+    cursor: "pointer",
+  };
+}
+
+const popoverStyle: CSSProperties = {
+  position: "absolute",
+  right: 0,
+  top: "100%",
+  marginTop: 4,
+  background: "var(--raised)",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  padding: 10,
+  minWidth: 220,
+  zIndex: 20,
+  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+};
+
+const popButtonStyle: CSSProperties = {
+  font: "inherit",
+  fontSize: 11,
+  background: "var(--bg)",
+  color: "var(--fg)",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  padding: "4px 10px",
+  cursor: "pointer",
+};
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (

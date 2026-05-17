@@ -150,26 +150,31 @@ pub async fn build_console_snapshot(
 ) -> serde_json::Value {
     // Active startups, plus the most recent system_event ts so the sidebar
     // can flag stale runs at a glance. Falls back to `created_at` when no
-    // event exists yet.
+    // event exists yet. Theme G slice 2: include auto_steal flag +
+    // threshold so the admin-only settings popover hydrates from the
+    // snapshot rather than a side fetch.
     let startups: Vec<serde_json::Value> = sqlx::query_as::<
         _,
-        (String, String, f64, f64, i64),
+        (String, String, f64, f64, i64, i64, i64),
     >(
         "SELECT id, name, budget_spent_usd, budget_cap_usd, \
-         COALESCE((SELECT MAX(ts) FROM system_events WHERE startup_id = startups.id), created_at) \
+         COALESCE((SELECT MAX(ts) FROM system_events WHERE startup_id = startups.id), created_at), \
+         auto_steal_enabled, auto_steal_after_secs \
          FROM startups WHERE status = 'active'",
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(id, name, spent, cap, last_ts)| {
+    .map(|(id, name, spent, cap, last_ts, autosteal, autosteal_secs)| {
         json!({
             "id": id,
             "name": name,
             "budget_spent_usd": spent,
             "budget_cap_usd": cap,
             "last_event_ts": last_ts,
+            "auto_steal_enabled": autosteal != 0,
+            "auto_steal_after_secs": autosteal_secs,
         })
     })
     .collect();
@@ -208,13 +213,41 @@ pub async fn build_console_snapshot(
     })
     .collect();
 
+    // Theme G slice 2: enrich each avatar with `is_peer_reviewer` so the
+    // admin-only AgentsPanel can render the per-agent toggle without a
+    // side fetch. We don't store the flag on AvatarView (would force a
+    // 46-test-file edit cascade for the literal construction sites);
+    // instead we join from `agents` here and merge into the serialized
+    // avatar objects. Missing rows → false (the SQL default).
+    let peer_reviewer_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT id, is_peer_reviewer FROM agents")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+    let peer_reviewer: std::collections::HashMap<String, bool> = peer_reviewer_rows
+        .into_iter()
+        .map(|(id, flag)| (id, flag != 0))
+        .collect();
+    let avatars: Vec<serde_json::Value> = view
+        .avatars
+        .values()
+        .map(|a| {
+            let mut v = serde_json::to_value(a).unwrap_or(serde_json::Value::Null);
+            if let Some(obj) = v.as_object_mut() {
+                let pr = peer_reviewer.get(&a.agent_id).copied().unwrap_or(false);
+                obj.insert("is_peer_reviewer".into(), json!(pr));
+            }
+            v
+        })
+        .collect();
+
     json!({
         "type": "world_view_snapshot",
         "v": 1,
         "snapshot": {
             "tick_seq": view.tick_seq,
             "backend_catalog": view.backend_catalog,
-            "avatars": view.avatars.values().collect::<Vec<_>>(),
+            "avatars": avatars,
             "startups": startups,
             "tasks": tasks,
         },

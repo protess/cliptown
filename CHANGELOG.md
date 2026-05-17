@@ -1,5 +1,34 @@
 # Changelog
 
+## M14 — feat: admin toggles for peer-reviewer + auto-steal (Theme G slice 2) (2026-05-17)
+
+Second Theme G slice. E1 (#77) and E3 (#79) shipped the wire +
+SQL for `agents.is_peer_reviewer` and `startups.auto_steal_*`,
+but the admin couldn't flip either without raw SQL. This slice
+adds both.
+
+- `build_console_snapshot` (http.rs) enriches the snapshot:
+  each `avatars[*]` carries `is_peer_reviewer` (joined from
+  `agents` so we don't cascade-edit the 46 AvatarView literal
+  sites), each `startups[*]` carries `auto_steal_enabled` +
+  `auto_steal_after_secs`.
+- Frontend `AvatarVM` / `StartupVM` gain the same fields;
+  `coerceAvatar` / `coerceStartup` parse them from the snapshot.
+- New `AgentsPanel` (admin-only, collapsible, mirrors
+  OperatorsPanel) lists agents of the selected startup with a
+  peer-reviewer checkbox. Wires `agent_set_peer_reviewer`.
+- New `AutoStealToggle` (admin-only) in MainHeader — pill
+  showing "Auto-steal: On (Ns) / Off" with an inline popover for
+  flipping the flag + editing the threshold. Wires
+  `startup_set_auto_steal`.
+- 2 new `http_smoke` tests: snapshot startup rows surface
+  auto-steal fields (incl. SQL defaults), snapshot avatar rows
+  surface `is_peer_reviewer`.
+
+Type-check passes. Backend `agent_set_peer_reviewer` /
+`startup_set_auto_steal` ConsoleInbound handlers were already in
+place from E1 + E3 — this slice is purely the surfacing.
+
 ## M14 — feat: SystemEvent toasts + readable marquee (Theme G slice 1) (2026-05-17)
 
 First Theme G slice. The E2/E3 work landed three new SystemEvent

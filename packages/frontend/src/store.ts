@@ -33,6 +33,13 @@ export interface AvatarVM {
   status: string;
   last_seen_at: number | null;
   health: "online" | "recently_lost" | "offline" | "about_to_gc";
+  /**
+   * Theme G slice 2: surfaced from `agents.is_peer_reviewer` via the
+   * snapshot enrichment in `build_console_snapshot`. Lets the admin-only
+   * AgentsPanel render a per-agent toggle without a side fetch.
+   * Defaults to false when absent (older snapshots / unseeded agents).
+   */
+  is_peer_reviewer: boolean;
 }
 
 export interface StartupVM {
@@ -41,6 +48,13 @@ export interface StartupVM {
   budget_spent_usd?: number;
   budget_cap_usd?: number;
   last_event_ts?: number;
+  /**
+   * Theme G slice 2: per-startup auto-steal config, surfaced from the
+   * snapshot enrichment. Lets the admin-only MainHeader settings popover
+   * render hydrated. Defaults: enabled=false, after_secs=60 (SQL default).
+   */
+  auto_steal_enabled?: boolean;
+  auto_steal_after_secs?: number;
 }
 
 export interface TaskVM {
@@ -244,6 +258,23 @@ function coerceAvatar(a: Record<string, unknown>, agent_id: string): AvatarVM {
     status: asString(a.status),
     last_seen_at: typeof a.last_seen_at === "number" ? a.last_seen_at : null,
     health,
+    is_peer_reviewer: a.is_peer_reviewer === true,
+  };
+}
+
+function coerceStartup(s: Record<string, unknown>, id: string): StartupVM {
+  return {
+    id: asString(s.id, id),
+    name: asString(s.name, id),
+    budget_spent_usd: typeof s.budget_spent_usd === "number" ? s.budget_spent_usd : undefined,
+    budget_cap_usd: typeof s.budget_cap_usd === "number" ? s.budget_cap_usd : undefined,
+    last_event_ts: typeof s.last_event_ts === "number" ? s.last_event_ts : undefined,
+    auto_steal_enabled: s.auto_steal_enabled === true ? true
+      : s.auto_steal_enabled === false ? false
+      : undefined,
+    auto_steal_after_secs: typeof s.auto_steal_after_secs === "number"
+      ? s.auto_steal_after_secs
+      : undefined,
   };
 }
 
@@ -255,13 +286,7 @@ function indexStartups(raw: unknown): Record<string, StartupVM> {
       if (!s) continue;
       const id = asString(s.id);
       if (!id) continue;
-      out[id] = {
-        id,
-        name: asString(s.name, id),
-        budget_spent_usd: typeof s.budget_spent_usd === "number" ? s.budget_spent_usd : undefined,
-        budget_cap_usd: typeof s.budget_cap_usd === "number" ? s.budget_cap_usd : undefined,
-        last_event_ts: typeof s.last_event_ts === "number" ? s.last_event_ts : undefined,
-      };
+      out[id] = coerceStartup(s, id);
     }
   } else {
     const obj = asObject(raw);
@@ -269,13 +294,7 @@ function indexStartups(raw: unknown): Record<string, StartupVM> {
       for (const [k, v] of Object.entries(obj)) {
         const s = asObject(v);
         if (!s) continue;
-        out[k] = {
-          id: asString(s.id, k),
-          name: asString(s.name, k),
-          budget_spent_usd: typeof s.budget_spent_usd === "number" ? s.budget_spent_usd : undefined,
-          budget_cap_usd: typeof s.budget_cap_usd === "number" ? s.budget_cap_usd : undefined,
-          last_event_ts: typeof s.last_event_ts === "number" ? s.last_event_ts : undefined,
-        };
+        out[k] = coerceStartup(s, k);
       }
     }
   }
