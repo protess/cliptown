@@ -6,6 +6,15 @@ _(empty)_
 
 ## Completed
 
+### M14 feat — HistoryModal filtering + OperatorsPanel grouping (Theme G slice 5) — 2026-05-17
+**Source:** Fifth and final Theme G slice. Drains the last two roadmap items (#75) — "HistoryModal richer filtering" + "OperatorsPanel grouped by role". PR `<TBD>`.
+
+Was: HistoryModal showed every event with no filter and JSON-stringified payloads; OperatorsPanel was a flat alphabetical list with no role grouping.
+
+Fixed: HistoryModal adds severity toggle chips (info/warn/alert/critical), kind substring filter, startup dropdown, "X of Y" count; detail column uses `prettifySystemEventPayload` for E-theme events. OperatorsPanel buckets rows by role (admin → manager → viewer → other) with section headers + counts, sorted by `created_at` then name within each group. Pure frontend; type-check passes.
+
+Theme G bucket fully drained — all five slices (toasts, admin toggles, kanban badges, skill history, this) closed in one week.
+
 ### M14 feat — SkillsPanel revision history + revert (Theme G slice 4) — 2026-05-17
 **Source:** Fourth Theme G slice. Closes the #72 "skill_revert UI deferred" carry. PR `<TBD>`.
 

@@ -8,10 +8,15 @@
  * rejected at the server). Acceptable for an MVP; explicit role-detect
  * would require shipping the operator's identity on the WS hello reply.
  */
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useWorld } from "../hooks/useWorld.js";
+import type { OperatorRow } from "../store.js";
 
 const ROLES = ["viewer", "manager", "admin"] as const;
+// Theme G slice 5: render order for the grouped list. Admins first
+// (most-privileged → highest signal for an audit glance), then managers,
+// then viewers. Any unknown role falls through to a final "other" bucket.
+const ROLE_ORDER: readonly string[] = ["admin", "manager", "viewer"] as const;
 
 export function OperatorsPanel() {
   const { state, send, clearMintedOperatorToken } = useWorld();
@@ -52,6 +57,31 @@ export function OperatorsPanel() {
     [send],
   );
 
+  // Theme G slice 5: bucket operators by role for grouped rendering.
+  // Memoized so a typing-driven re-render doesn't re-bucket on every key.
+  const grouped = useMemo(() => {
+    const buckets = new Map<string, OperatorRow[]>();
+    for (const o of state.operators ?? []) {
+      const key = ROLE_ORDER.includes(o.role) ? o.role : "other";
+      const arr = buckets.get(key) ?? [];
+      arr.push(o);
+      buckets.set(key, arr);
+    }
+    // Stable sort within group by created_at ascending → name fallback.
+    for (const arr of buckets.values()) {
+      arr.sort(
+        (a, b) =>
+          (a.created_at - b.created_at) ||
+          a.name.localeCompare(b.name),
+      );
+    }
+    const order = [...ROLE_ORDER];
+    if (buckets.has("other")) order.push("other");
+    return order
+      .map((role) => [role, buckets.get(role) ?? []] as const)
+      .filter(([, arr]) => arr.length > 0);
+  }, [state.operators]);
+
   // P3 carry-forward: hide the panel entirely for non-admin operators
   // once we know the identity. Pre-hello (`currentOperator === null`) we
   // also hide — avoids the panel briefly flashing in for everyone before
@@ -84,31 +114,41 @@ export function OperatorsPanel() {
           ) : state.operators.length === 0 ? (
             <p style={emptyStyle}>(no operators visible — admin role required)</p>
           ) : (
-            <ul style={listStyle}>
-              {state.operators.map((o) => (
-                <li key={o.id} style={rowStyle} data-testid={`operator-row-${o.id}`}>
-                  <span style={{ flex: 1 }}>{o.name}</span>
-                  <select
-                    style={selectStyle}
-                    value={o.role}
-                    onChange={(e) => onRoleChange(o.id, e.target.value)}
-                    data-testid={`operator-role-${o.id}`}
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r} value={r}>{r}</option>
+            <div style={groupsStyle}>
+              {grouped.map(([role, ops]) => (
+                <section key={role} data-testid={`operators-group-${role}`}>
+                  <header style={groupHeaderStyle}>
+                    <span>{role}</span>
+                    <span style={groupCountStyle}>{ops.length}</span>
+                  </header>
+                  <ul style={listStyle}>
+                    {ops.map((o) => (
+                      <li key={o.id} style={rowStyle} data-testid={`operator-row-${o.id}`}>
+                        <span style={{ flex: 1 }}>{o.name}</span>
+                        <select
+                          style={selectStyle}
+                          value={o.role}
+                          onChange={(e) => onRoleChange(o.id, e.target.value)}
+                          data-testid={`operator-role-${o.id}`}
+                        >
+                          {ROLES.map((r) => (
+                            <option key={r} value={r}>{r}</option>
+                          ))}
+                        </select>
+                        <button
+                          style={revokeStyle}
+                          onClick={() => onRevoke(o.id, o.name)}
+                          data-testid={`operator-revoke-${o.id}`}
+                          title="Revoke this operator's token"
+                        >
+                          Revoke
+                        </button>
+                      </li>
                     ))}
-                  </select>
-                  <button
-                    style={revokeStyle}
-                    onClick={() => onRevoke(o.id, o.name)}
-                    data-testid={`operator-revoke-${o.id}`}
-                    title="Revoke this operator's token"
-                  >
-                    Revoke
-                  </button>
-                </li>
+                  </ul>
+                </section>
               ))}
-            </ul>
+            </div>
           )}
           <div style={createRowStyle}>
             <input
@@ -217,6 +257,29 @@ const listStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 4,
+};
+
+const groupsStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+const groupHeaderStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  fontSize: 10,
+  fontWeight: 600,
+  color: "var(--fg-secondary)",
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  marginBottom: 4,
+};
+
+const groupCountStyle: CSSProperties = {
+  fontSize: 10,
+  color: "var(--fg-secondary)",
 };
 
 const rowStyle: CSSProperties = {
