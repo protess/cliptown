@@ -187,18 +187,21 @@ pub async fn build_console_snapshot(
     // (`workspaces/<sid>/artifacts/<tid>.md`) on the kanban card while the
     // manager reviews. Spec § 11.4 — the operator-visible proof of "artifact
     // landed at the canonical path."
+    // Theme G slice 3: include `blocked_on` + `deadline_at` so Kanban
+    // cards can render the blocked / deadline badges from E2 without a
+    // side fetch.
     let tasks: Vec<serde_json::Value> = sqlx::query_as::<
         _,
-        (String, String, String, String, Option<String>, Option<String>, i64, Option<String>),
+        (String, String, String, String, Option<String>, Option<String>, i64, Option<String>, Option<String>, Option<i64>),
     >(
-        "SELECT id, startup_id, title, status, assignee_agent_id, required_room, review_round, artifact_path \
+        "SELECT id, startup_id, title, status, assignee_agent_id, required_room, review_round, artifact_path, blocked_on, deadline_at \
          FROM tasks WHERE status NOT IN ('done', 'failed')",
     )
     .fetch_all(pool)
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|(id, startup_id, title, status, assignee, required_room, review_round, artifact_path)| {
+    .map(|(id, startup_id, title, status, assignee, required_room, review_round, artifact_path, blocked_on, deadline_at)| {
         json!({
             "id": id,
             "startup_id": startup_id,
@@ -209,6 +212,8 @@ pub async fn build_console_snapshot(
             "review_round": review_round,
             "max_review_rounds": max_review_rounds,
             "artifact_path": artifact_path,
+            "blocked_on": blocked_on,
+            "deadline_at": deadline_at,
         })
     })
     .collect();

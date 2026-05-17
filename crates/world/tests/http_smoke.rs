@@ -65,6 +65,36 @@ async fn snapshot_startups_surface_auto_steal_fields() {
     assert_eq!(s2["auto_steal_after_secs"], 60, "SQL default 60s must surface");
 }
 
+/// Theme G slice 3: each task object carries `blocked_on` + `deadline_at`
+/// so Kanban cards can render the badges from E2 without a side fetch.
+#[tokio::test]
+async fn snapshot_tasks_surface_blocked_on_and_deadline_at() {
+    let ctx = TestCtx::new().await;
+    sqlx::query(
+        "INSERT INTO startups (id, name, goal_text, budget_cap_usd, town_id, workspace_path, status, created_at) \
+         VALUES ('s1','a','g',10.0,'town_default','/tmp','active',unixepoch())"
+    ).execute(&ctx.pool).await.unwrap();
+    let due = chrono::Utc::now().timestamp() + 3600;
+    sqlx::query(
+        "INSERT INTO tasks (id, startup_id, title, description, status, blocked_on, deadline_at, created_at, updated_at) \
+         VALUES ('T_block', 's1', 'blocker', 'd', 'queued', NULL, NULL, unixepoch(), unixepoch())"
+    ).execute(&ctx.pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO tasks (id, startup_id, title, description, status, blocked_on, deadline_at, created_at, updated_at) \
+         VALUES ('T_held', 's1', 'held', 'd', 'queued', 'T_block', ?, unixepoch(), unixepoch())"
+    ).bind(due).execute(&ctx.pool).await.unwrap();
+
+    let view = cliptown_world::state::WorldView::default();
+    let frame = http::build_console_snapshot(&ctx.pool, &view, 3).await;
+    let tasks = frame["snapshot"]["tasks"].as_array().unwrap();
+    let held = tasks.iter().find(|t| t["id"] == "T_held").unwrap();
+    assert_eq!(held["blocked_on"], "T_block");
+    assert_eq!(held["deadline_at"], due);
+    let blocker = tasks.iter().find(|t| t["id"] == "T_block").unwrap();
+    assert!(blocker["blocked_on"].is_null());
+    assert!(blocker["deadline_at"].is_null());
+}
+
 /// Theme G slice 2: each avatar object carries `is_peer_reviewer` so the
 /// AgentsPanel can render the per-agent checkbox without a side fetch.
 #[tokio::test]

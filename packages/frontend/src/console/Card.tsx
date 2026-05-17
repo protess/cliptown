@@ -41,10 +41,18 @@ export function Card({
   task,
   assignee,
   onDragStart,
+  highlighted,
 }: {
   task: TaskVM;
   assignee: AvatarVM | undefined;
   onDragStart: (e: DragEvent, taskId: string, fromColumn: string) => void;
+  /**
+   * Theme G slice 3: when set, the card flashes with a colored ring.
+   * Kanban toggles this transiently after `task_stolen` system_events
+   * so the reassignment lands visibly instead of silently re-rendering
+   * the assignee monogram.
+   */
+  highlighted?: boolean;
 }) {
   const stuckColor = stuckIndicator(task);
   const monogramSrc =
@@ -57,6 +65,7 @@ export function Card({
   return (
     <div
       draggable
+      data-task-id={task.id}
       onDragStart={(e) => onDragStart(e, task.id, task.status)}
       onClick={() => {
         // M4.11 will replace this with an agent popover.
@@ -68,12 +77,14 @@ export function Card({
         gridTemplateColumns: "4px 1fr auto",
         gap: 8,
         background: "var(--raised)",
-        border: "1px solid var(--border)",
+        border: highlighted ? "1px solid #4a90e2" : "1px solid var(--border)",
+        boxShadow: highlighted ? "0 0 0 2px rgba(74,144,226,0.4)" : "none",
         borderRadius: 6,
         padding: "8px 10px",
         cursor: "grab",
         marginBottom: 6,
         userSelect: "none",
+        transition: "box-shadow 240ms ease, border-color 240ms ease",
       }}
     >
       <span
@@ -99,11 +110,14 @@ export function Card({
             display: "flex",
             gap: 6,
             alignItems: "center",
+            flexWrap: "wrap",
           }}
         >
           <code>{task.id.slice(0, 6)}</code>
           {task.required_room && <span>· {task.required_room}</span>}
           <ReviewRoundBadge round={reviewRound} max={maxReviewRounds} />
+          <BlockedBadge blockedOn={task.blocked_on} />
+          <DeadlineBadge deadlineAt={task.deadline_at} />
         </div>
         {task.artifact_path && (
           <div
@@ -181,6 +195,85 @@ function ReviewRoundBadge({ round, max }: { round?: number; max?: number }) {
       <span style={{ fontSize: 11, color, fontWeight: 600 }}>{label}</span>
     </span>
   );
+}
+
+/**
+ * Theme G slice 3 (E2 carry): blocker badge. When a task waits on another
+ * task to finish, show "🔒 T_block" so the operator can see the dep at a
+ * glance without opening the row.
+ */
+function BlockedBadge({ blockedOn }: { blockedOn?: string | null }) {
+  if (!blockedOn) return null;
+  return (
+    <span
+      data-blocked-on={blockedOn}
+      title={`Blocked on ${blockedOn}`}
+      aria-label={`Blocked on ${blockedOn}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        fontSize: 11,
+        color: "#A04A00",
+        background: "rgba(230,159,0,0.15)",
+        border: "1px solid rgba(230,159,0,0.4)",
+        borderRadius: 4,
+        padding: "0 5px",
+        lineHeight: "16px",
+      }}
+    >
+      <span aria-hidden>🔒</span>
+      <code style={{ fontSize: 10 }}>{blockedOn.slice(0, 6)}</code>
+    </span>
+  );
+}
+
+/**
+ * Theme G slice 3 (E2 carry): deadline badge. Renders relative time
+ * ("⏰ in 2h" / "⏰ overdue 60s") with red coloring once past the
+ * deadline, matching the severity the scheduler uses on
+ * `task_overdue` system_events.
+ */
+function DeadlineBadge({ deadlineAt }: { deadlineAt?: number | null }) {
+  if (deadlineAt == null) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const delta = deadlineAt - now;
+  const overdue = delta < 0;
+  const rel = formatRelativeSecs(Math.abs(delta));
+  const label = overdue ? `overdue ${rel}` : `in ${rel}`;
+  const fg = overdue ? "#A30000" : "var(--fg-secondary)";
+  const bg = overdue ? "rgba(214,40,40,0.12)" : "transparent";
+  const border = overdue ? "1px solid rgba(214,40,40,0.4)" : "1px solid var(--border)";
+  return (
+    <span
+      data-deadline-at={deadlineAt}
+      title={`Deadline ${new Date(deadlineAt * 1000).toLocaleString()}`}
+      aria-label={`Deadline ${label}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        fontSize: 11,
+        color: fg,
+        background: bg,
+        border,
+        borderRadius: 4,
+        padding: "0 5px",
+        lineHeight: "16px",
+        fontWeight: overdue ? 600 : 400,
+      }}
+    >
+      <span aria-hidden>⏰</span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function formatRelativeSecs(s: number): string {
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
 }
 
 function stuckIndicator(task: TaskVM): string {
