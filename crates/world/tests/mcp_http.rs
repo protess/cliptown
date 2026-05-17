@@ -3,7 +3,7 @@
 //! Asserts the four contract points spec'd in
 //! `docs/superpowers/specs/2026-05-09-real-llm-e2e-design.md` § A1':
 //!   - `initialize` returns a protocolVersion + capabilities + serverInfo handshake.
-//!   - `tools/list` returns the 29 cliptown tools by name.
+//!   - `tools/list` returns the 32 cliptown tools by name.
 //!   - `tools/call task_done` routes through `mcp_dispatch::dispatch` and the
 //!     SQL side effect lands (`tasks.status` flips to `awaiting_review`).
 //!   - A missing/bad Bearer token returns 401 before the dispatch runs.
@@ -192,7 +192,7 @@ async fn initialize_returns_handshake() {
 }
 
 #[tokio::test]
-async fn tools_list_returns_all_29_cliptown_tools() {
+async fn tools_list_returns_all_32_cliptown_tools() {
     let app = boot().await;
     let (status, body) = post_mcp(
         app,
@@ -236,11 +236,14 @@ async fn tools_list_returns_all_29_cliptown_tools() {
         "task_set_blocking",
         "task_steal",
         "self_review",
+        "run_tests",
+        "lint_artifact",
+        "read_artifact_diff",
     ]
     .into_iter()
     .map(String::from)
     .collect();
-    assert_eq!(names, expected, "tools/list must enumerate all 29 names");
+    assert_eq!(names, expected, "tools/list must enumerate all 32 names");
     // Each tool must carry at least a minimal inputSchema — MCP spec requires it.
     for t in tools {
         assert!(

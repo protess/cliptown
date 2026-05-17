@@ -147,6 +147,9 @@ pub async fn dispatch(
         "task_set_blocking" => handle_task_set_blocking(pool, event_tx, &caller, args).await,
         "task_steal" => handle_task_steal(pool, event_tx, &caller, args).await,
         "self_review" => handle_self_review(pool, &caller, args).await,
+        "run_tests" => handle_run_tests(pool, &caller, args).await,
+        "lint_artifact" => handle_lint_artifact(pool, &caller, args).await,
+        "read_artifact_diff" => handle_read_artifact_diff(pool, &caller, args).await,
         _ => Err((
             "unknown_tool".into(),
             format!("no handler for tool: {}", tool),
@@ -2024,4 +2027,165 @@ async fn handle_self_review(
         "ok": outcome.ok,
         "must_fix": outcome.must_fix,
     }))
+}
+
+// ── P6 Theme B: structured tool surface ──────────────────────────────────
+
+/// Shared front-half for every P6.B tool: load the task, enforce the
+/// same-startup + assignee gate, return the per-task workdir path.
+async fn require_task_workdir(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    task_id: &str,
+) -> Result<std::path::PathBuf, (String, String)> {
+    let task = load_task(pool, task_id).await?;
+    if task.startup_id != caller.startup_id {
+        return Err(("cross_startup".into(), "task belongs to another startup".into()));
+    }
+    if task.assignee_agent_id.as_deref() != Some(caller.agent_id.as_str()) {
+        return Err((
+            "no_permission".into(),
+            "tool requires task assignee".into(),
+        ));
+    }
+    Ok(crate::agent_tools::task_workdir(&caller.startup_id, task_id))
+}
+
+async fn handle_run_tests(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let task_id = require_str(&args, "task_id")?.to_string();
+    let workdir = require_task_workdir(pool, caller, &task_id).await?;
+    if !workdir.exists() {
+        return Err((
+            "no_workdir".into(),
+            format!("expected per-task workdir at {}", workdir.display()),
+        ));
+    }
+    // Optional explicit command — when present we still split it via
+    // `sh -c` so the agent can pass pipes / && chains. When absent,
+    // fall back to the workdir-aware sniffer.
+    let timeout_secs = args
+        .get("timeout_secs")
+        .and_then(|v| v.as_u64())
+        .filter(|n| *n >= 1 && *n <= 600)
+        .unwrap_or(crate::agent_tools::DEFAULT_TIMEOUT_SECS);
+    let outcome = match args.get("command").and_then(|v| v.as_str()) {
+        Some(cmd) => crate::agent_tools::run_command(
+            "sh", &["-c", cmd], &workdir, timeout_secs,
+        )
+        .await,
+        None => {
+            let (program, sniffed_args) = crate::agent_tools::sniff_test_command(&workdir);
+            let arg_refs: Vec<&str> = sniffed_args.iter().copied().collect();
+            crate::agent_tools::run_command(program, &arg_refs, &workdir, timeout_secs).await
+        }
+    };
+    let result = outcome.map_err(|e| ("run_failed".to_string(), e.to_string()))?;
+    let _ = persist::append_audit(
+        pool, &task_id,
+        &json!({
+            "actor": "engineer",
+            "kind": "run_tests",
+            "agent_id": caller.agent_id,
+            "exit_code": result.exit_code,
+            "timed_out": result.timed_out,
+            "elapsed_ms": result.elapsed_ms,
+        })
+        .to_string(),
+    )
+    .await;
+    Ok(serde_json::to_value(&result).unwrap_or(Value::Null))
+}
+
+async fn handle_lint_artifact(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let task_id = require_str(&args, "task_id")?.to_string();
+    let artifact_path = require_str(&args, "artifact_path")?.to_string();
+    let workdir = require_task_workdir(pool, caller, &task_id).await?;
+    // Pick the linter by file extension. Markdown/JSON reuse the
+    // existing verify paths (already lightweight); TS/Rust shell out.
+    let ext = std::path::Path::new(&artifact_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let (program, sniffed_args): (&str, Vec<String>) = match ext {
+        "ts" | "tsx" => ("npx", vec!["tsc".into(), "--noEmit".into(), artifact_path.clone()]),
+        "rs" => ("cargo", vec!["check".into(), "--message-format=short".into()]),
+        "md" | "json" => {
+            // Defer to verify's in-process check; no shell needed.
+            let method = if ext == "json" { "lint_json" } else { "lint_markdown" };
+            let verify_args = json!({"method": method, "params": {"path": artifact_path}});
+            return handle_verify(caller, verify_args).await;
+        }
+        other => {
+            return Err((
+                "unsupported_extension".into(),
+                format!(".{other} has no registered linter"),
+            ));
+        }
+    };
+    let arg_refs: Vec<&str> = sniffed_args.iter().map(|s| s.as_str()).collect();
+    let outcome = crate::agent_tools::run_command(
+        program,
+        &arg_refs,
+        &workdir,
+        crate::agent_tools::DEFAULT_TIMEOUT_SECS,
+    )
+    .await
+    .map_err(|e| ("run_failed".to_string(), e.to_string()))?;
+    let _ = persist::append_audit(
+        pool, &task_id,
+        &json!({
+            "actor": "engineer",
+            "kind": "lint_artifact",
+            "agent_id": caller.agent_id,
+            "ext": ext,
+            "exit_code": outcome.exit_code,
+            "timed_out": outcome.timed_out,
+        })
+        .to_string(),
+    )
+    .await;
+    Ok(serde_json::to_value(&outcome).unwrap_or(Value::Null))
+}
+
+async fn handle_read_artifact_diff(
+    pool: &SqlitePool,
+    caller: &AvatarView,
+    args: Value,
+) -> HandlerResult {
+    let task_id = require_str(&args, "task_id")?.to_string();
+    let artifact_path = require_str(&args, "artifact_path")?.to_string();
+    let base_ref = args
+        .get("base_ref")
+        .and_then(|v| v.as_str())
+        .unwrap_or("HEAD");
+    let workdir = require_task_workdir(pool, caller, &task_id).await?;
+    let outcome = crate::agent_tools::run_command(
+        "git",
+        &["diff", base_ref, "--", &artifact_path],
+        &workdir,
+        crate::agent_tools::DEFAULT_TIMEOUT_SECS,
+    )
+    .await
+    .map_err(|e| ("run_failed".to_string(), e.to_string()))?;
+    let _ = persist::append_audit(
+        pool, &task_id,
+        &json!({
+            "actor": "engineer",
+            "kind": "read_artifact_diff",
+            "agent_id": caller.agent_id,
+            "base_ref": base_ref,
+            "exit_code": outcome.exit_code,
+        })
+        .to_string(),
+    )
+    .await;
+    Ok(serde_json::to_value(&outcome).unwrap_or(Value::Null))
 }

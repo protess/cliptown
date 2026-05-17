@@ -1,5 +1,54 @@
 # Changelog
 
+## M16 — feat: structured tool surface for self-review (P6 Theme B) (2026-05-17)
+
+Second Phase 6 PR. P6.A shipped the self-review gate but the
+real verification (run tests, lint TS/Rust, diff against base)
+needed shell access without losing auditability. This slice
+adds the structured tool surface.
+
+- New `crates/world/src/agent_tools.rs`:
+  - `run_command(program, args, cwd, timeout)` — primitive
+    that runs a shell command in a specific dir, captures the
+    LAST 16KiB of stdout + stderr (UTF-8-safe truncation),
+    enforces timeout (default 120s, max 600s), reports
+    elapsed_ms + exit_code + timed_out flag.
+  - `task_workdir(sid, tid)` returns the per-task workdir
+    path `workspaces/<sid>/<tid>/workdir/` matching the
+    layout in `packages/worker/src/execenv.ts`.
+  - `sniff_test_command(workdir)` returns
+    `(cargo, [test --quiet])` for Rust, `(pnpm, [test])`
+    for Node, `(make, [test])` for Makefile workdirs, and a
+    no-op fallback for unrecognized dirs.
+- Three new MCP tools (29 → 32):
+  - `run_tests {task_id, command?, timeout_secs?}` — runs
+    the test suite in the per-task workdir. Optional
+    `command` runs via `sh -c`; absent → uses
+    `sniff_test_command`. Audit row captures exit_code +
+    elapsed_ms.
+  - `lint_artifact {task_id, artifact_path}` — dispatches
+    by extension: `.ts`/`.tsx` → `npx tsc --noEmit`, `.rs`
+    → `cargo check`, `.md`/`.json` → existing `verify`
+    paths (in-process; no shell). Unsupported extensions
+    → `unsupported_extension` error.
+  - `read_artifact_diff {task_id, artifact_path,
+    base_ref?}` — `git diff <base_ref> -- <artifact>`
+    inside the per-task workdir. Defaults base_ref=HEAD.
+- All three tools share the `require_task_workdir` gate:
+  same-startup + assignee-only.
+- 8 unit tests on the helper (stdout/stderr capture, exit
+  code propagation, timeout, 16KiB cap, workdir layout,
+  three sniff variants).
+- `tests/backup.rs::restore_from_snapshot_rolls_back_state`
+  was flaky under heavy parallel test load — now calls
+  `pool.close().await` explicitly before the file swap so
+  the WAL handle flushes deterministically.
+
+P6.A's `markdown_lint` warn-stub still rides through
+`verify`'s deferred path; P6.C will close the loop by
+running these tools when self_review wants to upgrade
+warn-checks to errors.
+
 ## M16 — feat: self-review gates (P6 Theme A) (2026-05-17)
 
 First Phase 6 PR. The engineer agent now runs a pre-submit

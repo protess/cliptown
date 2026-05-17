@@ -65,8 +65,12 @@ async fn restore_from_snapshot_rolls_back_state() {
          VALUES ('s_after','b','g',10.0,'town_default','/tmp/s_after','active',unixepoch())"
     ).execute(&pool).await.unwrap();
 
-    // 4. Drop the live pool so SQLite releases the WAL handle (simulates
+    // 4. Close the live pool so SQLite releases the WAL handle (simulates
     //    stopping the world process before running the restore script).
+    //    `close().await` is explicit — bare `drop(pool)` doesn't wait
+    //    for the async connection cleanup to flush, which races with the
+    //    file swap below when the test suite is heavily threaded.
+    pool.close().await;
     drop(pool);
 
     // 5. Swap snapshot over live + remove stale WAL/SHM (mirrors what

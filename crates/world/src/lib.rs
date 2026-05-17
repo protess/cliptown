@@ -1,5 +1,6 @@
 pub mod action_locks;
 pub mod agent_supervisor;
+pub mod agent_tools;
 pub mod api_skills;
 pub mod api_startups;
 pub mod api_tasks;

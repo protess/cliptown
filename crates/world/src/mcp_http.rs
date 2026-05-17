@@ -465,6 +465,44 @@ fn handle_tools_list() -> Value {
                 }
             }),
         ),
+        tool(
+            "run_tests",
+            "Run the task's test suite inside the per-task workdir. Optional `command` (e.g. 'pnpm test', 'cargo test --quiet') overrides auto-detect. Returns {exit_code, stdout_tail, stderr_tail, timed_out, elapsed_ms}.",
+            json!({
+                "type": "object",
+                "required": ["task_id"],
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "command": {"type": "string"},
+                    "timeout_secs": {"type": "integer", "minimum": 1, "maximum": 600}
+                }
+            }),
+        ),
+        tool(
+            "lint_artifact",
+            "Lint the task's artifact. Dispatches by extension: .ts/.tsx → tsc --noEmit, .rs → cargo check, .md → markdown lint (deferred stub), .json → JSON parse.",
+            json!({
+                "type": "object",
+                "required": ["task_id", "artifact_path"],
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "artifact_path": {"type": "string"}
+                }
+            }),
+        ),
+        tool(
+            "read_artifact_diff",
+            "Git diff of the artifact against a base ref (defaults to HEAD). Runs inside the per-task workdir. Returns the same {exit_code, stdout_tail, …} shape as run_tests.",
+            json!({
+                "type": "object",
+                "required": ["task_id", "artifact_path"],
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "artifact_path": {"type": "string"},
+                    "base_ref": {"type": "string"}
+                }
+            }),
+        ),
     ]);
     json!({ "tools": tools })
 }
