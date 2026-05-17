@@ -1,5 +1,35 @@
 # Changelog
 
+## M14 — feat: SkillsPanel revision history + revert (Theme G slice 4) (2026-05-17)
+
+Fourth Theme G slice. The skill_revert MCP tool (from #71) was
+agent-callable but had no operator-console UI — the explicit
+"UI deferred" carry-forward from #72.
+
+- New ConsoleInbound variants: `SkillListRevisionsOperator`
+  (read-only, any operator) and `SkillRevertOperator`
+  (manager-or-above, mirrors SkillUpsertOperator's gate).
+  Both use the existing `skills::list_revisions` /
+  `skills::revert_to_revision` helpers, so the SQL gate stays
+  in one place; `SkillRevertOperator` broadcasts
+  `SkillChanged { kind: "revert" }` so any connected client's
+  cache invalidates.
+- Frontend `WorldState.skillRevisions` lazy-caches per-skill
+  revision lists, keyed by skill_id (skill ids are globally
+  unique). The reducer's `skill_changed` handler clears the
+  cache for the affected skill on upsert/delete/revert so the
+  next history-button click refetches.
+- `SkillsPanel` adds a "⏱" history button per row. Clicking
+  toggles a sub-panel listing revisions newest-first
+  (rev_seq, timestamp, author, content length). Non-current
+  rows get a "Revert" button gated by a confirm.
+- 3 new console_cmds tests: viewer can list, manager can
+  revert end-to-end, viewer is rejected on revert. Tests seed
+  the `op_test` operator row so `append_revision`'s FK
+  (`created_by_operator_id REFERENCES operators`) doesn't
+  silently soft-fail — a latent gap in the existing
+  skill_upsert_operator tests is now closed.
+
 ## M14 — feat: kanban blocked/deadline badges + steal flash (Theme G slice 3) (2026-05-17)
 
 Third Theme G slice. E2 (#78) added `blocked_on` + `deadline_at`

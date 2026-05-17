@@ -81,6 +81,34 @@ export function Console() {
     [send],
   );
 
+  // Theme G slice 4: operator-side revision history + revert wiring.
+  const onSkillListRevisions = useCallback(
+    (skillId: string) => {
+      if (!possessedStartupId) return;
+      send({
+        type: "skill_list_revisions_operator",
+        v: 1,
+        startup_id: possessedStartupId,
+        skill_id: skillId,
+      });
+    },
+    [send, possessedStartupId],
+  );
+
+  const onSkillRevert = useCallback(
+    (skillId: string, revSeq: number) => {
+      if (!possessedStartupId) return;
+      send({
+        type: "skill_revert_operator",
+        v: 1,
+        startup_id: possessedStartupId,
+        skill_id: skillId,
+        rev_seq: revSeq,
+      });
+    },
+    [send, possessedStartupId],
+  );
+
   return (
     <div
       style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}
@@ -118,6 +146,8 @@ export function Console() {
             onUpsert={onSkillUpsert}
             onDelete={onSkillDelete}
             onSetGlobal={onSkillSetGlobal}
+            onListRevisions={onSkillListRevisions}
+            onRevert={onSkillRevert}
           />
           <AgentsPanel startupId={selectedStartupId} />
           <OperatorsPanel />
