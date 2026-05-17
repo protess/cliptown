@@ -1,5 +1,31 @@
 # Changelog
 
+## M15 — feat: observability artifacts (P5 Theme D) (2026-05-17)
+
+Fourth Phase 5 PR. The world has been exposing `/metrics` since
+P3, but no Grafana dashboards or alert rules lived in the repo.
+This slice ships both as importable files. P5.E will mount
+them via the docker-compose `observability` profile.
+
+- `docs/observability/grafana/cliptown-overview.json`:
+  importable Grafana dashboard with 7 panels — tick rate (Hz),
+  MCP call/error rates, task distribution by status, agent
+  health buckets, per-startup budget % spent (with 80/95%
+  thresholds), active startup count, cumulative MCP calls.
+- `docs/observability/alerts/cliptown.yml`: Alertmanager rule
+  YAML covering tick stall (<0.5Hz/30s), MCP error rate
+  (>1/min/60s), budget warning (>95%/60s), agent lost
+  (recently_lost present/30s warn), agent offline (offline
+  present/60s alert).
+- README adds an "Observability" section pointing at both
+  files + noting the P5.E compose profile will pre-provision.
+- New `observability_artifacts` test: dashboard JSON parses
+  and every panel has targets + a title; alert YAML parses
+  and every Prometheus expression references a known metric
+  exported from `crates/world/src/metrics.rs`. Cheap, but
+  catches typos before they land in ops surfaces.
+- `serde_yaml` added as a dev-dep for the alert-YAML parser.
+
 ## M15 — feat: soft-locks on destructive actions (P5 Theme C) (2026-05-17)
 
 Third Phase 5 PR. Two operators clicking "Force-Accept T1" at
